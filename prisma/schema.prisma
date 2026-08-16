@@ -2,9 +2,14 @@
 //
 // Scrumy ist die interne Plattform des Beratungs-Startups: pro Kunde (Organization)
 // laeuft ein Projekt, an dem ein virtuelles Team aus LLM-Agenten arbeitet wie ein
-// echtes Dienstleister-Team. Tickets durchlaufen ein Scrum-Board (Backlog -> In
-// Progress -> In Review -> Done), Agenten setzen sie um, kritische Aenderungen
-// brauchen ein menschliches Review, bevor sie beim Kunden deployt werden.
+// echtes Dienstleister-Team.
+//
+// Pipeline: Kundenkorrespondenz (SupportRequest, z.B. per Jira/E-Mail-Connector)
+// -> Support-Agent triagiert -> Product-Owner-Agent uebersetzt sie in Tickets im
+// Backlog und priorisiert -> Planning-Agent plant ein Ticket (Feld `plan`) ->
+// Coding-Agenten (Backend/Frontend/QA/DevOps) setzen um. Tickets durchlaufen dabei
+// ein Scrum-Board (Backlog -> In Progress -> In Review -> Done), kritische
+// Aenderungen brauchen ein menschliches Review, bevor sie beim Kunden deployt werden.
 //
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
@@ -24,7 +29,9 @@ model Organization {
   industry  String?
   createdAt DateTime @default(now())
 
-  projects Project[]
+  projects         Project[]
+  connectors       Connector[]
+  supportRequests  SupportRequest[]
 
   @@map("organizations")
 }
@@ -54,24 +61,30 @@ enum ProjectStatus {
   ARCHIVED
 }
 
-/// Ein LLM-Agent mit einer bestimmten Rolle im virtuellen Team
-/// (z.B. Product-Manager-Agent, Backend-Agent, Reviewer-Agent).
+/// Ein LLM-Agent mit einer bestimmten Rolle im virtuellen Team.
+///
+/// Pipeline-Rollen: SUPPORT (Kundenkorrespondenz) -> PRODUCT_OWNER (Tickets
+/// erstellen/priorisieren) -> PLANNING (Ticket planen) -> BACKEND/FRONTEND/QA/DEVOPS
+/// (umsetzen). REVIEWER unterstuetzt den menschlichen Review-Schritt.
 model Agent {
-  id        String    @id @default(cuid())
+  id        String      @id @default(cuid())
   name      String
   role      AgentRole
   model     String? // z.B. "claude-sonnet-5"
   status    AgentStatus @default(IDLE)
-  createdAt DateTime  @default(now())
+  createdAt DateTime    @default(now())
 
-  assignments  AgentAssignment[]
-  ticketEvents ActivityLogEntry[]
+  assignments     AgentAssignment[]
+  ticketEvents    ActivityLogEntry[]
+  supportRequests SupportRequest[]
 
   @@map("agents")
 }
 
 enum AgentRole {
-  PRODUCT_MANAGER
+  SUPPORT
+  PRODUCT_OWNER
+  PLANNING
   BACKEND
   FRONTEND
   QA
@@ -99,21 +112,104 @@ model AgentAssignment {
   @@map("agent_assignments")
 }
 
+/// Ein angebundenes externes System eines Kunden (Jira, andere PM-Tools, E-Mail-
+/// Postfach, ...), ueber das der Support-Agent Kundenkorrespondenz automatisiert
+/// empfaengt/beantwortet. `config` enthaelt nicht-geheime Verbindungsdaten (Base-URL,
+/// Projekt-Key, ...); Zugangsdaten liegen bewusst nicht in der DB, sondern werden
+/// ueber `credentialRef` auf einen Secret-Store/env verwiesen.
+model Connector {
+  id             String            @id @default(cuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  provider       ConnectorProvider
+  name           String
+  config         Json?
+  credentialRef  String?
+  status         ConnectorStatus   @default(ACTIVE)
+  createdAt      DateTime          @default(now())
+
+  supportRequests SupportRequest[]
+
+  @@map("connectors")
+}
+
+enum ConnectorProvider {
+  JIRA
+  ZENDESK
+  EMAIL
+  GENERIC_WEBHOOK
+}
+
+enum ConnectorStatus {
+  ACTIVE
+  INACTIVE
+  ERROR
+}
+
+/// Eine eingehende Kundenanfrage (Feature-Request, Bug-Report, allgemeine
+/// Korrespondenz) – kommt manuell oder automatisiert ueber einen Connector rein.
+/// Der Support-Agent triagiert sie; der Product-Owner-Agent uebersetzt sie in ein
+/// oder mehrere Tickets (siehe `Ticket.sourceRequest`).
+model SupportRequest {
+  id             String               @id @default(cuid())
+  organizationId String
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connectorId    String?
+  connector      Connector?           @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+  channel        SupportChannel
+  externalRef    String? // z.B. Jira-Issue-Key oder E-Mail-Message-ID
+  fromContact    String?
+  subject        String?
+  body           String
+  status         SupportRequestStatus @default(NEW)
+  handledById    String?
+  handledBy      Agent?               @relation(fields: [handledById], references: [id], onDelete: SetNull)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  tickets  Ticket[]
+  activity ActivityLogEntry[]
+
+  @@map("support_requests")
+}
+
+enum SupportChannel {
+  EMAIL
+  JIRA
+  CHAT
+  PORTAL
+  PHONE_NOTE
+}
+
+enum SupportRequestStatus {
+  NEW
+  TRIAGED
+  CONVERTED
+  CLOSED
+}
+
 /// Ein Feature-Request, Bug oder eine Integrationsaufgabe auf dem Scrum-Board
-/// eines Projekts.
+/// eines Projekts. `plan` ist das Arbeitsfeld des Planning-Agents, bevor
+/// Coding-Agenten loslegen. `externalRef` verweist auf das verknuepfte Ticket im
+/// Kunden-System (z.B. Jira-Key), damit Status automatisiert zurueckgespiegelt
+/// werden kann.
 model Ticket {
-  id          String       @id @default(cuid())
-  projectId   String
-  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  title       String
-  description String?
-  type        TicketType   @default(FEATURE)
-  status      TicketStatus @default(BACKLOG)
-  priority    Priority     @default(MEDIUM)
-  requestedBy String? // Name/Kontakt des Kunden, der die Anfrage gestellt hat
-  isCritical  Boolean      @default(false) // erzwingt menschliches Review vor Deploy
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id              String       @id @default(cuid())
+  projectId       String
+  project         Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceRequestId String?
+  sourceRequest   SupportRequest? @relation(fields: [sourceRequestId], references: [id], onDelete: SetNull)
+  title           String
+  description     String?
+  plan            String? // Planning-Agent: geplante Umsetzungsschritte
+  type            TicketType   @default(FEATURE)
+  status          TicketStatus @default(BACKLOG)
+  priority        Priority     @default(MEDIUM)
+  requestedBy     String? // Name/Kontakt des Kunden, der die Anfrage gestellt hat
+  isCritical      Boolean      @default(false) // erzwingt menschliches Review vor Deploy
+  externalRef     String? // z.B. verknuepfter Jira-Issue-Key beim Kunden
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
   reviews  ReviewApproval[]
   activity ActivityLogEntry[]
@@ -163,18 +259,21 @@ enum ReviewDecision {
   REJECTED
 }
 
-/// Audit-Trail: was hat welcher Agent (oder Mensch) an welchem Ticket getan.
-/// Macht die Arbeit des Agenten-Teams fuer den Kunden nachvollziehbar.
+/// Audit-Trail: was hat welcher Agent (oder Mensch) getan – an einem Ticket
+/// und/oder einer Kundenanfrage. Macht die Arbeit des Agenten-Teams fuer den
+/// Kunden nachvollziehbar.
 model ActivityLogEntry {
-  id        String   @id @default(cuid())
-  ticketId  String
-  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  agentId   String?
-  agent     Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
-  actor     String // Anzeigename, falls kein Agent (z.B. "Mensch: Max")
-  action    String // z.B. "status_changed", "code_committed", "comment"
-  detail    String?
-  createdAt DateTime @default(now())
+  id               String          @id @default(cuid())
+  ticketId         String?
+  ticket           Ticket?         @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  supportRequestId String?
+  supportRequest   SupportRequest? @relation(fields: [supportRequestId], references: [id], onDelete: Cascade)
+  agentId          String?
+  agent            Agent?          @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  actor            String // Anzeigename, falls kein Agent (z.B. "Mensch: Max")
+  action           String // z.B. "status_changed", "code_committed", "comment", "request_received"
+  detail           String?
+  createdAt        DateTime        @default(now())
 
   @@map("activity_log_entries")
 }

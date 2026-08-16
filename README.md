@@ -16,17 +16,32 @@ müssen.
 
 ## Konzept
 
+**Pipeline:** Kundenkorrespondenz (per Connector, z.B. Jira, oder manuell) →
+**Support-Agent** triagiert → **Product-Owner-Agent** übersetzt sie in Tickets,
+packt sie in den Backlog und priorisiert → **Planning-Agent** plant ein Ticket
+(Feld `plan`) → **Coding-Agenten** (Backend/Frontend/QA/DevOps) setzen um →
+kritische Änderungen durchlaufen ein menschliches Review, bevor sie deployt werden.
+
 - **Organization** – ein Kunde des Startups.
 - **Project** – die Individualsoftware eines Kunden (z.B. "Warenwirtschaft & CRM"),
   verweist auf das eigentliche Kunden-Repository.
-- **Agent** – ein LLM-Agent mit fester Rolle im virtuellen Team, einem Projekt
-  zugeordnet.
+- **Connector** – Anbindung an ein externes System des Kunden (Jira, andere
+  PM-Tools, E-Mail-Postfach), über das Kundenkorrespondenz automatisiert rein-
+  und rausgeht. `config` enthält nur nicht-geheime Verbindungsdaten; Zugangsdaten
+  liegen über `credentialRef` in einem Secret-Store, nicht in der DB.
+- **SupportRequest** – eine eingehende Kundenanfrage (Feature-Request, Bug,
+  allgemeine Korrespondenz), landet im Support-Postfach (`/organizations/[id]/inbox`)
+  und wird ggf. in ein oder mehrere Tickets überführt.
+- **Agent** – ein LLM-Agent mit fester Rolle im virtuellen Team (siehe Pipeline
+  oben), einem Projekt zugeordnet.
 - **Ticket** – Feature-Request/Bug/Integration auf dem Scrum-Board eines Projekts
-  (`Backlog → In Arbeit → In Review → Fertig`).
+  (`Backlog → In Arbeit → In Review → Fertig`); `plan` ist das Arbeitsfeld des
+  Planning-Agents, `externalRef` verweist auf das verknüpfte Ticket im
+  Kunden-System (z.B. Jira-Key) für automatisierten Status-Rücklauf.
 - **ReviewApproval** – menschlicher Freigabe-Schritt für als kritisch markierte
   Tickets, bevor sie beim Kunden deployt werden.
-- **ActivityLogEntry** – Audit-Trail, macht die Arbeit der Agenten für den Kunden
-  nachvollziehbar.
+- **ActivityLogEntry** – Audit-Trail (an Ticket und/oder SupportRequest), macht
+  die Arbeit der Agenten für den Kunden nachvollziehbar.
 
 Das Datenmodell liegt in [`prisma/schema.prisma`](./prisma/schema.prisma).
 
@@ -72,9 +87,14 @@ docker compose exec app npx tsx prisma/seed.ts
 Dies ist das MVP-Skelett: Datenmodell + Board-UI, damit Kunden/Projekte/Tickets
 sichtbar sind. Als Nächstes:
 
-- Echte Agenten-Orchestrierung (Claude Agent SDK) je Ticket, die Code im
-  Kunden-Repo umsetzt, statt nur Status/Log manuell zu pflegen.
-- Auth & Mandantentrennung (Kunden sehen nur ihr eigenes Projekt).
+- Echte Agenten-Orchestrierung (Claude Agent SDK) je Pipeline-Schritt: Support-Agent
+  liest tatsächlich aus Connectoren (Jira-Webhook/Polling, IMAP, …), Product-Owner-
+  und Planning-Agent erzeugen Tickets/Pläne automatisch, Coding-Agenten committen
+  im Kunden-Repo – aktuell bildet das Datenmodell die Pipeline nur ab, Status/Log
+  werden noch manuell (Seed) gepflegt.
+- Connector-Implementierungen (Jira-API-Client, E-Mail-Eingang) inkl. Status-
+  Rücksync über `Ticket.externalRef`.
+- Auth & Mandantentrennung (Kunden sehen nur ihr eigenes Projekt/Postfach).
 - Client-Portal: Kunden reichen Feature-Requests selbst ein und geben kritische
   Änderungen frei (aktuell nur Datenmodell dafür vorhanden).
 - CI/Deploy-Pipeline pro Kundenprojekt.

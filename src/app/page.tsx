@@ -18,6 +18,7 @@ export default async function DashboardPage() {
           },
         },
       },
+      _count: { select: { supportRequests: { where: { status: { not: "CLOSED" } } } } },
     },
   });
 
@@ -44,9 +45,21 @@ export default async function DashboardPage() {
             <section key={org.id} className="rounded-lg border border-neutral-800 p-6">
               <div className="flex items-baseline justify-between gap-4">
                 <h2 className="text-xl font-medium">{org.name}</h2>
-                {org.industry && (
-                  <span className="text-sm text-neutral-500">{org.industry}</span>
-                )}
+                <div className="flex items-center gap-3 text-sm text-neutral-500">
+                  {org.industry && <span>{org.industry}</span>}
+                  <Link
+                    href={`/organizations/${org.id}/inbox`}
+                    className="flex items-center gap-1.5 hover:text-neutral-300"
+                  >
+                    Support-Postfach
+                    {org._count.supportRequests > 0 && (
+                      <span className="rounded-full bg-sky-900 px-2 py-0.5 text-xs text-sky-200">
+                        {org._count.supportRequests}
+                      </span>
+                    )}
+                    <span aria-hidden>→</span>
+                  </Link>
+                </div>
               </div>
 
               <ul className="mt-4 space-y-2">

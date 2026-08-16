@@ -2,10 +2,22 @@
 CREATE TYPE "ProjectStatus" AS ENUM ('ACTIVE', 'PAUSED', 'ARCHIVED');
 
 -- CreateEnum
-CREATE TYPE "AgentRole" AS ENUM ('PRODUCT_MANAGER', 'BACKEND', 'FRONTEND', 'QA', 'REVIEWER', 'DEVOPS');
+CREATE TYPE "AgentRole" AS ENUM ('SUPPORT', 'PRODUCT_OWNER', 'PLANNING', 'BACKEND', 'FRONTEND', 'QA', 'REVIEWER', 'DEVOPS');
 
 -- CreateEnum
 CREATE TYPE "AgentStatus" AS ENUM ('IDLE', 'WORKING', 'BLOCKED');
+
+-- CreateEnum
+CREATE TYPE "ConnectorProvider" AS ENUM ('JIRA', 'ZENDESK', 'EMAIL', 'GENERIC_WEBHOOK');
+
+-- CreateEnum
+CREATE TYPE "ConnectorStatus" AS ENUM ('ACTIVE', 'INACTIVE', 'ERROR');
+
+-- CreateEnum
+CREATE TYPE "SupportChannel" AS ENUM ('EMAIL', 'JIRA', 'CHAT', 'PORTAL', 'PHONE_NOTE');
+
+-- CreateEnum
+CREATE TYPE "SupportRequestStatus" AS ENUM ('NEW', 'TRIAGED', 'CONVERTED', 'CLOSED');
 
 -- CreateEnum
 CREATE TYPE "TicketType" AS ENUM ('FEATURE', 'BUG', 'INTEGRATION', 'CHORE');
@@ -65,16 +77,51 @@ CREATE TABLE "agent_assignments" (
 );
 
 -- CreateTable
+CREATE TABLE "connectors" (
+    "id" TEXT NOT NULL,
+    "organizationId" TEXT NOT NULL,
+    "provider" "ConnectorProvider" NOT NULL,
+    "name" TEXT NOT NULL,
+    "config" JSONB,
+    "credentialRef" TEXT,
+    "status" "ConnectorStatus" NOT NULL DEFAULT 'ACTIVE',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "connectors_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "support_requests" (
+    "id" TEXT NOT NULL,
+    "organizationId" TEXT NOT NULL,
+    "connectorId" TEXT,
+    "channel" "SupportChannel" NOT NULL,
+    "externalRef" TEXT,
+    "fromContact" TEXT,
+    "subject" TEXT,
+    "body" TEXT NOT NULL,
+    "status" "SupportRequestStatus" NOT NULL DEFAULT 'NEW',
+    "handledById" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "support_requests_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "tickets" (
     "id" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
+    "sourceRequestId" TEXT,
     "title" TEXT NOT NULL,
     "description" TEXT,
+    "plan" TEXT,
     "type" "TicketType" NOT NULL DEFAULT 'FEATURE',
     "status" "TicketStatus" NOT NULL DEFAULT 'BACKLOG',
     "priority" "Priority" NOT NULL DEFAULT 'MEDIUM',
     "requestedBy" TEXT,
     "isCritical" BOOLEAN NOT NULL DEFAULT false,
+    "externalRef" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -97,7 +144,8 @@ CREATE TABLE "review_approvals" (
 -- CreateTable
 CREATE TABLE "activity_log_entries" (
     "id" TEXT NOT NULL,
-    "ticketId" TEXT NOT NULL,
+    "ticketId" TEXT,
+    "supportRequestId" TEXT,
     "agentId" TEXT,
     "actor" TEXT NOT NULL,
     "action" TEXT NOT NULL,
@@ -120,13 +168,31 @@ ALTER TABLE "agent_assignments" ADD CONSTRAINT "agent_assignments_agentId_fkey" 
 ALTER TABLE "agent_assignments" ADD CONSTRAINT "agent_assignments_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "projects"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "connectors" ADD CONSTRAINT "connectors_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "organizations"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "support_requests" ADD CONSTRAINT "support_requests_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "organizations"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "support_requests" ADD CONSTRAINT "support_requests_connectorId_fkey" FOREIGN KEY ("connectorId") REFERENCES "connectors"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "support_requests" ADD CONSTRAINT "support_requests_handledById_fkey" FOREIGN KEY ("handledById") REFERENCES "agents"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "tickets" ADD CONSTRAINT "tickets_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "projects"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "tickets" ADD CONSTRAINT "tickets_sourceRequestId_fkey" FOREIGN KEY ("sourceRequestId") REFERENCES "support_requests"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "review_approvals" ADD CONSTRAINT "review_approvals_ticketId_fkey" FOREIGN KEY ("ticketId") REFERENCES "tickets"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "activity_log_entries" ADD CONSTRAINT "activity_log_entries_ticketId_fkey" FOREIGN KEY ("ticketId") REFERENCES "tickets"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "activity_log_entries" ADD CONSTRAINT "activity_log_entries_supportRequestId_fkey" FOREIGN KEY ("supportRequestId") REFERENCES "support_requests"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "activity_log_entries" ADD CONSTRAINT "activity_log_entries_agentId_fkey" FOREIGN KEY ("agentId") REFERENCES "agents"("id") ON DELETE SET NULL ON UPDATE CASCADE;

@@ -23,9 +23,27 @@ async function main() {
     },
   });
 
-  const [pm, backend, frontend, reviewer] = await Promise.all([
+  // Connector: der Kunde meldet Anfragen über sein eigenes Jira-Projekt.
+  const jiraConnector = await prisma.connector.create({
+    data: {
+      organizationId: org.id,
+      provider: "JIRA",
+      name: "Demo GmbH Jira",
+      config: { baseUrl: "https://demo-gmbh.atlassian.net", projectKey: "DEMO" },
+      credentialRef: "vault://demo-gmbh/jira-api-token",
+    },
+  });
+
+  // Pipeline-Agenten: Support -> Product Owner -> Planning -> Coding-Agenten.
+  const [support, productOwner, planning, backend, frontend, reviewer] = await Promise.all([
     prisma.agent.create({
-      data: { name: "PM-Agent", role: "PRODUCT_MANAGER", model: "claude-sonnet-5", status: "WORKING" },
+      data: { name: "Support-Agent", role: "SUPPORT", model: "claude-sonnet-5", status: "WORKING" },
+    }),
+    prisma.agent.create({
+      data: { name: "Product-Owner-Agent", role: "PRODUCT_OWNER", model: "claude-sonnet-5", status: "WORKING" },
+    }),
+    prisma.agent.create({
+      data: { name: "Planning-Agent", role: "PLANNING", model: "claude-opus-5", status: "IDLE" },
     }),
     prisma.agent.create({
       data: { name: "Backend-Agent", role: "BACKEND", model: "claude-sonnet-5", status: "WORKING" },
@@ -39,15 +57,43 @@ async function main() {
   ]);
 
   await prisma.agentAssignment.createMany({
-    data: [pm, backend, frontend, reviewer].map((agent) => ({
+    data: [support, productOwner, planning, backend, frontend, reviewer].map((agent) => ({
       agentId: agent.id,
       projectId: project.id,
     })),
   });
 
+  // Kundenanfragen: eine bereits in ein Ticket überführt, eine noch offen.
+  const requestPdfBug = await prisma.supportRequest.create({
+    data: {
+      organizationId: org.id,
+      connectorId: jiraConnector.id,
+      channel: "JIRA",
+      externalRef: "DEMO-142",
+      fromContact: "buchhaltung@demo-gmbh.example",
+      subject: "Rechnungs-PDF kaputt bei Sammelrechnungen",
+      body: "Bei mehr als 20 Positionen bricht das PDF-Layout um und Summen stimmen nicht mehr.",
+      status: "CONVERTED",
+      handledById: support.id,
+    },
+  });
+
+  const requestMindestbestand = await prisma.supportRequest.create({
+    data: {
+      organizationId: org.id,
+      connectorId: jiraConnector.id,
+      channel: "EMAIL",
+      fromContact: "lager@demo-gmbh.example",
+      subject: "Warnung bei Mindestbestand?",
+      body: "Könnt ihr uns benachrichtigen, wenn ein Artikel unter den Mindestbestand fällt? Kommt aktuell öfter vor, dass wir das zu spät merken.",
+      status: "NEW",
+    },
+  });
+
   const ticketBacklog = await prisma.ticket.create({
     data: {
       projectId: project.id,
+      sourceRequestId: requestMindestbestand.id,
       title: "Lagerbestand: Mindestbestand-Warnung",
       description:
         "Automatische Benachrichtigung, wenn ein Artikel unter den definierten Mindestbestand fällt.",
@@ -63,6 +109,9 @@ async function main() {
       projectId: project.id,
       title: "CRM: Kontakt-Import aus CSV",
       description: "Bestandskunden aus dem alten System per CSV-Upload importieren.",
+      plan:
+        "1) CSV-Parser mit Spalten-Mapping-UI, 2) Validierung (Pflichtfelder, Duplikate), " +
+        "3) Dry-Run-Vorschau vor dem Import, 4) Import + Aktivitäts-Log-Eintrag pro Batch.",
       type: "FEATURE",
       status: "IN_PROGRESS",
       priority: "HIGH",
@@ -73,13 +122,16 @@ async function main() {
   const ticketInReview = await prisma.ticket.create({
     data: {
       projectId: project.id,
+      sourceRequestId: requestPdfBug.id,
       title: "Auftrag: Rechnungs-PDF-Layout kaputt bei Sammelrechnungen",
       description: "Bei mehr als 20 Positionen bricht das PDF-Layout um und Summen stimmen nicht.",
+      plan: "PDF-Renderer auf Pagination pro 15 Positionen umstellen, Summenzeile pro Seite neu berechnen.",
       type: "BUG",
       status: "IN_REVIEW",
       priority: "URGENT",
       requestedBy: "Buchhaltung Demo GmbH",
       isCritical: true,
+      externalRef: "DEMO-142",
     },
   });
 
@@ -107,18 +159,26 @@ async function main() {
   await prisma.activityLogEntry.createMany({
     data: [
       {
-        ticketId: ticketBacklog.id,
-        agentId: pm.id,
-        actor: pm.name,
-        action: "ticket_created",
-        detail: "Anfrage aus Kunden-Feedback ins Backlog aufgenommen.",
+        supportRequestId: requestPdfBug.id,
+        agentId: support.id,
+        actor: support.name,
+        action: "request_received",
+        detail: "Bug-Report aus Jira (DEMO-142) empfangen und triagiert.",
       },
       {
-        ticketId: ticketInProgress.id,
-        agentId: backend.id,
-        actor: backend.name,
-        action: "status_changed",
-        detail: "BACKLOG -> IN_PROGRESS: CSV-Parser implementiert.",
+        ticketId: ticketInReview.id,
+        supportRequestId: requestPdfBug.id,
+        agentId: productOwner.id,
+        actor: productOwner.name,
+        action: "ticket_created",
+        detail: "Aus DEMO-142 Ticket erstellt, als kritisch markiert und priorisiert (URGENT).",
+      },
+      {
+        ticketId: ticketInReview.id,
+        agentId: planning.id,
+        actor: planning.name,
+        action: "plan_created",
+        detail: "Umsetzungsplan im Ticket hinterlegt.",
       },
       {
         ticketId: ticketInReview.id,
@@ -133,6 +193,27 @@ async function main() {
         actor: reviewer.name,
         action: "review_requested",
         detail: "Als kritische Änderung markiert, menschliches Review angefordert.",
+      },
+      {
+        supportRequestId: requestMindestbestand.id,
+        agentId: support.id,
+        actor: support.name,
+        action: "request_received",
+        detail: "Feature-Wunsch per E-Mail empfangen, wartet auf Triage.",
+      },
+      {
+        ticketId: ticketBacklog.id,
+        agentId: productOwner.id,
+        actor: productOwner.name,
+        action: "ticket_created",
+        detail: "Aus Kunden-E-Mail ins Backlog aufgenommen (MEDIUM).",
+      },
+      {
+        ticketId: ticketInProgress.id,
+        agentId: backend.id,
+        actor: backend.name,
+        action: "status_changed",
+        detail: "BACKLOG -> IN_PROGRESS: CSV-Parser implementiert.",
       },
       {
         ticketId: ticketDone.id,

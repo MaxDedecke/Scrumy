@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import {
+  AGENT_ROLE_LABEL,
   AGENT_STATUS_COLOR,
   AGENT_STATUS_LABEL,
   PRIORITY_COLOR,
@@ -39,7 +40,7 @@ export default async function ProjectBoardPage({
     where: { ticket: { projectId } },
     orderBy: { createdAt: "desc" },
     take: 10,
-    include: { ticket: true, agent: true },
+    include: { ticket: true, supportRequest: true },
   });
 
   const ticketsByStatus = TICKET_STATUS_ORDER.map((status) => ({
@@ -60,16 +61,19 @@ export default async function ProjectBoardPage({
             </p>
             <h1 className="mt-1 text-2xl font-semibold">{project.name}</h1>
           </div>
-          {project.repoUrl && (
-            <a
-              href={project.repoUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="text-sm text-neutral-500 hover:text-neutral-300"
+          <div className="flex items-center gap-4 text-sm text-neutral-500">
+            <Link
+              href={`/organizations/${project.organizationId}/inbox`}
+              className="hover:text-neutral-300"
             >
-              Repository ↗
-            </a>
-          )}
+              Support-Postfach →
+            </Link>
+            {project.repoUrl && (
+              <a href={project.repoUrl} target="_blank" rel="noreferrer" className="hover:text-neutral-300">
+                Repository ↗
+              </a>
+            )}
+          </div>
         </div>
       </header>
 
@@ -84,6 +88,9 @@ export default async function ProjectBoardPage({
               className="flex items-center gap-2 rounded-md border border-neutral-800 px-3 py-1.5"
             >
               <span className="text-sm font-medium">{agent.name}</span>
+              <span className="rounded-full bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
+                {AGENT_ROLE_LABEL[agent.role]}
+              </span>
               <span
                 className={`rounded-full px-2 py-0.5 text-xs ${AGENT_STATUS_COLOR[agent.status]}`}
               >
@@ -130,6 +137,12 @@ export default async function ProjectBoardPage({
                         {ticket.description}
                       </p>
                     )}
+                    {ticket.plan && (
+                      <p className="mt-2 rounded border border-neutral-800 bg-neutral-950 p-2 text-[11px] text-neutral-400">
+                        <span className="font-medium text-neutral-300">Plan: </span>
+                        {ticket.plan}
+                      </p>
+                    )}
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-300">
                         {TICKET_TYPE_LABEL[ticket.type]}
@@ -142,6 +155,11 @@ export default async function ProjectBoardPage({
                       {pendingReview && (
                         <span className="rounded bg-amber-900 px-1.5 py-0.5 text-[11px] text-amber-200">
                           Review ausstehend
+                        </span>
+                      )}
+                      {ticket.externalRef && (
+                        <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-400">
+                          {ticket.externalRef}
                         </span>
                       )}
                     </div>
@@ -167,7 +185,9 @@ export default async function ProjectBoardPage({
                 {entry.createdAt.toLocaleString("de-DE")}
               </span>
               <span className="shrink-0 font-medium text-neutral-300">{entry.actor}</span>
-              <span className="text-neutral-500">→ {entry.ticket.title}:</span>
+              <span className="text-neutral-500">
+                → {entry.ticket?.title ?? entry.supportRequest?.subject ?? "—"}:
+              </span>
               <span className="text-neutral-400">{entry.detail ?? entry.action}</span>
             </li>
           ))}
