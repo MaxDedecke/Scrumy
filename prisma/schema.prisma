@@ -29,9 +29,9 @@ model Organization {
   industry  String?
   createdAt DateTime @default(now())
 
-  projects         Project[]
-  connectors       Connector[]
-  supportRequests  SupportRequest[]
+  projects        Project[]
+  connectors      Connector[]
+  supportRequests SupportRequest[]
 
   @@map("organizations")
 }
@@ -49,8 +49,9 @@ model Project {
   status         ProjectStatus @default(ACTIVE)
   createdAt      DateTime      @default(now())
 
-  tickets Ticket[]
-  agents  AgentAssignment[]
+  tickets    Ticket[]
+  agents     AgentAssignment[]
+  connectors Connector[]
 
   @@map("projects")
 }
@@ -66,19 +67,49 @@ enum ProjectStatus {
 /// Pipeline-Rollen: SUPPORT (Kundenkorrespondenz) -> PRODUCT_OWNER (Tickets
 /// erstellen/priorisieren) -> PLANNING (Ticket planen) -> BACKEND/FRONTEND/QA/DEVOPS
 /// (umsetzen). REVIEWER unterstuetzt den menschlichen Review-Schritt.
+///
+/// Welches LLM ein Agent nutzt, ist bewusst NICHT hier fest verdrahtet, sondern
+/// verweist auf ein global (beratungsweit, nicht pro Kunde) gepflegtes `LlmProfile`
+/// – so lassen sich Cloud-LLMs und ein lokaler Ollama-Container zentral verwalten
+/// und pro Agent zuweisen.
 model Agent {
-  id        String      @id @default(cuid())
-  name      String
-  role      AgentRole
-  model     String? // z.B. "claude-sonnet-5"
-  status    AgentStatus @default(IDLE)
-  createdAt DateTime    @default(now())
+  id           String      @id @default(cuid())
+  name         String
+  role         AgentRole
+  llmProfileId String?
+  llmProfile   LlmProfile? @relation(fields: [llmProfileId], references: [id], onDelete: SetNull)
+  status       AgentStatus @default(IDLE)
+  createdAt    DateTime    @default(now())
 
   assignments     AgentAssignment[]
   ticketEvents    ActivityLogEntry[]
   supportRequests SupportRequest[]
 
   @@map("agents")
+}
+
+/// Globales, beratungsweites LLM-Profil (NICHT pro Kunde) – z.B. ein Cloud-Modell
+/// oder ein lokal betriebener Ollama-Container. Wird Agenten zugewiesen.
+model LlmProfile {
+  id        String      @id @default(cuid())
+  name      String
+  provider  LlmProvider
+  model     String // z.B. "claude-sonnet-5" oder "llama3.1:70b"
+  baseUrl   String? // z.B. http://ollama:11434 fuer einen lokalen Container
+  apiKeyRef String? // Verweis auf Secret-Store/env, nie der Key selbst
+  isDefault Boolean     @default(false)
+  createdAt DateTime    @default(now())
+
+  agents Agent[]
+
+  @@map("llm_profiles")
+}
+
+enum LlmProvider {
+  ANTHROPIC
+  OPENAI
+  OLLAMA
+  GENERIC_OPENAI_COMPAT
 }
 
 enum AgentRole {
@@ -99,28 +130,40 @@ enum AgentStatus {
 }
 
 /// Verknuepft Agenten mit Projekten (ein Agent kann an mehreren Kundenprojekten
-/// mitarbeiten, ein Projekt hat mehrere Agenten im Team).
+/// mitarbeiten, ein Projekt hat mehrere Agenten im Team). `connector` ist die
+/// Konfiguration, mit der DIESER Agent in DIESEM Projekt arbeitet – z.B. der
+/// Support-Agent mit dem Jira-Connector des Kunden, der DevOps-/Backend-Agent mit
+/// dem Git-Connector des Projekt-Repos.
 model AgentAssignment {
-  id        String   @id @default(cuid())
-  agentId   String
-  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  projectId String
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
+  id          String     @id @default(cuid())
+  agentId     String
+  agent       Agent      @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  connectorId String?
+  connector   Connector? @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+  createdAt   DateTime   @default(now())
 
   @@unique([agentId, projectId])
   @@map("agent_assignments")
 }
 
-/// Ein angebundenes externes System eines Kunden (Jira, andere PM-Tools, E-Mail-
-/// Postfach, ...), ueber das der Support-Agent Kundenkorrespondenz automatisiert
-/// empfaengt/beantwortet. `config` enthaelt nicht-geheime Verbindungsdaten (Base-URL,
-/// Projekt-Key, ...); Zugangsdaten liegen bewusst nicht in der DB, sondern werden
-/// ueber `credentialRef` auf einen Secret-Store/env verwiesen.
+/// Ein angebundenes externes System (Jira, andere PM-Tools, E-Mail-Postfach, Git-
+/// Repository, ...), ueber das Agenten automatisiert arbeiten – z.B. der Support-
+/// Agent liest/schreibt Kundenkorrespondenz per Jira-Connector, der DevOps-/
+/// Backend-Agent committet ueber einen Git-Connector im Projekt-Repo.
+/// `organizationId` ordnet den Connector immer einem Kunden zu; `projectId` grenzt
+/// ihn zusaetzlich auf ein einzelnes Projekt ein (z.B. Git-Connector = 1 Repo),
+/// bleibt bei kundenweiten Connectoren (z.B. das eine Jira-Postfach) leer.
+/// `config` enthaelt nicht-geheime Verbindungsdaten (Base-URL, Projekt-Key,
+/// Repo-URL, Branch, ...); Zugangsdaten liegen bewusst nicht in der DB, sondern
+/// werden ueber `credentialRef` auf einen Secret-Store/env verwiesen.
 model Connector {
   id             String            @id @default(cuid())
   organizationId String
   organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  projectId      String?
+  project        Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   provider       ConnectorProvider
   name           String
   config         Json?
@@ -128,7 +171,8 @@ model Connector {
   status         ConnectorStatus   @default(ACTIVE)
   createdAt      DateTime          @default(now())
 
-  supportRequests SupportRequest[]
+  supportRequests  SupportRequest[]
+  agentAssignments AgentAssignment[]
 
   @@map("connectors")
 }
@@ -137,6 +181,7 @@ enum ConnectorProvider {
   JIRA
   ZENDESK
   EMAIL
+  GIT
   GENERIC_WEBHOOK
 }
 
@@ -194,22 +239,22 @@ enum SupportRequestStatus {
 /// Kunden-System (z.B. Jira-Key), damit Status automatisiert zurueckgespiegelt
 /// werden kann.
 model Ticket {
-  id              String       @id @default(cuid())
+  id              String          @id @default(cuid())
   projectId       String
-  project         Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project         Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sourceRequestId String?
   sourceRequest   SupportRequest? @relation(fields: [sourceRequestId], references: [id], onDelete: SetNull)
   title           String
   description     String?
   plan            String? // Planning-Agent: geplante Umsetzungsschritte
-  type            TicketType   @default(FEATURE)
-  status          TicketStatus @default(BACKLOG)
-  priority        Priority     @default(MEDIUM)
+  type            TicketType      @default(FEATURE)
+  status          TicketStatus    @default(BACKLOG)
+  priority        Priority        @default(MEDIUM)
   requestedBy     String? // Name/Kontakt des Kunden, der die Anfrage gestellt hat
-  isCritical      Boolean      @default(false) // erzwingt menschliches Review vor Deploy
+  isCritical      Boolean         @default(false) // erzwingt menschliches Review vor Deploy
   externalRef     String? // z.B. verknuepfter Jira-Issue-Key beim Kunden
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   reviews  ReviewApproval[]
   activity ActivityLogEntry[]

@@ -4,10 +4,11 @@ import { prisma } from "@/lib/prisma";
 import {
   AGENT_ROLE_LABEL,
   CONNECTOR_PROVIDER_LABEL,
-  CONNECTOR_STATUS_COLOR,
+  CONNECTOR_STATUS_LABEL,
+  CONNECTOR_STATUS_PILL,
   SUPPORT_CHANNEL_LABEL,
-  SUPPORT_REQUEST_STATUS_COLOR,
   SUPPORT_REQUEST_STATUS_LABEL,
+  SUPPORT_REQUEST_STATUS_PILL,
 } from "@/lib/labels";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
@@ -69,13 +70,9 @@ export default async function SupportInboxPage({
                 className="flex items-center gap-2 rounded-md border border-neutral-800 px-3 py-1.5"
               >
                 <span className="text-sm font-medium">{connector.name}</span>
-                <span className="rounded-full bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
-                  {CONNECTOR_PROVIDER_LABEL[connector.provider]}
-                </span>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-xs ${CONNECTOR_STATUS_COLOR[connector.status]}`}
-                >
-                  {connector.status}
+                <span className="pill pill-neutral">{CONNECTOR_PROVIDER_LABEL[connector.provider]}</span>
+                <span className={CONNECTOR_STATUS_PILL[connector.status]}>
+                  {CONNECTOR_STATUS_LABEL[connector.status]}
                 </span>
               </div>
             ))}
@@ -95,20 +92,14 @@ export default async function SupportInboxPage({
                   <p className="font-medium">{request.subject ?? "(kein Betreff)"}</p>
                   <p className="mt-1 text-sm text-neutral-500">{request.body}</p>
                 </div>
-                <span
-                  className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs ${SUPPORT_REQUEST_STATUS_COLOR[request.status]}`}
-                >
+                <span className={`shrink-0 ${SUPPORT_REQUEST_STATUS_PILL[request.status]}`}>
                   {SUPPORT_REQUEST_STATUS_LABEL[request.status]}
                 </span>
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
-                <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-300">
-                  {SUPPORT_CHANNEL_LABEL[request.channel]}
-                </span>
-                {request.externalRef && (
-                  <span className="rounded bg-neutral-800 px-1.5 py-0.5">{request.externalRef}</span>
-                )}
+                <span className="pill pill-neutral">{SUPPORT_CHANNEL_LABEL[request.channel]}</span>
+                {request.externalRef && <span className="pill pill-neutral">{request.externalRef}</span>}
                 {request.fromContact && <span>von {request.fromContact}</span>}
                 {request.handledBy && (
                   <span>

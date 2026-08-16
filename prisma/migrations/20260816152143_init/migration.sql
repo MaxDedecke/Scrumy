@@ -2,13 +2,16 @@
 CREATE TYPE "ProjectStatus" AS ENUM ('ACTIVE', 'PAUSED', 'ARCHIVED');
 
 -- CreateEnum
+CREATE TYPE "LlmProvider" AS ENUM ('ANTHROPIC', 'OPENAI', 'OLLAMA', 'GENERIC_OPENAI_COMPAT');
+
+-- CreateEnum
 CREATE TYPE "AgentRole" AS ENUM ('SUPPORT', 'PRODUCT_OWNER', 'PLANNING', 'BACKEND', 'FRONTEND', 'QA', 'REVIEWER', 'DEVOPS');
 
 -- CreateEnum
 CREATE TYPE "AgentStatus" AS ENUM ('IDLE', 'WORKING', 'BLOCKED');
 
 -- CreateEnum
-CREATE TYPE "ConnectorProvider" AS ENUM ('JIRA', 'ZENDESK', 'EMAIL', 'GENERIC_WEBHOOK');
+CREATE TYPE "ConnectorProvider" AS ENUM ('JIRA', 'ZENDESK', 'EMAIL', 'GIT', 'GENERIC_WEBHOOK');
 
 -- CreateEnum
 CREATE TYPE "ConnectorStatus" AS ENUM ('ACTIVE', 'INACTIVE', 'ERROR');
@@ -59,7 +62,7 @@ CREATE TABLE "agents" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "role" "AgentRole" NOT NULL,
-    "model" TEXT,
+    "llmProfileId" TEXT,
     "status" "AgentStatus" NOT NULL DEFAULT 'IDLE',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -67,10 +70,25 @@ CREATE TABLE "agents" (
 );
 
 -- CreateTable
+CREATE TABLE "llm_profiles" (
+    "id" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "provider" "LlmProvider" NOT NULL,
+    "model" TEXT NOT NULL,
+    "baseUrl" TEXT,
+    "apiKeyRef" TEXT,
+    "isDefault" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "llm_profiles_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "agent_assignments" (
     "id" TEXT NOT NULL,
     "agentId" TEXT NOT NULL,
     "projectId" TEXT NOT NULL,
+    "connectorId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "agent_assignments_pkey" PRIMARY KEY ("id")
@@ -80,6 +98,7 @@ CREATE TABLE "agent_assignments" (
 CREATE TABLE "connectors" (
     "id" TEXT NOT NULL,
     "organizationId" TEXT NOT NULL,
+    "projectId" TEXT,
     "provider" "ConnectorProvider" NOT NULL,
     "name" TEXT NOT NULL,
     "config" JSONB,
@@ -162,13 +181,22 @@ CREATE UNIQUE INDEX "agent_assignments_agentId_projectId_key" ON "agent_assignme
 ALTER TABLE "projects" ADD CONSTRAINT "projects_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "organizations"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "agents" ADD CONSTRAINT "agents_llmProfileId_fkey" FOREIGN KEY ("llmProfileId") REFERENCES "llm_profiles"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "agent_assignments" ADD CONSTRAINT "agent_assignments_agentId_fkey" FOREIGN KEY ("agentId") REFERENCES "agents"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "agent_assignments" ADD CONSTRAINT "agent_assignments_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "projects"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "agent_assignments" ADD CONSTRAINT "agent_assignments_connectorId_fkey" FOREIGN KEY ("connectorId") REFERENCES "connectors"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "connectors" ADD CONSTRAINT "connectors_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "organizations"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "connectors" ADD CONSTRAINT "connectors_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "projects"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "support_requests" ADD CONSTRAINT "support_requests_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "organizations"("id") ON DELETE CASCADE ON UPDATE CASCADE;

@@ -6,6 +6,33 @@ const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
+  // --- Globale LLM-Profile (beratungsweit, nicht pro Kunde) --------------------
+  const [sonnetProfile, opusProfile, localOllamaProfile] = await Promise.all([
+    prisma.llmProfile.create({
+      data: {
+        name: "Claude Sonnet 5 (Cloud)",
+        provider: "ANTHROPIC",
+        model: "claude-sonnet-5",
+        isDefault: true,
+      },
+    }),
+    prisma.llmProfile.create({
+      data: {
+        name: "Claude Opus 5 (Cloud, kritische Aufgaben)",
+        provider: "ANTHROPIC",
+        model: "claude-opus-5",
+      },
+    }),
+    prisma.llmProfile.create({
+      data: {
+        name: "Lokaler Ollama-Container",
+        provider: "OLLAMA",
+        model: "llama3.1:70b",
+        baseUrl: "http://ollama:11434",
+      },
+    }),
+  ]);
+
   const org = await prisma.organization.create({
     data: {
       name: "Demo GmbH",
@@ -23,7 +50,8 @@ async function main() {
     },
   });
 
-  // Connector: der Kunde meldet Anfragen über sein eigenes Jira-Projekt.
+  // --- Connectoren ---------------------------------------------------------------
+  // Kundenweit: der Kunde meldet Anfragen über sein eigenes Jira-Projekt.
   const jiraConnector = await prisma.connector.create({
     data: {
       organizationId: org.id,
@@ -34,36 +62,53 @@ async function main() {
     },
   });
 
-  // Pipeline-Agenten: Support -> Product Owner -> Planning -> Coding-Agenten.
+  // Projektspezifisch: das Repo, in dem die Coding-Agenten committen.
+  const gitConnector = await prisma.connector.create({
+    data: {
+      organizationId: org.id,
+      projectId: project.id,
+      provider: "GIT",
+      name: "Demo GmbH ERP Repo",
+      config: { repoUrl: project.repoUrl, defaultBranch: "main" },
+      credentialRef: "vault://demo-gmbh/erp-repo-deploy-key",
+    },
+  });
+
+  // --- Pipeline-Agenten: Support -> Product Owner -> Planning -> Coding-Agenten --
   const [support, productOwner, planning, backend, frontend, reviewer] = await Promise.all([
     prisma.agent.create({
-      data: { name: "Support-Agent", role: "SUPPORT", model: "claude-sonnet-5", status: "WORKING" },
+      data: { name: "Support-Agent", role: "SUPPORT", llmProfileId: sonnetProfile.id, status: "WORKING" },
     }),
     prisma.agent.create({
-      data: { name: "Product-Owner-Agent", role: "PRODUCT_OWNER", model: "claude-sonnet-5", status: "WORKING" },
+      data: { name: "Product-Owner-Agent", role: "PRODUCT_OWNER", llmProfileId: sonnetProfile.id, status: "WORKING" },
     }),
     prisma.agent.create({
-      data: { name: "Planning-Agent", role: "PLANNING", model: "claude-opus-5", status: "IDLE" },
+      data: { name: "Planning-Agent", role: "PLANNING", llmProfileId: opusProfile.id, status: "IDLE" },
     }),
     prisma.agent.create({
-      data: { name: "Backend-Agent", role: "BACKEND", model: "claude-sonnet-5", status: "WORKING" },
+      data: { name: "Backend-Agent", role: "BACKEND", llmProfileId: sonnetProfile.id, status: "WORKING" },
     }),
     prisma.agent.create({
-      data: { name: "Frontend-Agent", role: "FRONTEND", model: "claude-sonnet-5", status: "IDLE" },
+      data: { name: "Frontend-Agent", role: "FRONTEND", llmProfileId: localOllamaProfile.id, status: "IDLE" },
     }),
     prisma.agent.create({
-      data: { name: "Reviewer-Agent", role: "REVIEWER", model: "claude-opus-5", status: "IDLE" },
+      data: { name: "Reviewer-Agent", role: "REVIEWER", llmProfileId: opusProfile.id, status: "IDLE" },
     }),
   ]);
 
+  // Agent-Einsätze im Projekt, jeweils mit dem passenden Connector.
   await prisma.agentAssignment.createMany({
-    data: [support, productOwner, planning, backend, frontend, reviewer].map((agent) => ({
-      agentId: agent.id,
-      projectId: project.id,
-    })),
+    data: [
+      { agentId: support.id, projectId: project.id, connectorId: jiraConnector.id },
+      { agentId: productOwner.id, projectId: project.id },
+      { agentId: planning.id, projectId: project.id },
+      { agentId: backend.id, projectId: project.id, connectorId: gitConnector.id },
+      { agentId: frontend.id, projectId: project.id, connectorId: gitConnector.id },
+      { agentId: reviewer.id, projectId: project.id },
+    ],
   });
 
-  // Kundenanfragen: eine bereits in ein Ticket überführt, eine noch offen.
+  // --- Kundenanfragen: eine bereits in ein Ticket überführt, eine noch offen -----
   const requestPdfBug = await prisma.supportRequest.create({
     data: {
       organizationId: org.id,

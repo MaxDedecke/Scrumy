@@ -3,14 +3,15 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import {
   AGENT_ROLE_LABEL,
-  AGENT_STATUS_COLOR,
   AGENT_STATUS_LABEL,
-  PRIORITY_COLOR,
+  AGENT_STATUS_PILL,
   PRIORITY_LABEL,
+  PRIORITY_PILL,
   TICKET_STATUS_LABEL,
   TICKET_STATUS_ORDER,
   TICKET_TYPE_LABEL,
 } from "@/lib/labels";
+import { ProjectTabs } from "@/components/ProjectTabs";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
 export const dynamic = "force-dynamic";
@@ -30,7 +31,7 @@ export default async function ProjectBoardPage({
         orderBy: { updatedAt: "desc" },
         include: { reviews: true },
       },
-      agents: { include: { agent: true } },
+      agents: { include: { agent: true, connector: true } },
     },
   });
 
@@ -48,9 +49,23 @@ export default async function ProjectBoardPage({
     tickets: project.tickets.filter((t) => t.status === status),
   }));
 
+  const openTickets = project.tickets.filter((t) => t.status !== "DONE");
+  const criticalOpen = openTickets.filter((t) => t.isCritical).length;
+  const pendingReviews = project.tickets.reduce(
+    (sum, t) => sum + t.reviews.filter((r) => r.decision === "PENDING").length,
+    0,
+  );
+
+  const stats: { label: string; value: number; tone?: "critical" | "warning" }[] = [
+    { label: "Offene Tickets", value: openTickets.length },
+    { label: "In Review", value: ticketsByStatus.find((c) => c.status === "IN_REVIEW")?.tickets.length ?? 0 },
+    { label: "Kritisch offen", value: criticalOpen, tone: criticalOpen > 0 ? "critical" : undefined },
+    { label: "Reviews ausstehend", value: pendingReviews, tone: pendingReviews > 0 ? "warning" : undefined },
+  ];
+
   return (
     <main className="flex-1 mx-auto w-full max-w-7xl px-6 py-10">
-      <header className="mb-8">
+      <header className="mb-6">
         <Link href="/" className="text-sm text-neutral-500 hover:text-neutral-300">
           ← Kunden &amp; Projekte
         </Link>
@@ -62,10 +77,7 @@ export default async function ProjectBoardPage({
             <h1 className="mt-1 text-2xl font-semibold">{project.name}</h1>
           </div>
           <div className="flex items-center gap-4 text-sm text-neutral-500">
-            <Link
-              href={`/organizations/${project.organizationId}/inbox`}
-              className="hover:text-neutral-300"
-            >
+            <Link href={`/organizations/${project.organizationId}/inbox`} className="hover:text-neutral-300">
               Support-Postfach →
             </Link>
             {project.repoUrl && (
@@ -77,27 +89,54 @@ export default async function ProjectBoardPage({
         </div>
       </header>
 
+      <ProjectTabs projectId={project.id} active="overview" />
+
+      {/* Stat-Kacheln: Kennzahlen auf einen Blick, nicht als Chart – ein Zustand pro Kachel. */}
+      <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {stats.map((stat) => (
+          <div key={stat.label} className="rounded-lg border border-neutral-800 bg-neutral-950 p-4">
+            <p
+              className={`text-2xl font-semibold ${
+                stat.tone === "critical"
+                  ? "text-red-400"
+                  : stat.tone === "warning"
+                    ? "text-amber-400"
+                    : "text-neutral-100"
+              }`}
+            >
+              {stat.value}
+            </p>
+            <p className="mt-1 text-xs text-neutral-500">{stat.label}</p>
+          </div>
+        ))}
+      </section>
+
       <section className="mb-8">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-neutral-500">
-          Agenten-Team
-        </h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">
+            Agenten-Team
+          </h2>
+          <Link href={`/projects/${project.id}/team`} className="text-xs text-neutral-500 hover:text-neutral-300">
+            Konfigurieren →
+          </Link>
+        </div>
         <div className="flex flex-wrap gap-3">
-          {project.agents.map(({ agent }) => (
+          {project.agents.map(({ agent, connector }) => (
             <div
               key={agent.id}
-              className="flex items-center gap-2 rounded-md border border-neutral-800 px-3 py-1.5"
+              className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2"
             >
               <span className="text-sm font-medium">{agent.name}</span>
-              <span className="rounded-full bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
-                {AGENT_ROLE_LABEL[agent.role]}
-              </span>
-              <span
-                className={`rounded-full px-2 py-0.5 text-xs ${AGENT_STATUS_COLOR[agent.status]}`}
-              >
-                {AGENT_STATUS_LABEL[agent.status]}
-              </span>
+              <span className="pill pill-neutral">{AGENT_ROLE_LABEL[agent.role]}</span>
+              <span className={AGENT_STATUS_PILL[agent.status]}>{AGENT_STATUS_LABEL[agent.status]}</span>
+              {connector && <span className="text-xs text-neutral-600">via {connector.name}</span>}
             </div>
           ))}
+          {project.agents.length === 0 && (
+            <p className="text-sm text-neutral-600">
+              Noch kein Agenten-Team – <Link href={`/projects/${project.id}/team`} className="underline hover:text-neutral-300">jetzt einrichten</Link>.
+            </p>
+          )}
         </div>
       </section>
 
@@ -119,7 +158,7 @@ export default async function ProjectBoardPage({
                 return (
                   <article
                     key={ticket.id}
-                    className="rounded-md border border-neutral-800 bg-neutral-900 p-3"
+                    className="rounded-md border border-neutral-800 bg-neutral-900 p-3 transition-colors hover:border-neutral-700"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-sm font-medium">{ticket.title}</p>
@@ -133,9 +172,7 @@ export default async function ProjectBoardPage({
                       )}
                     </div>
                     {ticket.description && (
-                      <p className="mt-1 line-clamp-2 text-xs text-neutral-500">
-                        {ticket.description}
-                      </p>
+                      <p className="mt-1 line-clamp-2 text-xs text-neutral-500">{ticket.description}</p>
                     )}
                     {ticket.plan && (
                       <p className="mt-2 rounded border border-neutral-800 bg-neutral-950 p-2 text-[11px] text-neutral-400">
@@ -144,24 +181,10 @@ export default async function ProjectBoardPage({
                       </p>
                     )}
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-300">
-                        {TICKET_TYPE_LABEL[ticket.type]}
-                      </span>
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[11px] ${PRIORITY_COLOR[ticket.priority]}`}
-                      >
-                        {PRIORITY_LABEL[ticket.priority]}
-                      </span>
-                      {pendingReview && (
-                        <span className="rounded bg-amber-900 px-1.5 py-0.5 text-[11px] text-amber-200">
-                          Review ausstehend
-                        </span>
-                      )}
-                      {ticket.externalRef && (
-                        <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-400">
-                          {ticket.externalRef}
-                        </span>
-                      )}
+                      <span className="pill pill-neutral">{TICKET_TYPE_LABEL[ticket.type]}</span>
+                      <span className={PRIORITY_PILL[ticket.priority]}>{PRIORITY_LABEL[ticket.priority]}</span>
+                      {pendingReview && <span className="pill pill-warning">Review ausstehend</span>}
+                      {ticket.externalRef && <span className="pill pill-neutral">{ticket.externalRef}</span>}
                     </div>
                   </article>
                 );
@@ -172,18 +195,14 @@ export default async function ProjectBoardPage({
       </section>
 
       <section>
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-neutral-500">
-          Aktivität
-        </h2>
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-neutral-500">Aktivität</h2>
         <ul className="space-y-2">
           {activity.map((entry) => (
             <li
               key={entry.id}
               className="flex items-baseline gap-3 rounded-md border border-neutral-900 px-3 py-2 text-sm"
             >
-              <span className="shrink-0 text-neutral-600">
-                {entry.createdAt.toLocaleString("de-DE")}
-              </span>
+              <span className="shrink-0 text-neutral-600">{entry.createdAt.toLocaleString("de-DE")}</span>
               <span className="shrink-0 font-medium text-neutral-300">{entry.actor}</span>
               <span className="text-neutral-500">
                 → {entry.ticket?.title ?? entry.supportRequest?.subject ?? "—"}:
@@ -191,9 +210,7 @@ export default async function ProjectBoardPage({
               <span className="text-neutral-400">{entry.detail ?? entry.action}</span>
             </li>
           ))}
-          {activity.length === 0 && (
-            <p className="text-sm text-neutral-600">Noch keine Aktivität.</p>
-          )}
+          {activity.length === 0 && <p className="text-sm text-neutral-600">Noch keine Aktivität.</p>}
         </ul>
       </section>
     </main>

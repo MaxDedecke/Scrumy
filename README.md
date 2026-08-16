@@ -25,10 +25,16 @@ kritische Änderungen durchlaufen ein menschliches Review, bevor sie deployt wer
 - **Organization** – ein Kunde des Startups.
 - **Project** – die Individualsoftware eines Kunden (z.B. "Warenwirtschaft & CRM"),
   verweist auf das eigentliche Kunden-Repository.
-- **Connector** – Anbindung an ein externes System des Kunden (Jira, andere
-  PM-Tools, E-Mail-Postfach), über das Kundenkorrespondenz automatisiert rein-
-  und rausgeht. `config` enthält nur nicht-geheime Verbindungsdaten; Zugangsdaten
-  liegen über `credentialRef` in einem Secret-Store, nicht in der DB.
+- **Connector** – Anbindung an ein externes System (Jira, andere PM-Tools,
+  E-Mail-Postfach, **Git-Repo**), über das ein Agent automatisiert arbeitet – z.B.
+  der Support-Agent per Jira-Connector, der Backend-/DevOps-Agent per Git-Connector
+  im Projekt-Repo. Kundenweit (`projectId` leer, z.B. das eine Jira-Postfach) oder
+  projektspezifisch (z.B. genau 1 Repo). `config` enthält nur nicht-geheime
+  Verbindungsdaten; Zugangsdaten liegen über `credentialRef` in einem Secret-Store,
+  nicht in der DB. Konfiguriert wird das je Projekt unter "Team & Konnektoren".
+- **LlmProfile** – **global, nicht pro Kunde** – ein Cloud-Modell oder ein lokaler
+  Ollama-Container, den Agenten zugewiesen werden. Verwaltung unter
+  `/settings/llm-profiles`.
 - **SupportRequest** – eine eingehende Kundenanfrage (Feature-Request, Bug,
   allgemeine Korrespondenz), landet im Support-Postfach (`/organizations/[id]/inbox`)
   und wird ggf. in ein oder mehrere Tickets überführt.
@@ -44,6 +50,23 @@ kritische Änderungen durchlaufen ein menschliches Review, bevor sie deployt wer
   die Arbeit der Agenten für den Kunden nachvollziehbar.
 
 Das Datenmodell liegt in [`prisma/schema.prisma`](./prisma/schema.prisma).
+
+## Frontend
+
+- `/` – Kunden &amp; Projekte anlegen/bearbeiten/löschen (Dashboard).
+- `/projects/[id]` – Projekt-Übersicht: Stat-Kacheln, Agenten-Team, Scrum-Board,
+  Aktivität.
+- `/projects/[id]/team` – Team &amp; Konnektoren: Projekt-Einstellungen, Connectoren
+  anlegen/verwalten (kundenweit oder projektspezifisch, z.B. Jira/Git), Agenten
+  zum Projekt hinzufügen/entfernen und pro Agent LLM-Profil + Connector zuweisen.
+- `/organizations/[id]/inbox` – Support-Postfach: eingehende Kundenanfragen +
+  verknüpfte Tickets.
+- `/settings/llm-profiles` – **global, getrennt von den Kundendaten**: LLM-Profile
+  (Cloud-Anbieter oder lokaler Ollama-Container) anlegen/bearbeiten/löschen.
+
+Mutationen laufen über Next.js Server Actions (`src/lib/actions/*`), Formulare
+funktionieren ohne Client-JS (Progressive Enhancement); nur Lösch-Bestätigungen
+nutzen eine kleine Client-Komponente (`src/components/ConfirmButton.tsx`).
 
 ## Stack
 
@@ -84,8 +107,8 @@ docker compose exec app npx tsx prisma/seed.ts
 
 ## Roadmap
 
-Dies ist das MVP-Skelett: Datenmodell + Board-UI, damit Kunden/Projekte/Tickets
-sichtbar sind. Als Nächstes:
+Datenmodell + CRUD-Frontend (Kunden/Projekte/Team/Connectoren/LLM-Profile) stehen.
+Als Nächstes:
 
 - Echte Agenten-Orchestrierung (Claude Agent SDK) je Pipeline-Schritt: Support-Agent
   liest tatsächlich aus Connectoren (Jira-Webhook/Polling, IMAP, …), Product-Owner-
