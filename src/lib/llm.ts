@@ -144,7 +144,14 @@ export async function chat({
         .filter((block) => block.type === "text")
         .map((block) => block.text ?? "")
         .join("");
-      if (!text.trim()) throw new LlmError("Das Modell hat keinen Text zurückgegeben.");
+      if (!text.trim()) {
+        throw new LlmError(
+          `Das Modell hat keinen Text zurückgegeben${data.stop_reason ? ` (Abbruchgrund: ${data.stop_reason})` : ""}.` +
+            (data.stop_reason === "max_tokens"
+              ? " Das Token-Budget war vor der eigentlichen Antwort aufgebraucht."
+              : ""),
+        );
+      }
       return text;
     }
 
@@ -191,13 +198,27 @@ export async function chat({
         },
         timeoutMs,
       )) as {
-        choices?: { message?: { content?: string } }[];
+        choices?: { message?: { content?: string }; finish_reason?: string }[];
         error?: { message?: string };
       };
 
       if (data.error?.message) throw new LlmError(data.error.message);
-      const text = pickString(data.choices?.[0]?.message?.content);
-      if (!text) throw new LlmError("Der Anbieter hat keinen Text zurückgegeben.");
+
+      const choice = data.choices?.[0];
+      const text = pickString(choice?.message?.content);
+      if (!text) {
+        // Leere Antwort ohne Grund ist für den Nutzer nicht zu deuten. Der
+        // häufigste Fall bei Reasoning-Modellen: Das Token-Budget ging beim
+        // Nachdenken drauf, für die Antwort blieb nichts übrig
+        // (`finish_reason: "length"`).
+        const reason = choice?.finish_reason;
+        throw new LlmError(
+          `Der Anbieter hat keinen Text zurückgegeben${reason ? ` (Abbruchgrund: ${reason})` : ""}.` +
+            (reason === "length"
+              ? " Das Token-Budget war vor der eigentlichen Antwort aufgebraucht – ein Modell mit größerem Ausgabefenster wählen."
+              : ""),
+        );
+      }
       return text;
     }
   }
