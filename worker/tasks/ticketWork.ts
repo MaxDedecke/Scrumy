@@ -39,6 +39,23 @@ const MAX_ATTEMPTS = 2;
 /// vollem Inhalt als alles angeschnitten.
 const SOURCE_BUDGET = 60_000;
 
+/// Der Auftrag und was das Team dazu festgehalten hat, gehört nicht den
+/// Umsetzern: Konzept, Anforderungen, Projektverständnis und Sprint-Dokumente
+/// sind Belege gegenüber dem Auftraggeber. Ein Coding-Agent, der sie
+/// „nebenbei" neu schreibt, verfälscht genau die Unterlagen, an denen später
+/// gemessen wird – deshalb werden solche Änderungen verworfen und protokolliert.
+const PROTECTED_PATHS = [
+  /^docs\/konzept\.md$/i,
+  /^docs\/anforderungen\.md$/i,
+  /^docs\/verstaendnis\.md$/i,
+  /^docs\/sprints\//i,
+];
+
+function isProtected(path: string): boolean {
+  const normalized = path.replace(/^\.\//, "");
+  return PROTECTED_PATHS.some((pattern) => pattern.test(normalized));
+}
+
 /// Der bestehende Code als Arbeitsgrundlage. Die Auftragsunterlagen unter
 /// `docs/` bleiben draußen – die stehen schon im Projektkontext.
 async function readSourceContext(dir: string): Promise<string> {
@@ -168,6 +185,8 @@ ${plan}
 ## Bestehender Code
 ${await readSourceContext(dir)}
 
+Die Auftragsunterlagen (docs/konzept.md, docs/anforderungen.md, docs/verstaendnis.md und docs/sprints/…) sind der eingefrorene Auftrag – die änderst du nicht. Eigene Dokumentation legst du woanders ab, z.B. unter docs/technik/.
+
 Setze das Ticket um. Gib jede Datei, die du anlegst oder änderst, VOLLSTÄNDIG zurück (kein Diff, keine Auslassungen wie "..."). Dateien, die du nicht anfasst, lässt du weg. Schreibe lauffähigen, in sich stimmigen Code und passe bestehende Dateien an, statt sie zu duplizieren.
 
 Antworte genau in diesem Format – der Dateiinhalt steht wörtlich zwischen den Markierungen, ohne Code-Fence und ohne Escaping:
@@ -183,7 +202,14 @@ vollständiger Dateiinhalt
   });
 
   const result = parseImplementation(implementation.text);
-  const { accepted: files, rejected } = partitionSafeChanges(dir, result.files);
+  const { accepted: safeFiles, rejected: unsafe } = partitionSafeChanges(dir, result.files);
+  const files = safeFiles.filter((file) => !isProtected(file.path));
+  const rejected = [
+    ...unsafe,
+    ...safeFiles
+      .filter((file) => isProtected(file.path))
+      .map((file) => ({ path: file.path, reason: "Auftragsunterlage – wird nicht von Umsetzern geändert" })),
+  ];
   const summary = result.summary || "Ohne Zusammenfassung.";
   const notes = result.notes;
 
