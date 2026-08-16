@@ -2,24 +2,36 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { EllipsisIcon } from "@/components/icons";
+import { useState } from "react";
+import { ChevronRightIcon, EllipsisIcon } from "@/components/icons";
 
 type SidebarProject = { id: string; name: string };
 type SidebarOrganization = { id: string; name: string; projects: SidebarProject[] };
 
-// Primäransicht der Sidebar ist die Projektliste (nach Kunde gruppiert). Die
-// volle Kundenverwaltung (anlegen/bearbeiten/löschen, s. Startseite) hängt
-// bewusst nicht als eigener Umschalter daneben, sondern liegt hinter dem
-// "…"-Menü ("Alle Kunden ansehen"), um die Sidebar auf die tägliche Arbeit
-// (an welchem Projekt-Board arbeite ich) zu fokussieren.
+// Primäransicht der Sidebar ist die Kundenliste. Ein Kunde wird per Klick
+// aufgeklappt (Accordion) und zeigt darunter seine Projekte zur Auswahl – das
+// hält die Liste bei vielen Kunden übersichtlich, statt sofort alle Projekte
+// aller Kunden untereinander zu listen. Die volle Kundenverwaltung
+// (anlegen/bearbeiten/löschen, s. Startseite) hängt bewusst nicht als eigener
+// Umschalter daneben, sondern liegt hinter dem "…"-Menü ("Alle Kunden
+// ansehen").
 export function Sidebar({ organizations }: { organizations: SidebarOrganization[] }) {
   const pathname = usePathname();
+
+  // Beim Laden den Kunden aufklappen, dessen Projekt gerade aktiv ist, damit
+  // man beim Navigieren nicht die Orientierung verliert.
+  const [openOrgId, setOpenOrgId] = useState<string | null>(() => {
+    const activeOrg = organizations.find((org) =>
+      org.projects.some((project) => pathname?.startsWith(`/projects/${project.id}`)),
+    );
+    return activeOrg?.id ?? null;
+  });
 
   return (
     <aside className="flex w-64 shrink-0 flex-col overflow-y-auto border-r border-neutral-900">
       <div className="flex items-center justify-between px-4 py-3">
         <span className="text-xs font-medium uppercase tracking-wider text-neutral-500">
-          Projekte
+          Kunden
         </span>
         <details className="relative">
           <summary
@@ -39,35 +51,50 @@ export function Sidebar({ organizations }: { organizations: SidebarOrganization[
         </details>
       </div>
 
-      <nav className="flex-1 space-y-4 px-2 pb-4">
-        {organizations.map((org) => (
-          <div key={org.id}>
-            <p className="px-2 py-1 text-[11px] font-medium uppercase tracking-wider text-neutral-600">
-              {org.name}
-            </p>
-            <div className="space-y-0.5">
-              {org.projects.map((project) => {
-                const active = pathname?.startsWith(`/projects/${project.id}`);
-                return (
-                  <Link
-                    key={project.id}
-                    href={`/projects/${project.id}`}
-                    className={`block truncate rounded-md px-2 py-1.5 text-sm transition-colors ${
-                      active
-                        ? "bg-sky-950 text-sky-200"
-                        : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100"
-                    }`}
-                  >
-                    {project.name}
-                  </Link>
-                );
-              })}
-              {org.projects.length === 0 && (
-                <p className="px-2 py-1 text-xs text-neutral-700">Keine Projekte</p>
+      <nav className="flex-1 space-y-0.5 px-2 pb-4">
+        {organizations.map((org) => {
+          const isOpen = openOrgId === org.id;
+          return (
+            <div key={org.id}>
+              <button
+                type="button"
+                onClick={() => setOpenOrgId(isOpen ? null : org.id)}
+                aria-expanded={isOpen}
+                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-neutral-300 hover:bg-neutral-900 hover:text-neutral-100"
+              >
+                <span className="truncate">{org.name}</span>
+                <ChevronRightIcon
+                  className={`h-3.5 w-3.5 shrink-0 text-neutral-600 transition-transform ${
+                    isOpen ? "rotate-90" : ""
+                  }`}
+                />
+              </button>
+              {isOpen && (
+                <div className="ml-2 space-y-0.5 border-l border-neutral-900 pl-2">
+                  {org.projects.map((project) => {
+                    const active = pathname?.startsWith(`/projects/${project.id}`);
+                    return (
+                      <Link
+                        key={project.id}
+                        href={`/projects/${project.id}`}
+                        className={`block truncate rounded-md px-2 py-1.5 text-sm transition-colors ${
+                          active
+                            ? "bg-sky-950 text-sky-200"
+                            : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100"
+                        }`}
+                      >
+                        {project.name}
+                      </Link>
+                    );
+                  })}
+                  {org.projects.length === 0 && (
+                    <p className="px-2 py-1 text-xs text-neutral-700">Keine Projekte</p>
+                  )}
+                </div>
               )}
             </div>
-          </div>
-        ))}
+          );
+        })}
         {organizations.length === 0 && (
           <p className="px-2 text-sm text-neutral-600">Noch keine Kunden angelegt.</p>
         )}
