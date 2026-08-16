@@ -1,22 +1,23 @@
-// Zentrale Task-Registry fuer graphile-worker. Neue Pipeline-Schritte
-// (Support-Triage, Product-Owner, Planning, Coding-Agenten, ...) kommen hier
-// als weiterer Eintrag dazu, jeweils als eigene Datei nach dem Muster von
-// `agentTurn.ts` + ein weiterer Eintrag im `GraphileWorker.Tasks`-Interface
-// unten (graphile-worker's Mechanismus fuer typisierte Task-Payloads).
+// Zentrale Task-Registry fuer graphile-worker – die Schritte, die das
+// Agenten-Team ausfuehren kann. Die Payload-Typen stehen in `../taskTypes.ts`,
+// damit auch die Next.js-App Jobs einreihen kann, ohne den Worker-Code zu
+// laden.
+//
+// Ablauf: teamKickoff -> sprintPlanning -> ticketWork (je Ticket) ->
+// sprintReview -> (Autopilot) sprintPlanning. teamInquiry laeuft unabhaengig
+// davon, sobald der Mensch etwas wissen will.
 import type { TaskList } from "graphile-worker";
-import agentTurn, { type AgentTurnPayload } from "./agentTurn";
+import "../taskTypes";
+import teamKickoff from "./teamKickoff";
+import sprintPlanning from "./sprintPlanning";
+import ticketWork from "./ticketWork";
+import sprintReview from "./sprintReview";
+import teamInquiry from "./teamInquiry";
 
 export const taskList: TaskList = {
-  agentTurn,
+  teamKickoff,
+  sprintPlanning,
+  ticketWork,
+  sprintReview,
+  teamInquiry,
 };
-
-declare global {
-  // Von graphile-worker vorgegebener Mechanismus fuer typisierte Task-Payloads
-  // (Declaration Merging), kein selbst gewaehltes Namespace-Pattern.
-  // eslint-disable-next-line @typescript-eslint/no-namespace
-  namespace GraphileWorker {
-    interface Tasks {
-      agentTurn: AgentTurnPayload;
-    }
-  }
-}

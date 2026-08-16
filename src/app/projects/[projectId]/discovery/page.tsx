@@ -30,8 +30,8 @@ import {
   releaseConcept,
   reopenConcept,
   saveConceptDraft,
-  startTeam,
 } from "@/lib/actions/concept";
+import { startTeam } from "@/lib/actions/team";
 import { CONCEPT_TEMPLATES, CONCEPT_TEMPLATE_CATEGORIES } from "@/lib/conceptTemplates";
 import {
   buttonDangerQuietClass,
@@ -85,7 +85,9 @@ export default async function ProjectDiscoveryPage({
   const conceptChangedSinceRelease =
     Boolean(latestVersion) && latestVersion.content.trim() !== conceptContent;
   const requirementsApproved = Boolean(project.requirementsApprovedAt);
-  const teamStarted = project.status === "ACTIVE";
+  // Auch ein pausiertes Team hat schon angefangen – hier gehoert dann kein
+  // Start-Button mehr hin, sondern der Weg ins Buero.
+  const teamStarted = project.status === "ACTIVE" || project.status === "PAUSED";
   const canStartTeam = conceptReleased && requirementsApproved;
 
   return (
@@ -106,9 +108,12 @@ export default async function ProjectDiscoveryPage({
 
       {project.status === "ACTIVE" && (
         <p className="mb-8 rounded-xl border border-hairline bg-surface px-4 py-3 text-sm text-ink-2">
-          Konzept ist freigegeben, das Agenten-Team arbeitet bereits nach Scrum – siehe{" "}
-          <Link href={`/projects/${project.id}`} className="font-medium text-accent underline underline-offset-2">
-            Scrum-Board
+          Konzept ist freigegeben, das Agenten-Team arbeitet bereits nach Scrum – live im{" "}
+          <Link
+            href={`/projects/${project.id}/office`}
+            className="font-medium text-accent underline underline-offset-2"
+          >
+            Team-Büro
           </Link>
           . Anforderungen und Konzept können hier weiter gepflegt werden.
         </p>
@@ -412,11 +417,16 @@ export default async function ProjectDiscoveryPage({
         <div className="card p-5">
           {teamStarted ? (
             <p className="text-sm text-ink-2">
-              Das Agenten-Team arbeitet bereits –{" "}
-              <Link href={`/projects/${project.id}`} className="font-medium text-accent underline underline-offset-2">
-                zum Scrum-Board
-              </Link>
-              .
+              {project.status === "PAUSED"
+                ? "Die Arbeit des Teams ruht gerade – "
+                : "Das Agenten-Team arbeitet bereits – "}
+              <Link
+                href={`/projects/${project.id}/office`}
+                className="font-medium text-accent underline underline-offset-2"
+              >
+                ins Team-Büro
+              </Link>{" "}
+              gehen und zusehen.
             </p>
           ) : (
             <>
@@ -444,7 +454,7 @@ export default async function ProjectDiscoveryPage({
               <ActionForm action={startTeam} className="flex flex-wrap items-center gap-4">
                 <input type="hidden" name="projectId" value={project.id} />
                 <ConfirmButton
-                  confirmText="Agenten-Team jetzt starten? Das Projekt wechselt auf Aktiv."
+                  confirmText="Agenten-Team jetzt starten? Es legt ein lokales Git-Repository an, liest den Auftrag und beginnt mit der Sprint-Planung."
                   className={`${buttonPrimaryClass} ${canStartTeam ? "" : "opacity-40"}`}
                 >
                   Team starten

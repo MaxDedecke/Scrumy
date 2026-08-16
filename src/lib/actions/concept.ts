@@ -139,41 +139,6 @@ export async function releaseConcept(formData: FormData): Promise<ActionResult> 
   return ok(`Konzept als Version ${nextVersion} freigegeben.`);
 }
 
-/// Startet das Agenten-Team: Projekt springt auf ACTIVE. Setzt voraus, dass
-/// Konzept UND Anforderungen freigegeben sind – die Oberflaeche deaktiviert
-/// den Button sonst, hier steht die Pruefung noch einmal, damit der Zustand
-/// auch bei einem direkten Aufruf stimmt.
-export async function startTeam(formData: FormData): Promise<ActionResult> {
-  const projectId = str(formData, "projectId");
-  if (!projectId) return fail("Kein Projekt angegeben.");
-
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    include: { concept: true },
-  });
-  if (!project) return fail("Projekt nicht gefunden.");
-  if (project.concept?.status !== "FINALIZED") return fail("Erst das Konzept freigeben, dann das Team starten.");
-  if (!project.requirementsApprovedAt) {
-    return fail("Erst die Anforderungen freigeben, dann das Team starten.");
-  }
-
-  await prisma.$transaction([
-    prisma.project.update({ where: { id: projectId }, data: { status: "ACTIVE" } }),
-    prisma.activityLogEntry.create({
-      data: {
-        projectId,
-        actor: "Mensch",
-        action: "team_started",
-        detail: "Konzept und Anforderungen freigegeben – Agenten-Team gestartet",
-      },
-    }),
-  ]);
-
-  revalidatePath(`/projects/${projectId}/discovery`);
-  revalidatePath(`/projects/${projectId}`);
-  return ok("Agenten-Team gestartet – das Projekt steht jetzt auf Aktiv.");
-}
-
 /// Nimmt eine Freigabe zurueck (z.B. Korrektur noetig): Konzept zurueck auf
 /// Entwurf, Projekt zurueck auf CONCEPT. Laesst laufende Tickets/Agenten
 /// unangetastet, das ist bewusst ein reiner Status-Rollback.

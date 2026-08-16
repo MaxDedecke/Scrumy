@@ -25,8 +25,16 @@ services:
     environment:
       DATABASE_URL: postgresql://scrumy:scrumy@db:5432/scrumy?schema=public
       NODE_ENV: production
+      WORKSPACE_ROOT: /workspaces
+      # Fuer LLM-Profile mit "env:NAME"-Referenz statt Schluessel in der DB.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
     ports:
       - "3001:3000"
+    volumes:
+      # Lesend: Commit-Historie und Diffs in den Nachweisen.
+      - scrumy_workspaces:/workspaces
 
   # Fuehrt die eigentliche Agenten-Arbeit aus (Job-Queue via graphile-worker),
   # komplett getrennt vom Next.js-App-Container. Skaliert horizontal unabhaengig
@@ -36,12 +44,26 @@ services:
     build: .
     restart: unless-stopped
     command: ["npx", "tsx", "worker/index.ts"]
+    # Ein Agenten-Schritt ist ein LLM-Aufruf und dauert Minuten. Ohne Wartezeit
+    # killt Docker den Worker nach 10s mitten im Job – graphile-worker kann den
+    # Job dann nicht freigeben, und er haengt bis zum Ablauf seiner Sperre
+    # (Standard: 4 Stunden). Mit Gnadenfrist laeuft der Schritt zu Ende und der
+    # Worker faehrt sauber herunter.
+    stop_grace_period: 300s
     depends_on:
       db:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://scrumy:scrumy@db:5432/scrumy?schema=public
       NODE_ENV: production
+      WORKSPACE_ROOT: /workspaces
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+    volumes:
+      # Schreibend: hier committen die Agenten.
+      - scrumy_workspaces:/workspaces
 
 volumes:
   scrumy_db_data:
+  scrumy_workspaces:

@@ -90,6 +90,18 @@ export function InboxIcon({ className }: { className?: string }) {
   );
 }
 
+export function UsersIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15 19.5v-1.5a3.75 3.75 0 0 0-3.75-3.75h-3.75A3.75 3.75 0 0 0 3.75 18v1.5m9.75-9a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6.75 9V18a3.75 3.75 0 0 0-2.813-3.629M16.5 6.879a3 3 0 0 1 0 5.742"
+      />
+    </svg>
+  );
+}
+
 export function WarningIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className={className} aria-hidden>

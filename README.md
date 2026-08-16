@@ -16,11 +16,29 @@ müssen.
 
 ## Konzept
 
-**Pipeline:** Kundenkorrespondenz (per Connector, z.B. Jira, oder manuell) →
-**Support-Agent** triagiert → **Product-Owner-Agent** übersetzt sie in Tickets,
-packt sie in den Backlog und priorisiert → **Planning-Agent** plant ein Ticket
-(Feld `plan`) → **Coding-Agenten** (Backend/Frontend/QA/DevOps) setzen um →
-kritische Änderungen durchlaufen ein menschliches Review, bevor sie deployt werden.
+**Team-Start:** Ein Klick auf „Team starten" (nach Freigabe von Konzept **und**
+Anforderungen) setzt das Team wirklich in Bewegung – wie der erste Arbeitstag in
+einer Firma:
+
+1. **Mannschaft aufstellen** – fehlende Rollen werden mit Namen besetzt
+   (`src/lib/team.ts`).
+2. **Arbeitsplatz einrichten** – ein echtes lokales Git-Repository pro Projekt
+   (`src/lib/workspace.ts`), Konzept und Anforderungen landen als Dateien darin.
+3. **Auftrag verstehen** – der Product Owner schreibt `docs/verstaendnis.md`
+   (Umfang, Annahmen, Risiken, offene Fragen) und committet es.
+4. **Scrum** – Sprint-Planung (Tickets + Ziel) → je Ticket: Planung, Umsetzung
+   mit Commit unter dem Namen des Agenten, QA-Review → Sprint-Review mit
+   Zusammenfassung → nächster Sprint (Autopilot) oder Halt.
+
+Kritische Tickets und Fälle, in denen QA nach zwei Anläufen nicht zufrieden ist,
+gehen als `ReviewApproval` an den Menschen, statt still fertig zu werden.
+
+**Pipeline (laufender Betrieb):** Kundenkorrespondenz (per Connector, z.B. Jira,
+oder manuell) → **Support-Agent** triagiert → **Product-Owner-Agent** übersetzt
+sie in Tickets, packt sie in den Backlog und priorisiert → **Planning-Agent**
+plant ein Ticket (Feld `plan`) → **Coding-Agenten** (Backend/Frontend/QA/DevOps)
+setzen um → kritische Änderungen durchlaufen ein menschliches Review, bevor sie
+deployt werden.
 
 - **Organization** – ein Kunde des Startups.
 - **Project** – die Individualsoftware eines Kunden (z.B. "Warenwirtschaft & CRM"),
@@ -46,6 +64,14 @@ kritische Änderungen durchlaufen ein menschliches Review, bevor sie deployt wer
   Kunden-System (z.B. Jira-Key) für automatisierten Status-Rücklauf.
 - **ReviewApproval** – menschlicher Freigabe-Schritt für als kritisch markierte
   Tickets, bevor sie beim Kunden deployt werden.
+- **Sprint** – fortlaufend nummerierter Sprint mit Ziel, Tickets und
+  Review-Zusammenfassung; bleibt als Historie stehen.
+- **AgentRun** – **die Belegebene**: jeder Modellaufruf mit Systemprompt, Prompt,
+  Antwort, Modell, Dauer und Status. Damit ist nicht nur das Ergebnis sichtbar,
+  sondern auch, worauf ein Agent es gestützt hat.
+- **TeamInquiry** – Rückfrage des Menschen ans Team („Wie ist der Stand?",
+  „Warum habt ihr X so gebaut?") und die Antwort des Scrum-Master-Agenten, der
+  dafür Sprints, Tickets, Commits und Protokoll heranzieht.
 - **ActivityLogEntry** – Audit-Trail (an Ticket und/oder SupportRequest), macht
   die Arbeit der Agenten für den Kunden nachvollziehbar.
 
@@ -56,6 +82,13 @@ Das Datenmodell liegt in [`prisma/schema.prisma`](./prisma/schema.prisma).
 - `/` – Kunden &amp; Projekte anlegen/bearbeiten/löschen (Dashboard).
 - `/projects/[id]` – Projekt-Übersicht: Stat-Kacheln, Agenten-Team, Scrum-Board,
   Aktivität.
+- `/projects/[id]/office` – **Team-Büro**: Live-Ansicht, wer gerade woran
+  arbeitet, aktueller Sprint mit Fortschritt, offene Freigaben, Rückfragen ans
+  Team und das Protokoll. Aktualisiert sich selbst (`LiveRefresh`), Steuerung:
+  Autopilot an/aus, „Nächsten Schritt anstoßen", Anhalten/Fortsetzen.
+- `/projects/[id]/records` – **Nachweise**: alle Agentenläufe (bis hin zu Prompt
+  und Antwort im Wortlaut) und alle Commits (mit vollständigem Diff), dazu die
+  Sprint-Reviews. Für die Frage „zeigt mir, worauf ihr euch stützt".
 - `/projects/[id]/team` – Team &amp; Konnektoren: Projekt-Einstellungen, Connectoren
   anlegen/verwalten (kundenweit oder projektspezifisch, z.B. Jira/Git), Agenten
   zum Projekt hinzufügen/entfernen und pro Agent LLM-Profil + Connector zuweisen.
@@ -124,23 +157,36 @@ einer separaten, horizontal skalierbaren Queue.
 - `worker/llmProfileLimiter.ts` – Concurrency-Cap pro `LlmProfile`, damit mehrere
   Agenten mit demselben LLM-Profil (Cloud-Key oder lokaler Ollama-Container) den
   Provider nicht gleichzeitig fluten.
-- `worker/tasks/agentTurn.ts` – Referenz-Task fürs Muster (Agent laden, Status
-  setzen, Rate-Limit ziehen, `ActivityLogEntry` schreiben); der eigentliche
-  LLM-Aufruf ist als `// TODO` markiert, noch nicht angebunden.
-- Testen: `npm run db:seed`, dann `npm run worker:dev` in einem Terminal und
-  `npm run worker:enqueue-test` in einem zweiten (im Docker-Setup: jeweils
-  `docker compose exec app npx tsx worker/...`).
+- `worker/agentRun.ts` – **jeder** Modellaufruf läuft hier durch: `AgentRun`
+  anlegen, Agentenstatus setzen, Rate-Limit ziehen, Antwort/Fehler protokollieren.
+- `worker/tasks/` – die Schritte des Teams: `teamKickoff`, `sprintPlanning`,
+  `ticketWork` (planen → umsetzen → QA-Review), `sprintReview`, `teamInquiry`.
+  Jeder Task reiht am Ende den nächsten ein (`worker/orchestration.ts`); ein
+  pausiertes Projekt bricht die Kette beim nächsten Schritt ab.
+- `src/lib/workspace.ts` – die Git-Schicht: Repo anlegen, Dateien schreiben
+  (mit Pfadprüfung gegen Ausbrüche aus dem Projektverzeichnis), im Namen des
+  Agenten committen, Log/Diff lesen. Die Repos liegen im Volume
+  `scrumy_workspaces` (`WORKSPACE_ROOT`, Standard `/workspaces`), das sich `app`
+  (liest) und `worker` (schreibt) teilen.
+- Ein Schritt dauert Minuten. Der `worker`-Service bekommt deshalb
+  `stop_grace_period: 300s`: Beim Neustart läuft der laufende Schritt zu Ende und
+  der Worker gibt seine Jobs frei – sonst blieben sie bis zum Ablauf ihrer Sperre
+  (graphile-worker: 4 Stunden) liegen.
+- Testen: `npm run db:seed`, dann `npm run worker:dev` und im Frontend ein
+  Projekt starten (im Docker-Setup läuft der Worker als eigener Service, Logs
+  über `docker compose logs -f worker`).
 
 ## Roadmap
 
-Datenmodell + CRUD-Frontend (Kunden/Projekte/Team/Connectoren/LLM-Profile) sowie das
-Worker-/Job-Queue-Skelett stehen. Als Nächstes:
+Datenmodell, CRUD-Frontend, Discovery/Konzept-Flow und die Agenten-Orchestrierung
+(Team-Start → Repo → Sprints → Commits → Nachweise) stehen. Als Nächstes:
 
-- Echte Agenten-Orchestrierung (Claude Agent SDK) je Pipeline-Schritt: Support-Agent
-  liest tatsächlich aus Connectoren (Jira-Webhook/Polling, IMAP, …), Product-Owner-
-  und Planning-Agent erzeugen Tickets/Pläne automatisch, Coding-Agenten committen
-  im Kunden-Repo – der `agentTurn`-Task in `worker/tasks/` bekommt dafür den
-  echten LLM-Aufruf, plus weitere Tasks je Pipeline-Schritt nach demselben Muster.
+- Support-Pipeline anschließen: Der Support-Agent liest tatsächlich aus
+  Connectoren (Jira-Webhook/Polling, IMAP, …) und der Product Owner zieht
+  eingehende Anfragen in den laufenden Sprint-Rhythmus.
+- Tests im Kundenprojekt ausführen (Build/Testlauf im Workspace) und das
+  Ergebnis in den QA-Review geben, statt nur den Diff zu lesen.
+- Push in ein echtes Remote (`Project.repoUrl`) statt nur lokaler Historie.
 - Connector-Implementierungen (Jira-API-Client, E-Mail-Eingang) inkl. Status-
   Rücksync über `Ticket.externalRef`.
 - Auth & Mandantentrennung (Kunden sehen nur ihr eigenes Projekt/Postfach).

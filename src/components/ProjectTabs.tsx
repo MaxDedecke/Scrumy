@@ -7,18 +7,20 @@ export function ProjectTabs({
   active,
 }: {
   projectId: string;
-  active: "overview" | "discovery" | "team";
+  active: "overview" | "discovery" | "office" | "records" | "team";
 }) {
   const tabs = [
     { key: "overview", label: "Übersicht", href: `/projects/${projectId}` },
     { key: "discovery", label: "Anforderungen & Konzept", href: `/projects/${projectId}/discovery` },
+    { key: "office", label: "Team-Büro", href: `/projects/${projectId}/office` },
+    { key: "records", label: "Nachweise", href: `/projects/${projectId}/records` },
     { key: "team", label: "Team & Connectoren", href: `/projects/${projectId}/team` },
   ] as const;
 
   return (
     <nav
       aria-label="Projektbereiche"
-      className="mb-8 grid grid-cols-3 gap-1 rounded-xl border border-hairline bg-surface p-1"
+      className="mb-8 grid grid-cols-5 gap-1 rounded-xl border border-hairline bg-surface p-1"
     >
       {tabs.map((tab) => {
         const isActive = tab.key === active;

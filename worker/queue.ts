@@ -12,7 +12,7 @@
 // Pipeline-Schritt), als auch spaeter von Next.js Server Actions, wenn echte
 // Trigger dazukommen (z.B. neue SupportRequest -> Support-Agent-Job).
 import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
-import "./tasks"; // registriert die GraphileWorker.Tasks-Typen (declare global)
+import "./taskTypes"; // registriert die GraphileWorker.Tasks-Typen (declare global)
 
 let workerUtilsPromise: Promise<WorkerUtils> | null = null;
 
@@ -41,5 +41,11 @@ export async function enqueueAgentJob<TIdentifier extends keyof GraphileWorker.T
   // Parametertypen dieser Funktion.
   await utils.addJob(taskIdentifier, payload as never, {
     queueName: `agent:${agentId}`,
+    // graphile-worker wiederholt fehlgeschlagene Jobs sonst bis zu 25 Mal.
+    // Ein Agenten-Schritt ist ein LLM-Aufruf: Ein zweiter Versuch faengt eine
+    // Zufallsstoerung ab, alles darueber verbrennt nur Modellkosten fuer einen
+    // Fehler, der beim dritten Mal genauso auftritt. Danach steht der Agent
+    // sichtbar auf BLOCKED und der Mensch entscheidet.
+    maxAttempts: 2,
   });
 }

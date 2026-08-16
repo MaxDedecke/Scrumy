@@ -203,6 +203,30 @@ export async function chat({
   }
 }
 
+/// Holt das erste JSON-Objekt aus einer Modellantwort – gleiche Toleranz wie
+/// `extractJsonArray`, nur für Antworten, die genau ein Objekt liefern sollen
+/// (z.B. Sprint-Planung: Ziel + Ticketliste in einem Ergebnis).
+export function extractJsonObject(text: string): Record<string, unknown> {
+  const withoutFences = text.replace(/```(?:json)?/gi, "");
+  const start = withoutFences.indexOf("{");
+  const end = withoutFences.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) {
+    throw new LlmError(`Antwort enthielt kein JSON-Objekt: ${text.slice(0, 300)}`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(withoutFences.slice(start, end + 1));
+  } catch {
+    throw new LlmError(`JSON-Objekt war nicht lesbar: ${withoutFences.slice(start, start + 300)}`);
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new LlmError("Antwort war kein Objekt.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 /// Holt das erste JSON-Array aus einer Modellantwort. Modelle rahmen JSON gern
 /// in ```json-Blöcke oder schreiben einen Satz davor – beides wird toleriert,
 /// statt sich auf perfekte Formatbefolgung zu verlassen.

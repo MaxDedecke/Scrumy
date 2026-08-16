@@ -42,3 +42,7 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# Arbeitsverzeichnisse der Agenten-Teams (lokale Entwicklung ohne Docker-Volume;
+# im Container liegen sie unter WORKSPACE_ROOT=/workspaces)
+/.workspaces

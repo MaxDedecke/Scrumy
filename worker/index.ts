@@ -9,8 +9,26 @@
 import "dotenv/config";
 import { run } from "graphile-worker";
 import { taskList } from "./tasks";
+import { reconcileStaleRuns } from "./reconcile";
+
+/// Wie oft nach verwaisten Laeufen gesucht wird. Beim Start einmal sofort,
+/// danach stuendlich – ein abgestuerzter Nachbar-Worker soll nicht bis zum
+/// naechsten Deploy als "arbeitet gerade" in der Oberflaeche stehen.
+const RECONCILE_INTERVAL_MS = 60 * 60 * 1000;
+
+async function reconcile() {
+  try {
+    const cleaned = await reconcileStaleRuns();
+    if (cleaned > 0) console.log(`[worker] ${cleaned} abgebrochene Agentenlaeufe aufgeraeumt.`);
+  } catch (error) {
+    console.error("[worker] Aufraeumen fehlgeschlagen:", error);
+  }
+}
 
 async function main() {
+  await reconcile();
+  const reconcileTimer = setInterval(reconcile, RECONCILE_INTERVAL_MS);
+
   const runner = await run({
     connectionString: process.env.DATABASE_URL,
     taskList,
@@ -24,6 +42,7 @@ async function main() {
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
     process.on(signal, async () => {
       console.log(`[worker] ${signal} empfangen, fahre sauber herunter...`);
+      clearInterval(reconcileTimer);
       await runner.stop();
       process.exit(0);
     });

@@ -46,25 +46,35 @@ model Organization {
 /// neue Projekt startet in DISCOVERY, bevor ueberhaupt Tickets/Agenten
 /// sinnvoll sind.
 model Project {
-  id             String        @id @default(cuid())
-  organizationId String
-  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name           String
-  description    String?
-  repoUrl        String?
-  status         ProjectStatus @default(DISCOVERY)
-  createdAt      DateTime      @default(now())
+  id                     String        @id @default(cuid())
+  organizationId         String
+  organization           Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name                   String
+  description            String?
+  repoUrl                String?
+  status                 ProjectStatus @default(DISCOVERY)
+  createdAt              DateTime      @default(now())
   /// Wann der Mensch die Anforderungsliste als vollstaendig freigegeben hat.
   /// Wird bei jeder Aenderung an den Anforderungen wieder auf null gesetzt –
   /// eine Freigabe gilt immer nur fuer die Liste, die geprueft wurde.
   requirementsApprovedAt DateTime?
+  /// Verzeichnis des lokalen Git-Repos, in dem das Team arbeitet (im
+  /// Workspace-Volume, siehe src/lib/workspace.ts). Wird beim Team-Start
+  /// angelegt; solange null, hat das Team noch nie gearbeitet.
+  workspacePath          String?
+  /// Laeuft das Team selbststaendig weiter (naechster Sprint direkt nach dem
+  /// Review) oder haelt es nach jedem Sprint an und wartet auf den Menschen?
+  autopilot              Boolean       @default(true)
 
   requirements Requirement[]
   concept      Concept?
   tickets      Ticket[]
+  sprints      Sprint[]
   agents       AgentAssignment[]
   connectors   Connector[]
   activity     ActivityLogEntry[]
+  agentRuns    AgentRun[]
+  inquiries    TeamInquiry[]
 
   @@map("projects")
 }
@@ -83,17 +93,17 @@ enum ProjectStatus {
 /// Datei-Inhalte liegen bewusst direkt in der DB (`fileData`, kein
 /// Objektspeicher noetig fuer den aktuellen Umfang).
 model Requirement {
-  id          String              @id @default(cuid())
+  id          String            @id @default(cuid())
   projectId   String
-  project     Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
   title       String
   description String?
-  priority    Priority            @default(MEDIUM)
-  source      RequirementSource   @default(MANUAL)
+  priority    Priority          @default(MEDIUM)
+  source      RequirementSource @default(MANUAL)
   fileName    String?
   fileType    String?
   fileData    Bytes?
-  createdAt   DateTime            @default(now())
+  createdAt   DateTime          @default(now())
 
   @@map("requirements")
 }
@@ -165,9 +175,12 @@ model Agent {
   status       AgentStatus @default(IDLE)
   createdAt    DateTime    @default(now())
 
-  assignments     AgentAssignment[]
-  ticketEvents    ActivityLogEntry[]
-  supportRequests SupportRequest[]
+  assignments       AgentAssignment[]
+  ticketEvents      ActivityLogEntry[]
+  supportRequests   SupportRequest[]
+  runs              AgentRun[]
+  assignedTickets   Ticket[]           @relation("TicketAssignee")
+  answeredInquiries TeamInquiry[]
 
   @@map("agents")
 }
@@ -205,6 +218,9 @@ enum AgentRole {
   QA
   REVIEWER
   DEVOPS
+  /// Haelt den Scrum-Ablauf zusammen: Sprint-Review, Standup-Zusammenfassung
+  /// und Rede und Antwort gegenueber dem Menschen (siehe `TeamInquiry`).
+  SCRUM_MASTER
 }
 
 enum AgentStatus {
@@ -328,9 +344,19 @@ model Ticket {
   project         Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sourceRequestId String?
   sourceRequest   SupportRequest? @relation(fields: [sourceRequestId], references: [id], onDelete: SetNull)
+  sprintId        String?
+  sprint          Sprint?         @relation(fields: [sprintId], references: [id], onDelete: SetNull)
+  /// Der Agent, der dieses Ticket umsetzt (Sprint-Planung verteilt die Arbeit
+  /// anhand der Rolle, genau wie ein Team seine Tickets zieht).
+  assigneeId      String?
+  assignee        Agent?          @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   title           String
   description     String?
   plan            String? // Planning-Agent: geplante Umsetzungsschritte
+  /// Abschlussbericht des umsetzenden Agenten: was er geaendert hat und warum.
+  result          String?
+  /// Story Points aus der Sprint-Planung.
+  estimate        Int?
   type            TicketType      @default(FEATURE)
   status          TicketStatus    @default(BACKLOG)
   priority        Priority        @default(MEDIUM)
@@ -342,8 +368,107 @@ model Ticket {
 
   reviews  ReviewApproval[]
   activity ActivityLogEntry[]
+  runs     AgentRun[]
 
   @@map("tickets")
+}
+
+/// Ein Sprint im Projekt. Die Sprint-Planung (Product-Owner-Agent) schneidet
+/// aus Konzept + Anforderungen die naechsten Tickets, der Sprint-Review
+/// (Scrum-Master-Agent) schliesst ihn mit einer Zusammenfassung ab. Sprints
+/// sind fortlaufend nummeriert und bleiben als Historie stehen – daran laesst
+/// sich spaeter ablesen, was das Team wann geliefert hat.
+model Sprint {
+  id        String       @id @default(cuid())
+  projectId String
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  number    Int
+  goal      String
+  status    SprintStatus @default(PLANNED)
+  /// Review-Text des Scrum-Master-Agenten am Sprint-Ende.
+  summary   String?
+  startedAt DateTime     @default(now())
+  endedAt   DateTime?
+
+  tickets Ticket[]
+  runs    AgentRun[]
+
+  @@unique([projectId, number])
+  @@map("sprints")
+}
+
+enum SprintStatus {
+  PLANNED
+  ACTIVE
+  REVIEW
+  DONE
+}
+
+/// Ein einzelner Arbeitsschritt eines Agenten – die Belegebene fuer alles, was
+/// das Team tut: welcher Agent mit welchem Modell welche Frage gestellt bekam
+/// (`systemPrompt`/`prompt`) und was er geantwortet hat (`response`). Damit ist
+/// jede Ticket-Planung, jede Code-Aenderung und jede Auskunft an den Menschen
+/// im Nachhinein pruefbar, statt nur das Ergebnis zu sehen.
+model AgentRun {
+  id           String    @id @default(cuid())
+  projectId    String
+  project      Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  agentId      String?
+  agent        Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  ticketId     String?
+  ticket       Ticket?   @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  sprintId     String?
+  sprint       Sprint?   @relation(fields: [sprintId], references: [id], onDelete: SetNull)
+  /// Art des Schritts: kickoff, sprint_planning, ticket_plan, implementation,
+  /// review, sprint_review, inquiry.
+  kind         String
+  /// Kurzbeschreibung fuer die Live-Ansicht ("Plant Ticket „Login-Maske"").
+  headline     String
+  status       RunStatus @default(RUNNING)
+  llmProfileId String?
+  model        String?
+  systemPrompt String
+  prompt       String
+  response     String?
+  error        String?
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+  durationMs   Int?
+
+  @@index([projectId, startedAt])
+  @@map("agent_runs")
+}
+
+enum RunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+/// Eine Frage des Menschen an das Team ("Wie ist der Stand?", "Warum habt ihr
+/// X so geloest?") und die Antwort des Scrum-Master-Agenten, der dafuer den
+/// echten Projektstand (Sprints, Tickets, Commits, Aktivitaeten) heranzieht.
+/// Bleibt als Gespraechsverlauf stehen – wie das Protokoll eines Gesprächs im
+/// Buero des Teams.
+model TeamInquiry {
+  id           String        @id @default(cuid())
+  projectId    String
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  question     String
+  answer       String?
+  status       InquiryStatus @default(PENDING)
+  answeredById String?
+  answeredBy   Agent?        @relation(fields: [answeredById], references: [id], onDelete: SetNull)
+  createdAt    DateTime      @default(now())
+  answeredAt   DateTime?
+
+  @@map("team_inquiries")
+}
+
+enum InquiryStatus {
+  PENDING
+  ANSWERED
+  FAILED
 }
 
 enum TicketType {

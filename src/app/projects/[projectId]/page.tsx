@@ -10,6 +10,7 @@ import {
   PROJECT_STATUS_LABEL,
   PROJECT_STATUS_PILL,
   TICKET_STATUS_LABEL,
+  SPRINT_STATUS_LABEL,
   TICKET_STATUS_ORDER,
   TICKET_TYPE_LABEL,
 } from "@/lib/labels";
@@ -18,7 +19,7 @@ import { ProjectTabs } from "@/components/ProjectTabs";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyHint, Section } from "@/components/Section";
-import { ExternalLinkIcon, InboxIcon, WarningIcon } from "@/components/icons";
+import { ExternalLinkIcon, InboxIcon, UsersIcon, WarningIcon } from "@/components/icons";
 import { deleteProject, updateProject } from "@/lib/actions/projects";
 import { buttonDangerClass, buttonPrimaryClass, inputClass, labelClass, pageClass } from "@/lib/ui";
 
@@ -45,6 +46,12 @@ export default async function ProjectBoardPage({
   });
 
   if (!project) notFound();
+
+  const sprint = await prisma.sprint.findFirst({
+    where: { projectId },
+    orderBy: { number: "desc" },
+    include: { tickets: true },
+  });
 
   const activity = await prisma.activityLogEntry.findMany({
     where: { OR: [{ projectId }, { ticket: { projectId } }] },
@@ -89,6 +96,15 @@ export default async function ProjectBoardPage({
         }
         actions={
           <>
+            {(project.status === "ACTIVE" || project.status === "PAUSED") && (
+              <Link
+                href={`/projects/${project.id}/office`}
+                className="quiet-link inline-flex items-center gap-1.5"
+              >
+                <UsersIcon className="h-4 w-4" />
+                Team-Büro
+              </Link>
+            )}
             <Link
               href={`/organizations/${project.organizationId}/inbox`}
               className="quiet-link inline-flex items-center gap-1.5"
@@ -122,6 +138,22 @@ export default async function ProjectBoardPage({
           </Link>
           , um das Team zu starten.
         </p>
+      )}
+
+      {sprint && (
+        <Link
+          href={`/projects/${project.id}/office`}
+          className="card-interactive mb-8 block px-5 py-4"
+        >
+          <p className="text-xs text-ink-3">
+            Sprint {sprint.number} · {SPRINT_STATUS_LABEL[sprint.status]}
+          </p>
+          <p className="mt-1 text-sm font-medium text-ink">{sprint.goal}</p>
+          <p className="mt-1 text-xs text-ink-3">
+            {sprint.tickets.filter((ticket) => ticket.status === "DONE").length} von {sprint.tickets.length}{" "}
+            Tickets fertig – im Team-Büro live mitverfolgen
+          </p>
+        </Link>
       )}
 
       <section className="mb-9 grid grid-cols-2 gap-3 lg:grid-cols-4">
