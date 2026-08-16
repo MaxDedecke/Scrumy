@@ -17,7 +17,13 @@ import { EmptyHint, Section } from "@/components/Section";
 import { Disclosure, formGridClass } from "@/components/Disclosure";
 import { PaperclipIcon } from "@/components/icons";
 import { createRequirement, deleteRequirement } from "@/lib/actions/requirements";
-import { finalizeConceptAndStartTeam, reopenConcept, saveConceptDraft } from "@/lib/actions/concept";
+import {
+  applyConceptTemplate,
+  finalizeConceptAndStartTeam,
+  reopenConcept,
+  saveConceptDraft,
+} from "@/lib/actions/concept";
+import { CONCEPT_TEMPLATES, CONCEPT_TEMPLATE_CATEGORIES } from "@/lib/conceptTemplates";
 import {
   buttonDangerQuietClass,
   buttonPrimaryClass,
@@ -52,6 +58,7 @@ export default async function ProjectDiscoveryPage({
   if (!project) notFound();
 
   const isFinalized = project.concept?.status === "FINALIZED";
+  const hasConceptContent = (project.concept?.content ?? "").trim().length > 0;
 
   return (
     <main className={pageClass}>
@@ -172,10 +179,69 @@ export default async function ProjectDiscoveryPage({
           )
         }
       >
+        {!isFinalized && (
+          <Disclosure
+            label={`Aus Vorlage starten – ${CONCEPT_TEMPLATES.length} SaaS-Ablösungen`}
+            className="mb-3"
+          >
+            <p className="mb-5 max-w-3xl text-xs leading-relaxed text-ink-3">
+              Jede Vorlage füllt das Konzeptfeld mit einem Entwurf für die Ablösung des jeweiligen
+              Produkts: Ausgangslage, Ziel, Kernmodule, bewusste Abgrenzung und offene Punkte.
+              Das ist ein Ausgangspunkt für das Kundengespräch, kein fertiges Konzept – und die
+              Preisangaben sind grobe Größenordnungen, die vor einem Angebot zu prüfen sind.
+              {hasConceptContent && " Ein vorhandener Entwurf wird dabei überschrieben."}
+            </p>
+            <form action={applyConceptTemplate} className="space-y-6">
+              <input type="hidden" name="projectId" value={project.id} />
+              {CONCEPT_TEMPLATE_CATEGORIES.map((category) => {
+                const templates = CONCEPT_TEMPLATES.filter((t) => t.category === category);
+                if (templates.length === 0) return null;
+                return (
+                  <div key={category}>
+                    <h3 className="section-title mb-2">{category}</h3>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {templates.map((template) => (
+                        <ConfirmButton
+                          key={template.id}
+                          name="templateId"
+                          value={template.id}
+                          confirmText={
+                            hasConceptContent
+                              ? `Vorhandenen Konzept-Entwurf durch die Vorlage „${template.name}" ersetzen?`
+                              : null
+                          }
+                          className="card-interactive block p-3 text-left"
+                        >
+                          <span className="block text-sm font-medium text-ink">
+                            Eigenes {template.name}
+                          </span>
+                          <span className="mt-0.5 block text-xs leading-relaxed text-ink-3">
+                            {template.what}
+                          </span>
+                          {/* Preishinweise sind länger als ein Status – hier
+                              darf die Pille umbrechen. */}
+                          <span className="pill pill-neutral mt-2 whitespace-normal">
+                            {template.priceNote}
+                          </span>
+                        </ConfirmButton>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </form>
+          </Disclosure>
+        )}
+
         <div className="card p-5">
           <form action={saveConceptDraft} className="space-y-3">
             <input type="hidden" name="projectId" value={project.id} />
+            {/* key erzwingt ein Remount, sobald sich der gespeicherte Entwurf
+                ändert. Ohne das behält ein bereits angetipptes Textfeld seinen
+                "dirty" Wert und würde die frisch eingefügte Vorlage nicht
+                anzeigen, obwohl sie in der DB steht. */}
             <textarea
+              key={project.concept?.updatedAt.toISOString() ?? "leer"}
               name="content"
               rows={14}
               readOnly={isFinalized}

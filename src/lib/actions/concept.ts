@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { findConceptTemplate, renderConceptTemplate } from "@/lib/conceptTemplates";
 
 function str(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
@@ -26,6 +27,49 @@ export async function saveConceptDraft(formData: FormData) {
     if (project.status === "DISCOVERY") {
       await tx.project.update({ where: { id: projectId }, data: { status: "CONCEPT" } });
     }
+  });
+
+  revalidatePath(`/projects/${projectId}/discovery`);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+/// Fuellt das Konzept mit einer Vorlage vor ("baut mir ein eigenes <SaaS>").
+/// Ueberschreibt einen vorhandenen Entwurf bewusst komplett – die Bestaetigung
+/// dafuer holt die Oberflaeche ein. Ein freigegebenes Konzept bleibt
+/// unangetastet, sonst waere die Freigabe wertlos.
+export async function applyConceptTemplate(formData: FormData) {
+  const projectId = str(formData, "projectId");
+  const templateId = str(formData, "templateId");
+  if (!projectId || !templateId) return;
+
+  const template = findConceptTemplate(templateId);
+  if (!template) return;
+
+  const existing = await prisma.concept.findUnique({ where: { projectId } });
+  if (existing?.status === "FINALIZED") return;
+
+  const content = renderConceptTemplate(template);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.concept.upsert({
+      where: { projectId },
+      create: { projectId, content },
+      update: { content },
+    });
+
+    const project = await tx.project.findUniqueOrThrow({ where: { id: projectId } });
+    if (project.status === "DISCOVERY") {
+      await tx.project.update({ where: { id: projectId }, data: { status: "CONCEPT" } });
+    }
+
+    await tx.activityLogEntry.create({
+      data: {
+        projectId,
+        actor: "Mensch",
+        action: "concept_template_applied",
+        detail: `Konzept-Vorlage „${template.name}" eingefügt`,
+      },
+    });
   });
 
   revalidatePath(`/projects/${projectId}/discovery`);
