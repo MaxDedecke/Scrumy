@@ -105,16 +105,42 @@ Danach einmalig seeden (falls gewünscht):
 docker compose exec app npx tsx prisma/seed.ts
 ```
 
+## Worker (Job-Queue)
+
+Damit sich pro Projekt beliebig viele Agenten anlegen lassen, ohne dass Ausführung
+mitwächst: Agenten-Arbeit läuft nicht in Next.js Server Actions, sondern als Job in
+einer separaten, horizontal skalierbaren Queue.
+
+- [`graphile-worker`](https://github.com/graphile/worker) – Postgres-native Queue,
+  eigenes `graphile_worker`-Schema in derselben DB (kein zusätzlicher Redis-Baustein).
+- `worker/` – eigener Prozess, getrennt vom `app`-Container (eigener Service in
+  `docker-compose.yml`). Skaliert unabhängig über Replicas
+  (`docker compose up -d --scale worker=N`), nicht über die Agentenzahl – ein
+  `IDLE`-Agent kostet nichts, er ist nur eine Zeile in der DB.
+- `worker/queue.ts` – `enqueueAgentJob()`; jeder Job läuft in der `queueName`
+  `agent:<agentId>`, graphile-worker serialisiert das strikt pro Agent (kein
+  Doppel-Run, ganz ohne manuelles Locking). `Agent.status` bleibt reines
+  UI-/Beobachtungsfeld.
+- `worker/llmProfileLimiter.ts` – Concurrency-Cap pro `LlmProfile`, damit mehrere
+  Agenten mit demselben LLM-Profil (Cloud-Key oder lokaler Ollama-Container) den
+  Provider nicht gleichzeitig fluten.
+- `worker/tasks/agentTurn.ts` – Referenz-Task fürs Muster (Agent laden, Status
+  setzen, Rate-Limit ziehen, `ActivityLogEntry` schreiben); der eigentliche
+  LLM-Aufruf ist als `// TODO` markiert, noch nicht angebunden.
+- Testen: `npm run db:seed`, dann `npm run worker:dev` in einem Terminal und
+  `npm run worker:enqueue-test` in einem zweiten (im Docker-Setup: jeweils
+  `docker compose exec app npx tsx worker/...`).
+
 ## Roadmap
 
-Datenmodell + CRUD-Frontend (Kunden/Projekte/Team/Connectoren/LLM-Profile) stehen.
-Als Nächstes:
+Datenmodell + CRUD-Frontend (Kunden/Projekte/Team/Connectoren/LLM-Profile) sowie das
+Worker-/Job-Queue-Skelett stehen. Als Nächstes:
 
 - Echte Agenten-Orchestrierung (Claude Agent SDK) je Pipeline-Schritt: Support-Agent
   liest tatsächlich aus Connectoren (Jira-Webhook/Polling, IMAP, …), Product-Owner-
   und Planning-Agent erzeugen Tickets/Pläne automatisch, Coding-Agenten committen
-  im Kunden-Repo – aktuell bildet das Datenmodell die Pipeline nur ab, Status/Log
-  werden noch manuell (Seed) gepflegt.
+  im Kunden-Repo – der `agentTurn`-Task in `worker/tasks/` bekommt dafür den
+  echten LLM-Aufruf, plus weitere Tasks je Pipeline-Schritt nach demselben Muster.
 - Connector-Implementierungen (Jira-API-Client, E-Mail-Eingang) inkl. Status-
   Rücksync über `Ticket.externalRef`.
 - Auth & Mandantentrennung (Kunden sehen nur ihr eigenes Projekt/Postfach).

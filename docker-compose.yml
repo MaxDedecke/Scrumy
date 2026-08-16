@@ -28,5 +28,20 @@ services:
     ports:
       - "3001:3000"
 
+  # Fuehrt die eigentliche Agenten-Arbeit aus (Job-Queue via graphile-worker),
+  # komplett getrennt vom Next.js-App-Container. Skaliert horizontal unabhaengig
+  # von "app" ueber die Anzahl Replicas, z.B.:
+  #   docker compose up -d --scale worker=3
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["npx", "tsx", "worker/index.ts"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://scrumy:scrumy@db:5432/scrumy?schema=public
+      NODE_ENV: production
+
 volumes:
   scrumy_db_data:
