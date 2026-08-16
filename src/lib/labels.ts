@@ -136,6 +136,14 @@ export const PROJECT_STATUS_PILL: Record<ProjectStatus, string> = {
 export const REQUIREMENT_SOURCE_LABEL: Record<RequirementSource, string> = {
   MANUAL: "Manuell",
   UPLOAD: "Hochgeladen",
+  GENERATED: "KI-generiert",
+};
+
+// Generierte Anforderungen heben sich ab, damit man sieht, was noch zu prüfen ist.
+export const REQUIREMENT_SOURCE_PILL: Record<RequirementSource, string> = {
+  MANUAL: "pill pill-neutral",
+  UPLOAD: "pill pill-neutral",
+  GENERATED: "pill pill-info",
 };
 
 export const CONCEPT_STATUS_LABEL: Record<ConceptStatus, string> = {

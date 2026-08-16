@@ -97,6 +97,9 @@ model Requirement {
 enum RequirementSource {
   MANUAL
   UPLOAD
+  /// Vom Product-Owner-Agenten aus dem Konzept abgeleitet (Button
+  /// "Anforderungen generieren"), noch nicht vom Menschen bestaetigt.
+  GENERATED
 }
 
 /// Das aus den `Requirement`s erarbeitete Konzept fuer ein Projekt – aktuell

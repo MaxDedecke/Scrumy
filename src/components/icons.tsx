@@ -102,6 +102,18 @@ export function WarningIcon({ className }: { className?: string }) {
   );
 }
 
+export function SparklesIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9.75 3.104a15.6 15.6 0 0 1 1.68 4.216 15.6 15.6 0 0 1 4.216 1.68 15.6 15.6 0 0 1-4.216 1.68 15.6 15.6 0 0 1-1.68 4.216 15.6 15.6 0 0 1-1.68-4.216A15.6 15.6 0 0 1 3.854 9a15.6 15.6 0 0 1 4.216-1.68 15.6 15.6 0 0 1 1.68-4.216ZM17.25 13.5a9.4 9.4 0 0 0 1.01 2.532 9.4 9.4 0 0 0 2.532 1.01 9.4 9.4 0 0 0-2.532 1.01 9.4 9.4 0 0 0-1.01 2.532 9.4 9.4 0 0 0-1.01-2.532 9.4 9.4 0 0 0-2.532-1.01 9.4 9.4 0 0 0 2.532-1.01 9.4 9.4 0 0 0 1.01-2.532Z"
+      />
+    </svg>
+  );
+}
+
 export function PaperclipIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>

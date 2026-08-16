@@ -9,12 +9,14 @@ import {
   PROJECT_STATUS_LABEL,
   PROJECT_STATUS_PILL,
   REQUIREMENT_SOURCE_LABEL,
+  REQUIREMENT_SOURCE_PILL,
 } from "@/lib/labels";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyHint, Section } from "@/components/Section";
 import { Disclosure, formGridClass } from "@/components/Disclosure";
+import { GenerateRequirementsButton } from "@/components/GenerateRequirementsButton";
 import { PaperclipIcon } from "@/components/icons";
 import { createRequirement, deleteRequirement } from "@/lib/actions/requirements";
 import {
@@ -57,6 +59,14 @@ export default async function ProjectDiscoveryPage({
 
   if (!project) notFound();
 
+  // Dasselbe Profil, das die Server-Action nimmt: das Standardprofil aus den
+  // globalen LLM-Einstellungen. Wird im Button angezeigt, damit sichtbar ist,
+  // womit generiert wird.
+  const llmProfile = await prisma.llmProfile.findFirst({
+    orderBy: [{ isDefault: "desc" }, { name: "asc" }],
+    select: { name: true },
+  });
+
   const isFinalized = project.concept?.status === "FINALIZED";
   const hasConceptContent = (project.concept?.content ?? "").trim().length > 0;
 
@@ -86,7 +96,125 @@ export default async function ProjectDiscoveryPage({
         </p>
       )}
 
-      <Section title="Anforderungen">
+      {/* Konzept steht vor den Anforderungen: Der Weg ist Konzept schreiben (ggf.
+          aus Vorlage) -> daraus Anforderungen ableiten. */}
+      <Section
+        title="Konzept"
+        action={
+          project.concept && (
+            <span className={`${CONCEPT_STATUS_PILL[project.concept.status]} pill-dot`}>
+              {CONCEPT_STATUS_LABEL[project.concept.status]}
+              {project.concept.finalizedAt && ` · ${project.concept.finalizedAt.toLocaleString("de-DE")}`}
+            </span>
+          )
+        }
+      >
+        {!isFinalized && (
+          <Disclosure
+            label={`Aus Vorlage starten – ${CONCEPT_TEMPLATES.length} SaaS-Ablösungen`}
+            className="mb-3"
+          >
+            <p className="mb-5 max-w-3xl text-xs leading-relaxed text-ink-3">
+              Jede Vorlage füllt das Konzeptfeld mit einem Entwurf für die Ablösung des jeweiligen
+              Produkts: Ausgangslage, Ziel, Kernmodule, bewusste Abgrenzung und offene Punkte.
+              Ein Ausgangspunkt fürs Kundengespräch, kein fertiges Konzept.
+              {hasConceptContent && " Ein vorhandener Entwurf wird dabei überschrieben."}
+            </p>
+            <form action={applyConceptTemplate} className="space-y-6">
+              <input type="hidden" name="projectId" value={project.id} />
+              {CONCEPT_TEMPLATE_CATEGORIES.map((category) => {
+                const templates = CONCEPT_TEMPLATES.filter((t) => t.category === category);
+                if (templates.length === 0) return null;
+                return (
+                  <div key={category}>
+                    <h3 className="section-title mb-2">{category}</h3>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {templates.map((template) => (
+                        <ConfirmButton
+                          key={template.id}
+                          name="templateId"
+                          value={template.id}
+                          confirmText={
+                            hasConceptContent
+                              ? `Vorhandenen Konzept-Entwurf durch die Vorlage „${template.name}" ersetzen?`
+                              : null
+                          }
+                          className="card-interactive block p-3 text-left"
+                        >
+                          <span className="block text-sm font-medium text-ink">
+                            Eigenes {template.name}
+                          </span>
+                          <span className="mt-0.5 block text-xs leading-relaxed text-ink-3">
+                            {template.what}
+                          </span>
+                        </ConfirmButton>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </form>
+          </Disclosure>
+        )}
+
+        <div className="card p-5">
+          <form action={saveConceptDraft} className="space-y-3">
+            <input type="hidden" name="projectId" value={project.id} />
+            {/* key erzwingt ein Remount, sobald sich der gespeicherte Entwurf
+                ändert. Ohne das behält ein bereits angetipptes Textfeld seinen
+                "dirty" Wert und würde die frisch eingefügte Vorlage nicht
+                anzeigen, obwohl sie in der DB steht. */}
+            <textarea
+              key={project.concept?.updatedAt.toISOString() ?? "leer"}
+              name="content"
+              rows={14}
+              readOnly={isFinalized}
+              defaultValue={project.concept?.content ?? ""}
+              placeholder="Konzept als Freitext, ausgearbeitet aus den Anforderungen …"
+              className={`${inputClass} font-mono text-xs leading-relaxed ${isFinalized ? "opacity-70" : ""}`}
+            />
+            {!isFinalized && (
+              <button type="submit" className={buttonSecondaryClass}>
+                Entwurf speichern
+              </button>
+            )}
+          </form>
+
+          <div className="mt-5 border-t border-hairline pt-5">
+            {isFinalized ? (
+              <form action={reopenConcept}>
+                <input type="hidden" name="projectId" value={project.id} />
+                <ConfirmButton
+                  confirmText="Freigabe zurückziehen? Projekt fällt zurück in die Konzeptphase, laufende Tickets/Agenten bleiben unangetastet."
+                  className={buttonSecondaryClass}
+                >
+                  Freigabe zurückziehen
+                </ConfirmButton>
+              </form>
+            ) : (
+              <form action={finalizeConceptAndStartTeam}>
+                <input type="hidden" name="projectId" value={project.id} />
+                <ConfirmButton
+                  confirmText="Konzept freigeben und Agenten-Team starten? Projekt wechselt auf ACTIVE."
+                  className={buttonPrimaryClass}
+                >
+                  Konzept freigeben &amp; Team starten
+                </ConfirmButton>
+              </form>
+            )}
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Anforderungen" className="mb-0">
+        <div className="card mb-3 p-4">
+          <p className="mb-3 max-w-2xl text-xs leading-relaxed text-ink-3">
+            Der Product-Owner-Agent liest das Konzept und leitet daraus Anforderungen ab. Bestehende
+            bleiben erhalten, neue kommen als &bdquo;KI-generiert&ldquo; dazu und wollen geprüft werden.
+          </p>
+          <GenerateRequirementsButton projectId={project.id} profileName={llmProfile?.name ?? null} />
+        </div>
+
         <div className="space-y-2">
           {project.requirements.map((req) => (
             <div key={req.id} className="card p-4">
@@ -110,7 +238,9 @@ export default async function ProjectDiscoveryPage({
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-1.5">
                 <span className={PRIORITY_PILL[req.priority]}>{PRIORITY_LABEL[req.priority]}</span>
-                <span className="pill pill-neutral">{REQUIREMENT_SOURCE_LABEL[req.source]}</span>
+                <span className={REQUIREMENT_SOURCE_PILL[req.source]}>
+                  {REQUIREMENT_SOURCE_LABEL[req.source]}
+                </span>
                 {req.fileName && (
                   <a href={`/requirements/${req.id}/download`} className="pill pill-neutral hover:text-ink">
                     <PaperclipIcon className="h-3 w-3" />
@@ -165,121 +295,6 @@ export default async function ProjectDiscoveryPage({
             </div>
           </form>
         </Disclosure>
-      </Section>
-
-      <Section
-        title="Konzept"
-        className="mb-0"
-        action={
-          project.concept && (
-            <span className={`${CONCEPT_STATUS_PILL[project.concept.status]} pill-dot`}>
-              {CONCEPT_STATUS_LABEL[project.concept.status]}
-              {project.concept.finalizedAt && ` · ${project.concept.finalizedAt.toLocaleString("de-DE")}`}
-            </span>
-          )
-        }
-      >
-        {!isFinalized && (
-          <Disclosure
-            label={`Aus Vorlage starten – ${CONCEPT_TEMPLATES.length} SaaS-Ablösungen`}
-            className="mb-3"
-          >
-            <p className="mb-5 max-w-3xl text-xs leading-relaxed text-ink-3">
-              Jede Vorlage füllt das Konzeptfeld mit einem Entwurf für die Ablösung des jeweiligen
-              Produkts: Ausgangslage, Ziel, Kernmodule, bewusste Abgrenzung und offene Punkte.
-              Das ist ein Ausgangspunkt für das Kundengespräch, kein fertiges Konzept – und die
-              Preisangaben sind grobe Größenordnungen, die vor einem Angebot zu prüfen sind.
-              {hasConceptContent && " Ein vorhandener Entwurf wird dabei überschrieben."}
-            </p>
-            <form action={applyConceptTemplate} className="space-y-6">
-              <input type="hidden" name="projectId" value={project.id} />
-              {CONCEPT_TEMPLATE_CATEGORIES.map((category) => {
-                const templates = CONCEPT_TEMPLATES.filter((t) => t.category === category);
-                if (templates.length === 0) return null;
-                return (
-                  <div key={category}>
-                    <h3 className="section-title mb-2">{category}</h3>
-                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                      {templates.map((template) => (
-                        <ConfirmButton
-                          key={template.id}
-                          name="templateId"
-                          value={template.id}
-                          confirmText={
-                            hasConceptContent
-                              ? `Vorhandenen Konzept-Entwurf durch die Vorlage „${template.name}" ersetzen?`
-                              : null
-                          }
-                          className="card-interactive block p-3 text-left"
-                        >
-                          <span className="block text-sm font-medium text-ink">
-                            Eigenes {template.name}
-                          </span>
-                          <span className="mt-0.5 block text-xs leading-relaxed text-ink-3">
-                            {template.what}
-                          </span>
-                          {/* Preishinweise sind länger als ein Status – hier
-                              darf die Pille umbrechen. */}
-                          <span className="pill pill-neutral mt-2 whitespace-normal">
-                            {template.priceNote}
-                          </span>
-                        </ConfirmButton>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </form>
-          </Disclosure>
-        )}
-
-        <div className="card p-5">
-          <form action={saveConceptDraft} className="space-y-3">
-            <input type="hidden" name="projectId" value={project.id} />
-            {/* key erzwingt ein Remount, sobald sich der gespeicherte Entwurf
-                ändert. Ohne das behält ein bereits angetipptes Textfeld seinen
-                "dirty" Wert und würde die frisch eingefügte Vorlage nicht
-                anzeigen, obwohl sie in der DB steht. */}
-            <textarea
-              key={project.concept?.updatedAt.toISOString() ?? "leer"}
-              name="content"
-              rows={14}
-              readOnly={isFinalized}
-              defaultValue={project.concept?.content ?? ""}
-              placeholder="Konzept als Freitext, ausgearbeitet aus den obigen Anforderungen …"
-              className={`${inputClass} font-mono text-xs leading-relaxed ${isFinalized ? "opacity-70" : ""}`}
-            />
-            {!isFinalized && (
-              <button type="submit" className={buttonSecondaryClass}>
-                Entwurf speichern
-              </button>
-            )}
-          </form>
-
-          <div className="mt-5 border-t border-hairline pt-5">
-            {isFinalized ? (
-              <form action={reopenConcept}>
-                <input type="hidden" name="projectId" value={project.id} />
-                <ConfirmButton
-                  confirmText="Freigabe zurückziehen? Projekt fällt zurück in die Konzeptphase, laufende Tickets/Agenten bleiben unangetastet."
-                  className={buttonSecondaryClass}
-                >
-                  Freigabe zurückziehen
-                </ConfirmButton>
-              </form>
-            ) : (
-              <form action={finalizeConceptAndStartTeam}>
-                <input type="hidden" name="projectId" value={project.id} />
-                <ConfirmButton
-                  confirmText="Konzept freigeben und Agenten-Team starten? Projekt wechselt auf ACTIVE."
-                  className={buttonPrimaryClass}
-                >
-                  Konzept freigeben &amp; Team starten
-                </ConfirmButton>
-              </form>
-            )}
-          </div>
-        </div>
       </Section>
     </main>
   );
