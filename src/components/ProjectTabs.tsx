@@ -5,10 +5,11 @@ export function ProjectTabs({
   active,
 }: {
   projectId: string;
-  active: "overview" | "team";
+  active: "overview" | "discovery" | "team";
 }) {
   const tabs = [
     { key: "overview", label: "Übersicht", href: `/projects/${projectId}` },
+    { key: "discovery", label: "Anforderungen & Konzept", href: `/projects/${projectId}/discovery` },
     { key: "team", label: "Team & Konnektoren", href: `/projects/${projectId}/team` },
   ] as const;
 

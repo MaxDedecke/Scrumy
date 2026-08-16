@@ -1,11 +1,13 @@
 import type {
   AgentRole,
   AgentStatus,
+  ConceptStatus,
   ConnectorProvider,
   ConnectorStatus,
   LlmProvider,
   Priority,
   ProjectStatus,
+  RequirementSource,
   SupportChannel,
   SupportRequestStatus,
   TicketStatus,
@@ -114,10 +116,36 @@ export const CONNECTOR_STATUS_PILL: Record<ConnectorStatus, string> = {
   ERROR: "pill pill-critical",
 };
 
+// Lebenszyklus: DISCOVERY -> CONCEPT -> ACTIVE (Team gestartet) -> PAUSED/ARCHIVED.
 export const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = {
+  DISCOVERY: "Discovery",
+  CONCEPT: "Konzeptphase",
   ACTIVE: "Aktiv",
   PAUSED: "Pausiert",
   ARCHIVED: "Archiviert",
+};
+
+export const PROJECT_STATUS_PILL: Record<ProjectStatus, string> = {
+  DISCOVERY: "pill pill-neutral",
+  CONCEPT: "pill pill-info",
+  ACTIVE: "pill pill-good",
+  PAUSED: "pill pill-warning",
+  ARCHIVED: "pill pill-neutral",
+};
+
+export const REQUIREMENT_SOURCE_LABEL: Record<RequirementSource, string> = {
+  MANUAL: "Manuell",
+  UPLOAD: "Hochgeladen",
+};
+
+export const CONCEPT_STATUS_LABEL: Record<ConceptStatus, string> = {
+  DRAFT: "Entwurf",
+  FINALIZED: "Freigegeben",
+};
+
+export const CONCEPT_STATUS_PILL: Record<ConceptStatus, string> = {
+  DRAFT: "pill pill-neutral",
+  FINALIZED: "pill pill-good",
 };
 
 export const LLM_PROVIDER_LABEL: Record<LlmProvider, string> = {

@@ -7,6 +7,8 @@ import {
   AGENT_STATUS_PILL,
   PRIORITY_LABEL,
   PRIORITY_PILL,
+  PROJECT_STATUS_LABEL,
+  PROJECT_STATUS_PILL,
   TICKET_STATUS_LABEL,
   TICKET_STATUS_ORDER,
   TICKET_TYPE_LABEL,
@@ -38,7 +40,7 @@ export default async function ProjectBoardPage({
   if (!project) notFound();
 
   const activity = await prisma.activityLogEntry.findMany({
-    where: { ticket: { projectId } },
+    where: { OR: [{ projectId }, { ticket: { projectId } }] },
     orderBy: { createdAt: "desc" },
     take: 10,
     include: { ticket: true, supportRequest: true },
@@ -74,7 +76,10 @@ export default async function ProjectBoardPage({
             <p className="text-sm uppercase tracking-wider text-neutral-500">
               {project.organization.name}
             </p>
-            <h1 className="mt-1 text-2xl font-semibold">{project.name}</h1>
+            <div className="mt-1 flex items-baseline gap-3">
+              <h1 className="text-2xl font-semibold">{project.name}</h1>
+              <span className={PROJECT_STATUS_PILL[project.status]}>{PROJECT_STATUS_LABEL[project.status]}</span>
+            </div>
           </div>
           <div className="flex items-center gap-4 text-sm text-neutral-500">
             <Link href={`/organizations/${project.organizationId}/inbox`} className="hover:text-neutral-300">
@@ -90,6 +95,17 @@ export default async function ProjectBoardPage({
       </header>
 
       <ProjectTabs projectId={project.id} active="overview" />
+
+      {(project.status === "DISCOVERY" || project.status === "CONCEPT") && (
+        <p className="mb-8 rounded-md border border-sky-900 bg-sky-950/40 px-4 py-3 text-sm text-sky-200">
+          Team ist noch nicht gestartet – Projekt ist in der{" "}
+          {project.status === "DISCOVERY" ? "Discovery-Phase" : "Konzeptphase"}.{" "}
+          <Link href={`/projects/${project.id}/discovery`} className="underline hover:text-sky-100">
+            Anforderungen &amp; Konzept bearbeiten
+          </Link>
+          , um das Team zu starten.
+        </p>
+      )}
 
       {/* Stat-Kacheln: Kennzahlen auf einen Blick, nicht als Chart – ein Zustand pro Kachel. */}
       <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -205,7 +221,7 @@ export default async function ProjectBoardPage({
               <span className="shrink-0 text-neutral-600">{entry.createdAt.toLocaleString("de-DE")}</span>
               <span className="shrink-0 font-medium text-neutral-300">{entry.actor}</span>
               <span className="text-neutral-500">
-                → {entry.ticket?.title ?? entry.supportRequest?.subject ?? "—"}:
+                → {entry.ticket?.title ?? entry.supportRequest?.subject ?? "Projekt"}:
               </span>
               <span className="text-neutral-400">{entry.detail ?? entry.action}</span>
             </li>

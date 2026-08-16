@@ -7,6 +7,7 @@ import {
   CONNECTOR_PROVIDER_LABEL,
   CONNECTOR_STATUS_LABEL,
   CONNECTOR_STATUS_PILL,
+  PROJECT_STATUS_LABEL,
 } from "@/lib/labels";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { ConfirmButton } from "@/components/ConfirmButton";
@@ -93,9 +94,11 @@ export default async function ProjectTeamPage({
           <div>
             <label className={labelClass}>Status</label>
             <select name="status" defaultValue={project.status} className={inputClass}>
-              <option value="ACTIVE">Aktiv</option>
-              <option value="PAUSED">Pausiert</option>
-              <option value="ARCHIVED">Archiviert</option>
+              <option value="DISCOVERY">{PROJECT_STATUS_LABEL.DISCOVERY}</option>
+              <option value="CONCEPT">{PROJECT_STATUS_LABEL.CONCEPT}</option>
+              <option value="ACTIVE">{PROJECT_STATUS_LABEL.ACTIVE}</option>
+              <option value="PAUSED">{PROJECT_STATUS_LABEL.PAUSED}</option>
+              <option value="ARCHIVED">{PROJECT_STATUS_LABEL.ARCHIVED}</option>
             </select>
           </div>
           <div>

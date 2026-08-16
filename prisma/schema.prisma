@@ -39,6 +39,12 @@ model Organization {
 /// Eine Individualsoftware, die fuer einen Kunden gebaut/gewartet wird
 /// (z.B. "Warenwirtschaft & CRM"). Verweist optional auf das eigene
 /// Kunden-Repository, an dem die Agenten arbeiten.
+///
+/// Lebenszyklus (`status`): DISCOVERY (Anforderungen werden erfasst) ->
+/// CONCEPT (Konzept wird ausgearbeitet, siehe `Concept`) -> ACTIVE (Konzept
+/// freigegeben, Agenten-Team arbeitet nach Scrum) -> PAUSED/ARCHIVED. Jedes
+/// neue Projekt startet in DISCOVERY, bevor ueberhaupt Tickets/Agenten
+/// sinnvoll sind.
 model Project {
   id             String        @id @default(cuid())
   organizationId String
@@ -46,20 +52,74 @@ model Project {
   name           String
   description    String?
   repoUrl        String?
-  status         ProjectStatus @default(ACTIVE)
+  status         ProjectStatus @default(DISCOVERY)
   createdAt      DateTime      @default(now())
 
-  tickets    Ticket[]
-  agents     AgentAssignment[]
-  connectors Connector[]
+  requirements Requirement[]
+  concept      Concept?
+  tickets      Ticket[]
+  agents       AgentAssignment[]
+  connectors   Connector[]
+  activity     ActivityLogEntry[]
 
   @@map("projects")
 }
 
 enum ProjectStatus {
+  DISCOVERY
+  CONCEPT
   ACTIVE
   PAUSED
   ARCHIVED
+}
+
+/// Eine einzelne Anforderung fuer ein Projekt in der Discovery-Phase – entweder
+/// manuell erfasst (Titel/Beschreibung) oder als Datei hochgeladen (z.B.
+/// Lastenheft als PDF/Docx). Bildet zusammen die Grundlage fuer das `Concept`.
+/// Datei-Inhalte liegen bewusst direkt in der DB (`fileData`, kein
+/// Objektspeicher noetig fuer den aktuellen Umfang).
+model Requirement {
+  id          String              @id @default(cuid())
+  projectId   String
+  project     Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  priority    Priority            @default(MEDIUM)
+  source      RequirementSource   @default(MANUAL)
+  fileName    String?
+  fileType    String?
+  fileData    Bytes?
+  createdAt   DateTime            @default(now())
+
+  @@map("requirements")
+}
+
+enum RequirementSource {
+  MANUAL
+  UPLOAD
+}
+
+/// Das aus den `Requirement`s erarbeitete Konzept fuer ein Projekt – aktuell
+/// Freitext, den der Berater selbst verfasst/einfuegt (kein Konzept-Agent).
+/// Sobald `status` auf FINALIZED gesetzt wird ("Konzept freigeben & Team
+/// starten"), springt `Project.status` auf ACTIVE und das Agenten-Team kann
+/// loslegen.
+model Concept {
+  id          String        @id @default(cuid())
+  projectId   String        @unique
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  content     String
+  status      ConceptStatus @default(DRAFT)
+  finalizedAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@map("concepts")
+}
+
+enum ConceptStatus {
+  DRAFT
+  FINALIZED
 }
 
 /// Ein LLM-Agent mit einer bestimmten Rolle im virtuellen Team.
@@ -304,11 +364,14 @@ enum ReviewDecision {
   REJECTED
 }
 
-/// Audit-Trail: was hat welcher Agent (oder Mensch) getan – an einem Ticket
-/// und/oder einer Kundenanfrage. Macht die Arbeit des Agenten-Teams fuer den
-/// Kunden nachvollziehbar.
+/// Audit-Trail: was hat welcher Agent (oder Mensch) getan – an einem Ticket,
+/// einer Kundenanfrage und/oder projektweit (z.B. Konzept freigegeben, Team
+/// gestartet). Macht die Arbeit des Agenten-Teams fuer den Kunden
+/// nachvollziehbar.
 model ActivityLogEntry {
   id               String          @id @default(cuid())
+  projectId        String?
+  project          Project?        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   ticketId         String?
   ticket           Ticket?         @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   supportRequestId String?
