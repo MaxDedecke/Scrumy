@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { chat, extractJsonArray, LlmError } from "@/lib/llm";
+import { fail, ok, type ActionResult } from "@/lib/actions/result";
 import type { Priority } from "@/generated/prisma/client";
 
 function str(formData: FormData, key: string): string | null {
@@ -13,9 +14,9 @@ function str(formData: FormData, key: string): string | null {
 /// Legt eine Anforderung an – entweder manuell (Titel/Beschreibung Pflicht)
 /// oder per Datei-Upload (Titel optional, faellt sonst auf den Dateinamen
 /// zurueck). Beides gemischt in einem Formular, weil Kunden oft beides liefern.
-export async function createRequirement(formData: FormData) {
+export async function createRequirement(formData: FormData): Promise<ActionResult> {
   const projectId = str(formData, "projectId");
-  if (!projectId) return;
+  if (!projectId) return fail("Kein Projekt angegeben.");
 
   const title = str(formData, "title");
   const description = str(formData, "description");
@@ -23,15 +24,17 @@ export async function createRequirement(formData: FormData) {
   const file = formData.get("file");
   const hasFile = file instanceof File && file.size > 0;
 
-  if (!title && !hasFile) return; // weder Titel noch Datei angegeben
+  if (!title && !hasFile) return fail("Bitte einen Titel angeben oder eine Datei auswählen.");
 
+  let savedTitle: string;
   if (hasFile) {
     const uploaded = file as File;
     const buffer = Buffer.from(await uploaded.arrayBuffer());
+    savedTitle = title ?? uploaded.name;
     await prisma.requirement.create({
       data: {
         projectId,
-        title: title ?? uploaded.name,
+        title: savedTitle,
         description,
         priority,
         source: "UPLOAD",
@@ -41,10 +44,11 @@ export async function createRequirement(formData: FormData) {
       },
     });
   } else {
+    savedTitle = title!;
     await prisma.requirement.create({
       data: {
         projectId,
-        title: title!,
+        title: savedTitle,
         description,
         priority,
         source: "MANUAL",
@@ -52,28 +56,35 @@ export async function createRequirement(formData: FormData) {
     });
   }
 
-  await clearRequirementsApproval(projectId);
+  const approvalCleared = await clearRequirementsApproval(projectId);
   revalidatePath(`/projects/${projectId}/discovery`);
+  revalidatePath(`/projects/${projectId}`);
+  return ok(
+    `Anforderung „${savedTitle}“ gespeichert.` +
+      (approvalCleared ? " Die bisherige Freigabe der Anforderungen wurde damit aufgehoben." : ""),
+  );
 }
 
 /// Jede Aenderung an der Liste macht eine bestehende Freigabe ungueltig – sonst
 /// wuerde der "Team starten"-Button auf eine Liste zeigen, die so nie jemand
-/// geprueft hat.
-async function clearRequirementsApproval(projectId: string) {
-  await prisma.project.updateMany({
+/// geprueft hat. Gibt zurueck, ob tatsaechlich eine Freigabe aufgehoben wurde,
+/// damit die Meldung das erwaehnen kann.
+async function clearRequirementsApproval(projectId: string): Promise<boolean> {
+  const { count } = await prisma.project.updateMany({
     where: { id: projectId, requirementsApprovedAt: { not: null } },
     data: { requirementsApprovedAt: null },
   });
+  return count > 0;
 }
 
 /// Bestaetigt die Anforderungsliste als vollstaendig. Zusammen mit einem
 /// freigegebenen Konzept ist das die Voraussetzung fuer "Team starten".
-export async function approveRequirements(formData: FormData) {
+export async function approveRequirements(formData: FormData): Promise<ActionResult> {
   const projectId = str(formData, "projectId");
-  if (!projectId) return;
+  if (!projectId) return fail("Kein Projekt angegeben.");
 
   const count = await prisma.requirement.count({ where: { projectId } });
-  if (count === 0) return;
+  if (count === 0) return fail("Es gibt noch keine Anforderungen, die freigegeben werden könnten.");
 
   await prisma.$transaction([
     prisma.project.update({
@@ -92,19 +103,19 @@ export async function approveRequirements(formData: FormData) {
 
   revalidatePath(`/projects/${projectId}/discovery`);
   revalidatePath(`/projects/${projectId}`);
+  return ok(`${count} Anforderung${count === 1 ? "" : "en"} freigegeben.`);
 }
 
 /// Zieht die Freigabe der Anforderungen zurueck, um weiter zu ergaenzen.
-export async function reopenRequirements(formData: FormData) {
+export async function reopenRequirements(formData: FormData): Promise<ActionResult> {
   const projectId = str(formData, "projectId");
-  if (!projectId) return;
+  if (!projectId) return fail("Kein Projekt angegeben.");
 
   await clearRequirementsApproval(projectId);
   revalidatePath(`/projects/${projectId}/discovery`);
   revalidatePath(`/projects/${projectId}`);
+  return ok("Freigabe der Anforderungen zurückgezogen – die Liste lässt sich wieder ergänzen.");
 }
-
-export type GenerateRequirementsState = { ok: boolean; message: string } | null;
 
 const GENERATE_SYSTEM_PROMPT = [
   "Du bist der Product-Owner-Agent einer Softwareberatung.",
@@ -120,29 +131,26 @@ const GENERATE_SYSTEM_PROMPT = [
 /// aus den globalen LLM-Einstellungen. Bestehende Anforderungen bleiben
 /// unangetastet – generierte kommen dazu und sind an `source = GENERATED`
 /// erkennbar, damit der Mensch sie prüfen kann.
-export async function generateRequirementsFromConcept(
-  _prev: GenerateRequirementsState,
-  formData: FormData,
-): Promise<GenerateRequirementsState> {
+export async function generateRequirementsFromConcept(formData: FormData): Promise<ActionResult> {
   const projectId = str(formData, "projectId");
-  if (!projectId) return { ok: false, message: "Kein Projekt angegeben." };
+  if (!projectId) return fail("Kein Projekt angegeben.");
 
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: { concept: true, organization: true },
   });
-  if (!project) return { ok: false, message: "Projekt nicht gefunden." };
+  if (!project) return fail("Projekt nicht gefunden.");
 
   const concept = project.concept?.content?.trim() ?? "";
   if (concept.length < 40) {
-    return { ok: false, message: "Das Konzept ist noch zu kurz – erst ausformulieren oder eine Vorlage einfügen." };
+    return fail("Das Konzept ist noch zu kurz – erst ausformulieren oder eine Vorlage einfügen.");
   }
 
   const profile = await prisma.llmProfile.findFirst({
     orderBy: [{ isDefault: "desc" }, { name: "asc" }],
   });
   if (!profile) {
-    return { ok: false, message: "Kein LLM-Profil angelegt (Einstellungen → LLM-Profile)." };
+    return fail("Kein LLM-Profil angelegt (Einstellungen → LLM-Profile).");
   }
 
   const existing = await prisma.requirement.findMany({
@@ -166,14 +174,14 @@ export async function generateRequirementsFromConcept(
     answer = await chat({ profile, system: GENERATE_SYSTEM_PROMPT, prompt });
   } catch (error) {
     const message = error instanceof LlmError ? error.message : String(error);
-    return { ok: false, message: `Profil „${profile.name}": ${message}` };
+    return fail(`Profil „${profile.name}“: ${message}`);
   }
 
   let items: unknown[];
   try {
     items = extractJsonArray(answer);
   } catch (error) {
-    return { ok: false, message: error instanceof LlmError ? error.message : String(error) };
+    return fail(error instanceof LlmError ? error.message : String(error));
   }
 
   const priorities: Priority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];
@@ -192,7 +200,7 @@ export async function generateRequirementsFromConcept(
   });
 
   if (parsed.length === 0) {
-    return { ok: false, message: "Das Modell hat keine verwertbaren Anforderungen geliefert." };
+    return fail("Das Modell hat keine verwertbaren Anforderungen geliefert.");
   }
 
   await prisma.$transaction([
@@ -211,18 +219,22 @@ export async function generateRequirementsFromConcept(
   revalidatePath(`/projects/${projectId}/discovery`);
   revalidatePath(`/projects/${projectId}`);
 
-  return {
-    ok: true,
-    message: `${parsed.length} Anforderung${parsed.length === 1 ? "" : "en"} erzeugt mit „${profile.name}". Bitte prüfen.`,
-  };
+  return ok(
+    `${parsed.length} Anforderung${parsed.length === 1 ? "" : "en"} erzeugt mit „${profile.name}“. Bitte prüfen.`,
+  );
 }
 
-export async function deleteRequirement(formData: FormData) {
+export async function deleteRequirement(formData: FormData): Promise<ActionResult> {
   const id = str(formData, "id");
   const projectId = str(formData, "projectId");
-  if (!id || !projectId) return;
+  if (!id || !projectId) return fail("Keine Anforderung angegeben.");
 
-  await prisma.requirement.delete({ where: { id } });
-  await clearRequirementsApproval(projectId);
+  const requirement = await prisma.requirement.delete({ where: { id } });
+  const approvalCleared = await clearRequirementsApproval(projectId);
   revalidatePath(`/projects/${projectId}/discovery`);
+  revalidatePath(`/projects/${projectId}`);
+  return ok(
+    `Anforderung „${requirement.title}“ entfernt.` +
+      (approvalCleared ? " Die bisherige Freigabe wurde damit aufgehoben." : ""),
+  );
 }

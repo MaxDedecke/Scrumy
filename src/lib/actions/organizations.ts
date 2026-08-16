@@ -1,29 +1,31 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { fail, ok, type ActionResult } from "@/lib/actions/result";
 
 function str(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
   return value.length > 0 ? value : null;
 }
 
-export async function createOrganization(formData: FormData) {
+export async function createOrganization(formData: FormData): Promise<ActionResult> {
   const name = str(formData, "name");
-  if (!name) return;
+  if (!name) return fail("Bitte einen Namen für den Kunden angeben.");
 
   await prisma.organization.create({
     data: { name, industry: str(formData, "industry") },
   });
 
   revalidatePath("/");
+  return ok(`Kunde „${name}“ angelegt.`);
 }
 
-export async function updateOrganization(formData: FormData) {
+export async function updateOrganization(formData: FormData): Promise<ActionResult> {
   const id = str(formData, "id");
   const name = str(formData, "name");
-  if (!id || !name) return;
+  if (!id) return fail("Kein Kunde angegeben.");
+  if (!name) return fail("Der Name darf nicht leer sein.");
 
   await prisma.organization.update({
     where: { id },
@@ -31,13 +33,16 @@ export async function updateOrganization(formData: FormData) {
   });
 
   revalidatePath("/");
+  return ok(`Kunde „${name}“ gespeichert.`);
 }
 
-export async function deleteOrganization(formData: FormData) {
+// Kein `redirect()` in der Action: Die Oberfläche navigiert selbst, nachdem sie
+// die Erfolgsmeldung angezeigt hat (siehe <ActionForm>).
+export async function deleteOrganization(formData: FormData): Promise<ActionResult> {
   const id = str(formData, "id");
-  if (!id) return;
+  if (!id) return fail("Kein Kunde angegeben.");
 
-  await prisma.organization.delete({ where: { id } });
+  const organization = await prisma.organization.delete({ where: { id } });
   revalidatePath("/");
-  redirect("/");
+  return ok(`Kunde „${organization.name}“ mit allen Projekten gelöscht.`, "/");
 }

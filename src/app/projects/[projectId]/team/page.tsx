@@ -9,6 +9,7 @@ import {
   PROJECT_STATUS_LABEL,
   PROJECT_STATUS_PILL,
 } from "@/lib/labels";
+import { ActionForm } from "@/components/ActionForm";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { PageHeader } from "@/components/PageHeader";
@@ -104,7 +105,7 @@ export default async function ProjectTeamPage({
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-3">
-                <form action={updateConnectorStatus} className="flex items-center gap-2">
+                <ActionForm action={updateConnectorStatus} className="flex items-center gap-2">
                   <input type="hidden" name="id" value={connector.id} />
                   <input type="hidden" name="organizationId" value={project.organizationId} />
                   <input type="hidden" name="projectId" value={project.id} />
@@ -121,8 +122,8 @@ export default async function ProjectTeamPage({
                   <button type="submit" className="quiet-link text-xs font-medium">
                     Übernehmen
                   </button>
-                </form>
-                <form action={deleteConnector}>
+                </ActionForm>
+                <ActionForm action={deleteConnector}>
                   <input type="hidden" name="id" value={connector.id} />
                   <input type="hidden" name="organizationId" value={project.organizationId} />
                   <input type="hidden" name="projectId" value={project.id} />
@@ -132,7 +133,7 @@ export default async function ProjectTeamPage({
                   >
                     Entfernen
                   </ConfirmButton>
-                </form>
+                </ActionForm>
               </div>
             </div>
           ))}
@@ -140,7 +141,7 @@ export default async function ProjectTeamPage({
         </div>
 
         <Disclosure label="Neuer Connector" className="mt-3">
-          <form action={createConnector} className={formGridClass}>
+          <ActionForm action={createConnector} className={formGridClass}>
             <input type="hidden" name="organizationId" value={project.organizationId} />
             <div>
               <label className={labelClass}>Name</label>
@@ -181,7 +182,7 @@ export default async function ProjectTeamPage({
                 Connector anlegen
               </button>
             </div>
-          </form>
+          </ActionForm>
         </Disclosure>
       </Section>
 
@@ -191,7 +192,7 @@ export default async function ProjectTeamPage({
             // Zwei Formulare nebeneinander statt ineinander (verschachtelte
             // <form> sind ungültig) – die Zeile bleibt trotzdem eine Zeile.
             <div key={assignmentId} className="card flex flex-wrap items-end gap-x-4 gap-y-3 p-4">
-              <form
+              <ActionForm
                 action={updateAgentAssignment}
                 className="grid min-w-0 flex-1 grid-cols-1 items-end gap-4 sm:grid-cols-[1.2fr_1fr_1fr_1fr_auto]"
               >
@@ -238,8 +239,8 @@ export default async function ProjectTeamPage({
                 <button type="submit" className={buttonPrimaryClass}>
                   Speichern
                 </button>
-              </form>
-              <form action={removeAgentAssignment} className="pb-2">
+              </ActionForm>
+              <ActionForm action={removeAgentAssignment} className="pb-2">
                 <input type="hidden" name="assignmentId" value={assignmentId} />
                 <input type="hidden" name="projectId" value={project.id} />
                 <ConfirmButton
@@ -248,14 +249,14 @@ export default async function ProjectTeamPage({
                 >
                   Entfernen
                 </ConfirmButton>
-              </form>
+              </ActionForm>
             </div>
           ))}
           {project.agents.length === 0 && <EmptyHint>Noch keine Agenten im Team.</EmptyHint>}
         </div>
 
         <Disclosure label="Agent hinzufügen" className="mt-3">
-          <form action={createAgentAndAssign} className={formGridClass}>
+          <ActionForm action={createAgentAndAssign} className={formGridClass}>
             <input type="hidden" name="projectId" value={project.id} />
             <div>
               <label className={labelClass}>Name</label>
@@ -298,7 +299,7 @@ export default async function ProjectTeamPage({
                 Agent hinzufügen
               </button>
             </div>
-          </form>
+          </ActionForm>
         </Disclosure>
       </Section>
     </main>

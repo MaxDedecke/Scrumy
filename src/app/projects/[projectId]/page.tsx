@@ -13,6 +13,7 @@ import {
   TICKET_STATUS_ORDER,
   TICKET_TYPE_LABEL,
 } from "@/lib/labels";
+import { ActionForm } from "@/components/ActionForm";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { PageHeader } from "@/components/PageHeader";
@@ -261,7 +262,7 @@ export default async function ProjectBoardPage({
 
       <Section title="Projekt-Einstellungen" className="mb-0">
         <div className="card p-5">
-          <form action={updateProject} className="grid gap-4 sm:grid-cols-2">
+          <ActionForm action={updateProject} className="grid gap-4 sm:grid-cols-2">
             <input type="hidden" name="id" value={project.id} />
             <div>
               <label className={labelClass}>Name</label>
@@ -290,8 +291,8 @@ export default async function ProjectBoardPage({
                 Speichern
               </button>
             </div>
-          </form>
-          <form action={deleteProject} className="mt-5 border-t border-hairline pt-5">
+          </ActionForm>
+          <ActionForm action={deleteProject} className="mt-5 border-t border-hairline pt-5">
             <input type="hidden" name="id" value={project.id} />
             <ConfirmButton
               confirmText={`Projekt "${project.name}" inkl. aller Tickets und Agenten-Einsätze wirklich löschen?`}
@@ -299,7 +300,7 @@ export default async function ProjectBoardPage({
             >
               Projekt löschen
             </ConfirmButton>
-          </form>
+          </ActionForm>
         </div>
       </Section>
     </main>

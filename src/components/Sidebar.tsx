@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useRef, useState, useSyncExternalStore } from "react";
+import { useToast } from "@/components/Toast";
 import { ChevronRightIcon, EllipsisIcon, PanelLeftIcon } from "@/components/icons";
 
 type SidebarProject = { id: string; name: string };
@@ -43,6 +44,7 @@ function storeCollapsed(value: boolean) {
 export function Sidebar({ organizations }: { organizations: SidebarOrganization[] }) {
   const pathname = usePathname();
   const menuRef = useRef<HTMLDetailsElement>(null);
+  const showToast = useToast();
 
   // Beim Laden den Kunden aufklappen, dessen Projekt gerade aktiv ist, damit
   // man beim Navigieren nicht die Orientierung verliert.
@@ -89,7 +91,15 @@ export function Sidebar({ organizations }: { organizations: SidebarOrganization[
           )}
           <button
             type="button"
-            onClick={() => storeCollapsed(!collapsed)}
+            onClick={() => {
+              storeCollapsed(!collapsed);
+              // Gleicher key wie beim Aufklappen der Kunden: schnelles Hin- und
+              // Herschalten ersetzt die Meldung, statt sie zu stapeln.
+              showToast({
+                message: collapsed ? "Seitenleiste ausgeklappt." : "Seitenleiste eingeklappt.",
+                key: "sidebar",
+              });
+            }}
             aria-label={collapsed ? "Sidebar ausklappen" : "Sidebar einklappen"}
             title={collapsed ? "Sidebar ausklappen" : "Sidebar einklappen"}
             className="flex shrink-0 items-center rounded-lg p-1.5 text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
@@ -107,7 +117,17 @@ export function Sidebar({ organizations }: { organizations: SidebarOrganization[
               <div key={org.id}>
                 <button
                   type="button"
-                  onClick={() => setOpenOrgId(isOpen ? null : org.id)}
+                  onClick={() => {
+                    setOpenOrgId(isOpen ? null : org.id);
+                    showToast({
+                      message: isOpen
+                        ? `„${org.name}“ zugeklappt.`
+                        : `„${org.name}“ aufgeklappt – ${org.projects.length} Projekt${
+                            org.projects.length === 1 ? "" : "e"
+                          }.`,
+                      key: "sidebar",
+                    });
+                  }}
                   aria-expanded={isOpen}
                   className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
                 >

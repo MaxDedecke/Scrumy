@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { LLM_PROVIDER_LABEL } from "@/lib/labels";
+import { ActionForm } from "@/components/ActionForm";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyHint } from "@/components/Section";
@@ -46,7 +47,7 @@ export default async function LlmProfilesSettingsPage() {
               </span>
             </summary>
             <div className="border-t border-hairline bg-surface-2/40 p-4">
-              <form action={updateLlmProfile} className={formGridClass}>
+              <ActionForm action={updateLlmProfile} className={formGridClass}>
                 <input type="hidden" name="id" value={profile.id} />
                 <div>
                   <label className={labelClass}>Name</label>
@@ -99,8 +100,8 @@ export default async function LlmProfilesSettingsPage() {
                     Speichern
                   </button>
                 </div>
-              </form>
-              <form action={deleteLlmProfile} className="mt-5 border-t border-hairline pt-5">
+              </ActionForm>
+              <ActionForm action={deleteLlmProfile} className="mt-5 border-t border-hairline pt-5">
                 <input type="hidden" name="id" value={profile.id} />
                 <ConfirmButton
                   confirmText={`Profil "${profile.name}" löschen? ${profile._count.agents} Agent(en) verlieren dadurch die Zuweisung.`}
@@ -108,7 +109,7 @@ export default async function LlmProfilesSettingsPage() {
                 >
                   Profil löschen
                 </ConfirmButton>
-              </form>
+              </ActionForm>
             </div>
           </details>
         ))}
@@ -116,7 +117,7 @@ export default async function LlmProfilesSettingsPage() {
       </div>
 
       <Disclosure label="Neues LLM-Profil">
-        <form action={createLlmProfile} className={formGridClass}>
+        <ActionForm action={createLlmProfile} className={formGridClass}>
           <div>
             <label className={labelClass}>Name</label>
             <input name="name" required className={inputClass} placeholder="z.B. Lokaler Ollama-Container" />
@@ -152,7 +153,7 @@ export default async function LlmProfilesSettingsPage() {
               Profil anlegen
             </button>
           </div>
-        </form>
+        </ActionForm>
       </Disclosure>
     </main>
   );

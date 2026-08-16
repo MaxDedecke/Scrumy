@@ -11,6 +11,7 @@ import {
   REQUIREMENT_SOURCE_LABEL,
   REQUIREMENT_SOURCE_PILL,
 } from "@/lib/labels";
+import { ActionForm } from "@/components/ActionForm";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { PageHeader } from "@/components/PageHeader";
@@ -142,7 +143,7 @@ export default async function ProjectDiscoveryPage({
               Ein Ausgangspunkt fürs Kundengespräch, kein fertiges Konzept.
               {hasConceptContent && " Ein vorhandener Entwurf wird dabei überschrieben."}
             </p>
-            <form action={applyConceptTemplate} className="space-y-6">
+            <ActionForm action={applyConceptTemplate} className="space-y-6">
               <input type="hidden" name="projectId" value={project.id} />
               {CONCEPT_TEMPLATE_CATEGORIES.map((category) => {
                 const templates = CONCEPT_TEMPLATES.filter((t) => t.category === category);
@@ -175,12 +176,12 @@ export default async function ProjectDiscoveryPage({
                   </div>
                 );
               })}
-            </form>
+            </ActionForm>
           </Disclosure>
         }
 
         <div className="card p-5">
-          <form action={saveConceptDraft} className="space-y-3">
+          <ActionForm action={saveConceptDraft} className="space-y-3">
             <input type="hidden" name="projectId" value={project.id} />
             {/* key erzwingt ein Remount, sobald sich der gespeicherte Entwurf
                 ändert. Ohne das behält ein bereits angetipptes Textfeld seinen
@@ -197,12 +198,12 @@ export default async function ProjectDiscoveryPage({
             <button type="submit" className={buttonSecondaryClass}>
               Entwurf speichern
             </button>
-          </form>
+          </ActionForm>
 
           <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-3 border-t border-hairline pt-5">
             {/* Freigeben friert den aktuellen Text als Version ein. Weiter
                 bearbeiten bleibt erlaubt – das ergibt dann die nächste Version. */}
-            <form action={releaseConcept}>
+            <ActionForm action={releaseConcept}>
               <input type="hidden" name="projectId" value={project.id} />
               <ConfirmButton
                 confirmText={
@@ -212,13 +213,13 @@ export default async function ProjectDiscoveryPage({
                 }
                 className={`${buttonPrimaryClass} ${
                   !hasConceptContent || (conceptReleased && !conceptChangedSinceRelease)
-                    ? "pointer-events-none opacity-40"
+                    ? "opacity-40"
                     : ""
                 }`}
               >
                 {latestVersion ? `Als Version ${latestVersion.version + 1} freigeben` : "Konzept freigeben"}
               </ConfirmButton>
-            </form>
+            </ActionForm>
 
             {!hasConceptContent && <span className="text-xs text-ink-3">Erst Konzept ausformulieren.</span>}
 
@@ -234,7 +235,7 @@ export default async function ProjectDiscoveryPage({
             )}
 
             {conceptReleased && (
-              <form action={reopenConcept} className="ml-auto">
+              <ActionForm action={reopenConcept} className="ml-auto">
                 <input type="hidden" name="projectId" value={project.id} />
                 <ConfirmButton
                   confirmText="Freigabe zurückziehen? Die bisherigen Versionen bleiben als Historie erhalten, das Team lässt sich bis zur nächsten Freigabe nicht starten."
@@ -242,7 +243,7 @@ export default async function ProjectDiscoveryPage({
                 >
                   Freigabe zurückziehen
                 </ConfirmButton>
-              </form>
+              </ActionForm>
             )}
           </div>
         </div>
@@ -292,7 +293,7 @@ export default async function ProjectDiscoveryPage({
                     <p className="mt-1 text-xs leading-relaxed text-ink-3">{req.description}</p>
                   )}
                 </div>
-                <form action={deleteRequirement} className="shrink-0">
+                <ActionForm action={deleteRequirement} className="shrink-0">
                   <input type="hidden" name="id" value={req.id} />
                   <input type="hidden" name="projectId" value={project.id} />
                   <ConfirmButton
@@ -301,7 +302,7 @@ export default async function ProjectDiscoveryPage({
                   >
                     Entfernen
                   </ConfirmButton>
-                </form>
+                </ActionForm>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-1.5">
                 <span className={PRIORITY_PILL[req.priority]}>{PRIORITY_LABEL[req.priority]}</span>
@@ -321,7 +322,7 @@ export default async function ProjectDiscoveryPage({
         </div>
 
         <Disclosure label="Anforderung erfassen / hochladen" className="mt-3">
-          <form action={createRequirement} encType="multipart/form-data" className={formGridClass}>
+          <ActionForm action={createRequirement} encType="multipart/form-data" className={formGridClass}>
             <input type="hidden" name="projectId" value={project.id} />
             <div>
               <label className={labelClass}>Titel</label>
@@ -360,7 +361,7 @@ export default async function ProjectDiscoveryPage({
                 Anforderung speichern
               </button>
             </div>
-          </form>
+          </ActionForm>
         </Disclosure>
 
         {/* Freigabe der Anforderungsliste – zweite Voraussetzung fürs Team. */}
@@ -374,7 +375,7 @@ export default async function ProjectDiscoveryPage({
                 {project.requirements.length} Anforderung
                 {project.requirements.length === 1 ? "" : "en"} bestätigt.
               </span>
-              <form action={reopenRequirements} className="ml-auto">
+              <ActionForm action={reopenRequirements} className="ml-auto">
                 <input type="hidden" name="projectId" value={project.id} />
                 <ConfirmButton
                   confirmText="Freigabe der Anforderungen zurückziehen, um weiter zu ergänzen?"
@@ -382,21 +383,21 @@ export default async function ProjectDiscoveryPage({
                 >
                   Freigabe zurückziehen
                 </ConfirmButton>
-              </form>
+              </ActionForm>
             </>
           ) : (
             <>
-              <form action={approveRequirements}>
+              <ActionForm action={approveRequirements}>
                 <input type="hidden" name="projectId" value={project.id} />
                 <ConfirmButton
                   confirmText={`${project.requirements.length} Anforderungen als vollständig freigeben?`}
                   className={`${buttonPrimaryClass} ${
-                    project.requirements.length === 0 ? "pointer-events-none opacity-40" : ""
+                    project.requirements.length === 0 ? "opacity-40" : ""
                   }`}
                 >
                   Anforderungen freigeben
                 </ConfirmButton>
-              </form>
+              </ActionForm>
               <span className="text-xs text-ink-3">
                 {project.requirements.length === 0
                   ? "Erst Anforderungen erfassen oder generieren."
@@ -440,11 +441,11 @@ export default async function ProjectDiscoveryPage({
                 />
               </ul>
 
-              <form action={startTeam} className="flex flex-wrap items-center gap-4">
+              <ActionForm action={startTeam} className="flex flex-wrap items-center gap-4">
                 <input type="hidden" name="projectId" value={project.id} />
                 <ConfirmButton
                   confirmText="Agenten-Team jetzt starten? Das Projekt wechselt auf Aktiv."
-                  className={`${buttonPrimaryClass} ${canStartTeam ? "" : "pointer-events-none opacity-40"}`}
+                  className={`${buttonPrimaryClass} ${canStartTeam ? "" : "opacity-40"}`}
                 >
                   Team starten
                 </ConfirmButton>
@@ -453,7 +454,7 @@ export default async function ProjectDiscoveryPage({
                     Erst beide Freigaben erteilen, dann wird der Button aktiv.
                   </span>
                 )}
-              </form>
+              </ActionForm>
             </>
           )}
         </div>

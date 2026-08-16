@@ -1,5 +1,7 @@
 "use client";
 
+import { useToast } from "@/components/Toast";
+
 export function ConfirmButton({
   confirmText,
   children,
@@ -15,6 +17,8 @@ export function ConfirmButton({
   name?: string;
   value?: string;
 }) {
+  const showToast = useToast();
+
   return (
     <button
       type="submit"
@@ -22,7 +26,13 @@ export function ConfirmButton({
       name={name}
       value={value}
       onClick={(e) => {
-        if (confirmText && !window.confirm(confirmText)) e.preventDefault();
+        if (confirmText && !window.confirm(confirmText)) {
+          e.preventDefault();
+          // Auch der Abbruch bekommt eine Rückmeldung – sonst ist der einzige
+          // Klick der App, auf den nichts folgt, ausgerechnet der bei einer
+          // Sicherheitsabfrage.
+          showToast({ message: "Abgebrochen – es wurde nichts geändert.", key: "confirm-cancelled" });
+        }
       }}
     >
       {children}

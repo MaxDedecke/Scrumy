@@ -199,4 +199,27 @@
   .disclosure-summary:hover {
     color: var(--color-ink);
   }
+
+  /* Toast oben rechts: fährt kurz von rechts ein, damit eine neue Meldung
+     auffällt, ohne den Blick vom Formular zu reißen. */
+  .toast-enter {
+    animation: toast-in 180ms ease-out;
+  }
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateX(0.75rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .toast-enter {
+      animation: none;
+    }
+  }
 }

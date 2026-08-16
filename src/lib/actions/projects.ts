@@ -1,8 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { fail, ok, type ActionResult } from "@/lib/actions/result";
 import type { ProjectStatus } from "@/generated/prisma/client";
 
 function str(formData: FormData, key: string): string | null {
@@ -10,10 +10,11 @@ function str(formData: FormData, key: string): string | null {
   return value.length > 0 ? value : null;
 }
 
-export async function createProject(formData: FormData) {
+export async function createProject(formData: FormData): Promise<ActionResult> {
   const organizationId = str(formData, "organizationId");
   const name = str(formData, "name");
-  if (!organizationId || !name) return;
+  if (!organizationId) return fail("Kein Kunde angegeben.");
+  if (!name) return fail("Bitte einen Namen für das Projekt angeben.");
 
   await prisma.project.create({
     data: {
@@ -25,12 +26,14 @@ export async function createProject(formData: FormData) {
   });
 
   revalidatePath("/");
+  return ok(`Projekt „${name}“ angelegt.`);
 }
 
-export async function updateProject(formData: FormData) {
+export async function updateProject(formData: FormData): Promise<ActionResult> {
   const id = str(formData, "id");
   const name = str(formData, "name");
-  if (!id || !name) return;
+  if (!id) return fail("Kein Projekt angegeben.");
+  if (!name) return fail("Der Name darf nicht leer sein.");
 
   await prisma.project.update({
     where: { id },
@@ -44,13 +47,14 @@ export async function updateProject(formData: FormData) {
 
   revalidatePath("/");
   revalidatePath(`/projects/${id}`);
+  return ok(`Projekt „${name}“ gespeichert.`);
 }
 
-export async function deleteProject(formData: FormData) {
+export async function deleteProject(formData: FormData): Promise<ActionResult> {
   const id = str(formData, "id");
-  if (!id) return;
+  if (!id) return fail("Kein Projekt angegeben.");
 
-  await prisma.project.delete({ where: { id } });
+  const project = await prisma.project.delete({ where: { id } });
   revalidatePath("/");
-  redirect("/");
+  return ok(`Projekt „${project.name}“ gelöscht.`, "/");
 }

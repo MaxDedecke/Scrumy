@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { createOrganization, deleteOrganization, updateOrganization } from "@/lib/actions/organizations";
 import { createProject } from "@/lib/actions/projects";
+import { ActionForm } from "@/components/ActionForm";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { PageHeader } from "@/components/PageHeader";
 import { Disclosure, formGridClass } from "@/components/Disclosure";
@@ -38,7 +39,7 @@ export default async function DashboardPage() {
       />
 
       <Disclosure label="Neuer Kunde" className="mb-8">
-        <form action={createOrganization} className={formGridClass}>
+        <ActionForm action={createOrganization} className={formGridClass}>
           <div>
             <label className={labelClass} htmlFor="org-name">
               Name
@@ -56,7 +57,7 @@ export default async function DashboardPage() {
               Kunde anlegen
             </button>
           </div>
-        </form>
+        </ActionForm>
       </Disclosure>
 
       {organizations.length === 0 ? (
@@ -89,7 +90,7 @@ export default async function DashboardPage() {
                       Bearbeiten
                     </summary>
                     <div className="absolute right-0 z-10 mt-2 w-72 rounded-xl border border-hairline bg-surface p-4 shadow-2xl shadow-black/50">
-                      <form action={updateOrganization} className="space-y-3">
+                      <ActionForm action={updateOrganization} className="space-y-3">
                         <input type="hidden" name="id" value={org.id} />
                         <div>
                           <label className={labelClass}>Name</label>
@@ -102,8 +103,8 @@ export default async function DashboardPage() {
                         <button type="submit" className={`${buttonPrimaryClass} w-full`}>
                           Speichern
                         </button>
-                      </form>
-                      <form action={deleteOrganization} className="mt-4 border-t border-hairline pt-4">
+                      </ActionForm>
+                      <ActionForm action={deleteOrganization} className="mt-4 border-t border-hairline pt-4">
                         <input type="hidden" name="id" value={org.id} />
                         <ConfirmButton
                           confirmText={`Kunde "${org.name}" inkl. aller Projekte, Tickets und Anfragen wirklich löschen?`}
@@ -111,7 +112,7 @@ export default async function DashboardPage() {
                         >
                           Kunde löschen
                         </ConfirmButton>
-                      </form>
+                      </ActionForm>
                     </div>
                   </details>
                 </div>
@@ -148,7 +149,7 @@ export default async function DashboardPage() {
               )}
 
               <Disclosure label={`Neues Projekt für ${org.name}`} className="mt-4 bg-transparent">
-                <form action={createProject} className={formGridClass}>
+                <ActionForm action={createProject} className={formGridClass}>
                   <input type="hidden" name="organizationId" value={org.id} />
                   <div>
                     <label className={labelClass}>Name</label>
@@ -167,7 +168,7 @@ export default async function DashboardPage() {
                       Projekt anlegen
                     </button>
                   </div>
-                </form>
+                </ActionForm>
               </Disclosure>
             </section>
           ))}

@@ -1,15 +1,15 @@
 "use client";
 
-import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
-import { generateRequirementsFromConcept, type GenerateRequirementsState } from "@/lib/actions/requirements";
+import { generateRequirementsFromConcept } from "@/lib/actions/requirements";
+import { ActionForm } from "@/components/ActionForm";
 import { SparklesIcon } from "@/components/icons";
 import { buttonSecondaryClass } from "@/lib/ui";
 
-// Eigene Client-Komponente, weil der LLM-Aufruf lange dauern kann und sowohl
-// Fortschritt als auch Fehler (kein Key, Modell nicht erreichbar, Guthaben
-// leer) direkt an der Aktion stehen müssen – ein serverseitig geworfener
-// Fehler würde stattdessen die ganze Seite ersetzen.
+// Eigene Client-Komponente, weil der LLM-Aufruf lange dauern kann: Der Button
+// zeigt währenddessen den Fortschritt an. Das Ergebnis – Erfolg wie Fehler
+// (kein Key, Modell nicht erreichbar, Guthaben leer) – meldet <ActionForm> als
+// Toast oben rechts.
 function SubmitButton() {
   const { pending } = useFormStatus();
   return (
@@ -28,32 +28,16 @@ export function GenerateRequirementsButton({
   /** Name des Profils, das verwendet wird – damit es keine Überraschung gibt. */
   profileName: string | null;
 }) {
-  const [state, formAction] = useActionState<GenerateRequirementsState, FormData>(
-    generateRequirementsFromConcept,
-    null,
-  );
-
   return (
-    <div>
-      <form action={formAction} className="flex flex-wrap items-center gap-3">
-        <input type="hidden" name="projectId" value={projectId} />
-        <SubmitButton />
-        <span className="text-xs text-ink-3">
-          {profileName ? `nutzt „${profileName}"` : "kein LLM-Profil angelegt"}
-        </span>
-      </form>
-      {state && (
-        <p
-          role="status"
-          className={`mt-3 rounded-lg border px-3 py-2 text-xs leading-relaxed ${
-            state.ok
-              ? "border-good/35 bg-good/10 text-good"
-              : "border-critical/35 bg-critical/10 text-critical"
-          }`}
-        >
-          {state.message}
-        </p>
-      )}
-    </div>
+    <ActionForm
+      action={generateRequirementsFromConcept}
+      className="flex flex-wrap items-center gap-3"
+    >
+      <input type="hidden" name="projectId" value={projectId} />
+      <SubmitButton />
+      <span className="text-xs text-ink-3">
+        {profileName ? `nutzt „${profileName}“` : "kein LLM-Profil angelegt"}
+      </span>
+    </ActionForm>
   );
 }
