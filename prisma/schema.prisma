@@ -1,0 +1,180 @@
+// Scrumy — Datenmodell
+//
+// Scrumy ist die interne Plattform des Beratungs-Startups: pro Kunde (Organization)
+// laeuft ein Projekt, an dem ein virtuelles Team aus LLM-Agenten arbeitet wie ein
+// echtes Dienstleister-Team. Tickets durchlaufen ein Scrum-Board (Backlog -> In
+// Progress -> In Review -> Done), Agenten setzen sie um, kritische Aenderungen
+// brauchen ein menschliches Review, bevor sie beim Kunden deployt werden.
+//
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Ein Kunde des Beratungs-Startups.
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  industry  String?
+  createdAt DateTime @default(now())
+
+  projects Project[]
+
+  @@map("organizations")
+}
+
+/// Eine Individualsoftware, die fuer einen Kunden gebaut/gewartet wird
+/// (z.B. "Warenwirtschaft & CRM"). Verweist optional auf das eigene
+/// Kunden-Repository, an dem die Agenten arbeiten.
+model Project {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  repoUrl        String?
+  status         ProjectStatus @default(ACTIVE)
+  createdAt      DateTime      @default(now())
+
+  tickets Ticket[]
+  agents  AgentAssignment[]
+
+  @@map("projects")
+}
+
+enum ProjectStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+/// Ein LLM-Agent mit einer bestimmten Rolle im virtuellen Team
+/// (z.B. Product-Manager-Agent, Backend-Agent, Reviewer-Agent).
+model Agent {
+  id        String    @id @default(cuid())
+  name      String
+  role      AgentRole
+  model     String? // z.B. "claude-sonnet-5"
+  status    AgentStatus @default(IDLE)
+  createdAt DateTime  @default(now())
+
+  assignments  AgentAssignment[]
+  ticketEvents ActivityLogEntry[]
+
+  @@map("agents")
+}
+
+enum AgentRole {
+  PRODUCT_MANAGER
+  BACKEND
+  FRONTEND
+  QA
+  REVIEWER
+  DEVOPS
+}
+
+enum AgentStatus {
+  IDLE
+  WORKING
+  BLOCKED
+}
+
+/// Verknuepft Agenten mit Projekten (ein Agent kann an mehreren Kundenprojekten
+/// mitarbeiten, ein Projekt hat mehrere Agenten im Team).
+model AgentAssignment {
+  id        String   @id @default(cuid())
+  agentId   String
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([agentId, projectId])
+  @@map("agent_assignments")
+}
+
+/// Ein Feature-Request, Bug oder eine Integrationsaufgabe auf dem Scrum-Board
+/// eines Projekts.
+model Ticket {
+  id          String       @id @default(cuid())
+  projectId   String
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  type        TicketType   @default(FEATURE)
+  status      TicketStatus @default(BACKLOG)
+  priority    Priority     @default(MEDIUM)
+  requestedBy String? // Name/Kontakt des Kunden, der die Anfrage gestellt hat
+  isCritical  Boolean      @default(false) // erzwingt menschliches Review vor Deploy
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  reviews  ReviewApproval[]
+  activity ActivityLogEntry[]
+
+  @@map("tickets")
+}
+
+enum TicketType {
+  FEATURE
+  BUG
+  INTEGRATION
+  CHORE
+}
+
+enum TicketStatus {
+  BACKLOG
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+/// Menschlicher Freigabe-Schritt fuer kritische Aenderungen, bevor ein Ticket
+/// als DONE gilt bzw. beim Kunden deployt wird.
+model ReviewApproval {
+  id           String         @id @default(cuid())
+  ticketId     String
+  ticket       Ticket         @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  reviewerName String
+  decision     ReviewDecision @default(PENDING)
+  comment      String?
+  decidedAt    DateTime?
+  createdAt    DateTime       @default(now())
+
+  @@map("review_approvals")
+}
+
+enum ReviewDecision {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Audit-Trail: was hat welcher Agent (oder Mensch) an welchem Ticket getan.
+/// Macht die Arbeit des Agenten-Teams fuer den Kunden nachvollziehbar.
+model ActivityLogEntry {
+  id        String   @id @default(cuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  agentId   String?
+  agent     Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  actor     String // Anzeigename, falls kein Agent (z.B. "Mensch: Max")
+  action    String // z.B. "status_changed", "code_committed", "comment"
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@map("activity_log_entries")
+}
