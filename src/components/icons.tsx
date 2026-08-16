@@ -33,6 +33,15 @@ export function ChevronRightIcon({ className }: { className?: string }) {
   );
 }
 
+export function PanelLeftIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <rect x="3.75" y="4.5" width="16.5" height="15" rx="2" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 4.5v15" />
+    </svg>
+  );
+}
+
 export function SettingsIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
