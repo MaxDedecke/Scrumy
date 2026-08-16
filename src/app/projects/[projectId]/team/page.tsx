@@ -7,20 +7,12 @@ import {
   CONNECTOR_PROVIDER_LABEL,
   CONNECTOR_STATUS_LABEL,
   CONNECTOR_STATUS_PILL,
-  PROJECT_STATUS_LABEL,
 } from "@/lib/labels";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { createAgentAndAssign, removeAgentAssignment, updateAgentAssignment } from "@/lib/actions/agents";
 import { createConnector, deleteConnector, updateConnectorStatus } from "@/lib/actions/connectors";
-import { deleteProject, updateProject } from "@/lib/actions/projects";
-import {
-  buttonDangerClass,
-  buttonPrimaryClass,
-  buttonSecondaryClass,
-  inputClass,
-  labelClass,
-} from "@/lib/ui";
+import { buttonPrimaryClass, buttonSecondaryClass, inputClass, labelClass } from "@/lib/ui";
 import type { AgentRole, AgentStatus, ConnectorProvider } from "@/generated/prisma/client";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
@@ -79,52 +71,6 @@ export default async function ProjectTeamPage({
       </header>
 
       <ProjectTabs projectId={project.id} active="team" />
-
-      {/* Projekt-Einstellungen */}
-      <section className="mb-10 rounded-lg border border-neutral-800 p-5">
-        <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-neutral-500">
-          Projekt-Einstellungen
-        </h2>
-        <form action={updateProject} className="grid gap-3 sm:grid-cols-2">
-          <input type="hidden" name="id" value={project.id} />
-          <div>
-            <label className={labelClass}>Name</label>
-            <input name="name" defaultValue={project.name} required className={inputClass} />
-          </div>
-          <div>
-            <label className={labelClass}>Status</label>
-            <select name="status" defaultValue={project.status} className={inputClass}>
-              <option value="DISCOVERY">{PROJECT_STATUS_LABEL.DISCOVERY}</option>
-              <option value="CONCEPT">{PROJECT_STATUS_LABEL.CONCEPT}</option>
-              <option value="ACTIVE">{PROJECT_STATUS_LABEL.ACTIVE}</option>
-              <option value="PAUSED">{PROJECT_STATUS_LABEL.PAUSED}</option>
-              <option value="ARCHIVED">{PROJECT_STATUS_LABEL.ARCHIVED}</option>
-            </select>
-          </div>
-          <div>
-            <label className={labelClass}>Repository-URL</label>
-            <input name="repoUrl" defaultValue={project.repoUrl ?? ""} className={inputClass} />
-          </div>
-          <div>
-            <label className={labelClass}>Beschreibung</label>
-            <input name="description" defaultValue={project.description ?? ""} className={inputClass} />
-          </div>
-          <div className="flex items-center gap-3 sm:col-span-2">
-            <button type="submit" className={buttonPrimaryClass}>
-              Speichern
-            </button>
-          </div>
-        </form>
-        <form action={deleteProject} className="mt-4 border-t border-neutral-900 pt-4">
-          <input type="hidden" name="id" value={project.id} />
-          <ConfirmButton
-            confirmText={`Projekt "${project.name}" inkl. aller Tickets und Agenten-Einsätze wirklich löschen?`}
-            className={buttonDangerClass}
-          >
-            Projekt löschen
-          </ConfirmButton>
-        </form>
-      </section>
 
       {/* Connectoren */}
       <section className="mb-10">
