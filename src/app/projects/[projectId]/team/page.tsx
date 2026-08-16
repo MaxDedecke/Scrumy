@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import {
@@ -7,12 +6,24 @@ import {
   CONNECTOR_PROVIDER_LABEL,
   CONNECTOR_STATUS_LABEL,
   CONNECTOR_STATUS_PILL,
+  PROJECT_STATUS_LABEL,
+  PROJECT_STATUS_PILL,
 } from "@/lib/labels";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { ConfirmButton } from "@/components/ConfirmButton";
+import { PageHeader } from "@/components/PageHeader";
+import { EmptyHint, Section } from "@/components/Section";
+import { Disclosure, formGridClass } from "@/components/Disclosure";
 import { createAgentAndAssign, removeAgentAssignment, updateAgentAssignment } from "@/lib/actions/agents";
 import { createConnector, deleteConnector, updateConnectorStatus } from "@/lib/actions/connectors";
-import { buttonPrimaryClass, buttonSecondaryClass, inputClass, labelClass } from "@/lib/ui";
+import {
+  buttonDangerQuietClass,
+  buttonPrimaryClass,
+  buttonSecondaryClass,
+  inputClass,
+  labelClass,
+  pageClass,
+} from "@/lib/ui";
 import type { AgentRole, AgentStatus, ConnectorProvider } from "@/generated/prisma/client";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
@@ -59,76 +70,77 @@ export default async function ProjectTeamPage({
   ]);
 
   return (
-    <main className="flex-1 mx-auto w-full max-w-5xl px-6 py-10">
-      <header className="mb-6">
-        <Link href="/" className="text-sm text-neutral-500 hover:text-neutral-300">
-          ← Kunden &amp; Projekte
-        </Link>
-        <div className="mt-2">
-          <p className="text-sm uppercase tracking-wider text-neutral-500">{project.organization.name}</p>
-          <h1 className="mt-1 text-2xl font-semibold">{project.name}</h1>
-        </div>
-      </header>
+    <main className={pageClass}>
+      <PageHeader
+        backHref="/"
+        backLabel="Kunden"
+        context={project.organization.name}
+        title={project.name}
+        status={
+          <span className={`${PROJECT_STATUS_PILL[project.status]} pill-dot`}>
+            {PROJECT_STATUS_LABEL[project.status]}
+          </span>
+        }
+      />
 
       <ProjectTabs projectId={project.id} active="team" />
 
-      {/* Connectoren */}
-      <section className="mb-10">
-        <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-neutral-500">Connectoren</h2>
-        <div className="space-y-3">
+      <Section title="Connectoren">
+        <div className="space-y-2">
           {connectors.map((connector) => (
-            <div key={connector.id} className="flex items-center justify-between rounded-md border border-neutral-800 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium">
-                  {connector.name}{" "}
-                  <span className="ml-1 text-xs text-neutral-500">
-                    ({CONNECTOR_PROVIDER_LABEL[connector.provider]}
-                    {connector.projectId ? ", nur dieses Projekt" : ", kundenweit"})
+            <div key={connector.id} className="card flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-ink">
+                  {connector.name}
+                  <span className="ml-2 text-xs font-normal text-ink-3">
+                    {CONNECTOR_PROVIDER_LABEL[connector.provider]}
+                    {connector.projectId ? " · nur dieses Projekt" : " · kundenweit"}
                   </span>
                 </p>
                 {connector.config != null && (
-                  <p className="mt-0.5 max-w-xl truncate text-xs text-neutral-600">
+                  <p className="mt-0.5 max-w-xl truncate font-mono text-xs text-ink-4">
                     {JSON.stringify(connector.config)}
                   </p>
                 )}
               </div>
-              <div className="flex items-center gap-2">
-                <form action={updateConnectorStatus} className="flex items-center gap-1.5">
+              <div className="flex shrink-0 items-center gap-3">
+                <form action={updateConnectorStatus} className="flex items-center gap-2">
                   <input type="hidden" name="id" value={connector.id} />
                   <input type="hidden" name="organizationId" value={project.organizationId} />
                   <input type="hidden" name="projectId" value={project.id} />
                   <select
                     name="status"
                     defaultValue={connector.status}
-                    className={`${CONNECTOR_STATUS_PILL[connector.status]} border-none bg-transparent`}
+                    aria-label={`Status von ${connector.name}`}
+                    className={`${CONNECTOR_STATUS_PILL[connector.status]} cursor-pointer appearance-none pr-2`}
                   >
                     <option value="ACTIVE">{CONNECTOR_STATUS_LABEL.ACTIVE}</option>
                     <option value="INACTIVE">{CONNECTOR_STATUS_LABEL.INACTIVE}</option>
                     <option value="ERROR">{CONNECTOR_STATUS_LABEL.ERROR}</option>
                   </select>
-                  <button type="submit" className="text-xs text-neutral-500 hover:text-neutral-300">
-                    ✓
+                  <button type="submit" className="quiet-link text-xs font-medium">
+                    Übernehmen
                   </button>
                 </form>
                 <form action={deleteConnector}>
                   <input type="hidden" name="id" value={connector.id} />
                   <input type="hidden" name="organizationId" value={project.organizationId} />
                   <input type="hidden" name="projectId" value={project.id} />
-                  <ConfirmButton confirmText={`Connector "${connector.name}" löschen?`} className="text-xs text-red-400 hover:text-red-300">
+                  <ConfirmButton
+                    confirmText={`Connector "${connector.name}" löschen?`}
+                    className={buttonDangerQuietClass}
+                  >
                     Entfernen
                   </ConfirmButton>
                 </form>
               </div>
             </div>
           ))}
-          {connectors.length === 0 && <p className="text-sm text-neutral-600">Noch keine Connectoren.</p>}
+          {connectors.length === 0 && <EmptyHint>Noch keine Connectoren eingerichtet.</EmptyHint>}
         </div>
 
-        <details className="mt-4">
-          <summary className="cursor-pointer select-none text-sm text-neutral-500 hover:text-neutral-300">
-            + Neuer Connector
-          </summary>
-          <form action={createConnector} className="mt-3 grid gap-3 rounded-md border border-neutral-900 p-4 sm:grid-cols-2">
+        <Disclosure label="Neuer Connector" className="mt-3">
+          <form action={createConnector} className={formGridClass}>
             <input type="hidden" name="organizationId" value={project.organizationId} />
             <div>
               <label className={labelClass}>Name</label>
@@ -160,7 +172,7 @@ export default async function ProjectTeamPage({
               <textarea
                 name="config"
                 rows={2}
-                className={inputClass}
+                className={`${inputClass} font-mono text-xs`}
                 placeholder='{"baseUrl":"https://…","projectKey":"DEMO"} oder {"repoUrl":"https://…","defaultBranch":"main"}'
               />
             </div>
@@ -170,78 +182,80 @@ export default async function ProjectTeamPage({
               </button>
             </div>
           </form>
-        </details>
-      </section>
+        </Disclosure>
+      </Section>
 
-      {/* Agenten-Team */}
-      <section>
-        <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-neutral-500">Agenten-Team</h2>
-        <div className="space-y-3">
+      <Section title="Agenten-Team" className="mb-0">
+        <div className="space-y-2">
           {project.agents.map(({ id: assignmentId, agent, connector }) => (
-            <form
-              key={assignmentId}
-              action={updateAgentAssignment}
-              className="grid grid-cols-1 gap-3 rounded-md border border-neutral-800 p-4 sm:grid-cols-[1fr_1fr_1fr_auto_auto]"
-            >
-              <input type="hidden" name="assignmentId" value={assignmentId} />
-              <input type="hidden" name="agentId" value={agent.id} />
-              <input type="hidden" name="projectId" value={project.id} />
-              <div>
-                <label className={labelClass}>Agent</label>
-                <p className="px-1 py-1.5 text-sm font-medium">
-                  {agent.name} <span className="text-xs text-neutral-500">({AGENT_ROLE_LABEL[agent.role]})</span>
-                </p>
-              </div>
-              <div>
-                <label className={labelClass}>Status</label>
-                <select name="status" defaultValue={agent.status} className={inputClass}>
-                  {AGENT_STATUSES.map((status) => (
-                    <option key={status} value={status}>
-                      {AGENT_STATUS_LABEL[status]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={labelClass}>LLM-Profil</label>
-                <select name="llmProfileId" defaultValue={agent.llmProfile?.id ?? ""} className={inputClass}>
-                  <option value="">— kein Profil —</option>
-                  {llmProfiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={labelClass}>Connector</label>
-                <select name="connectorId" defaultValue={connector?.id ?? ""} className={inputClass}>
-                  <option value="">— keiner —</option>
-                  {connectors.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex items-end gap-2">
+            // Zwei Formulare nebeneinander statt ineinander (verschachtelte
+            // <form> sind ungültig) – die Zeile bleibt trotzdem eine Zeile.
+            <div key={assignmentId} className="card flex flex-wrap items-end gap-x-4 gap-y-3 p-4">
+              <form
+                action={updateAgentAssignment}
+                className="grid min-w-0 flex-1 grid-cols-1 items-end gap-4 sm:grid-cols-[1.2fr_1fr_1fr_1fr_auto]"
+              >
+                <input type="hidden" name="assignmentId" value={assignmentId} />
+                <input type="hidden" name="agentId" value={agent.id} />
+                <input type="hidden" name="projectId" value={project.id} />
+                <div>
+                  <span className={labelClass}>Agent</span>
+                  <p className="truncate text-sm font-medium text-ink">{agent.name}</p>
+                  <p className="truncate text-xs text-ink-3">{AGENT_ROLE_LABEL[agent.role]}</p>
+                </div>
+                <div>
+                  <label className={labelClass}>Status</label>
+                  <select name="status" defaultValue={agent.status} className={inputClass}>
+                    {AGENT_STATUSES.map((status) => (
+                      <option key={status} value={status}>
+                        {AGENT_STATUS_LABEL[status]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelClass}>LLM-Profil</label>
+                  <select name="llmProfileId" defaultValue={agent.llmProfile?.id ?? ""} className={inputClass}>
+                    <option value="">— kein Profil —</option>
+                    {llmProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelClass}>Connector</label>
+                  <select name="connectorId" defaultValue={connector?.id ?? ""} className={inputClass}>
+                    <option value="">— keiner —</option>
+                    {connectors.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <button type="submit" className={buttonPrimaryClass}>
                   Speichern
                 </button>
-              </div>
-              <div className="flex items-end sm:col-span-5">
-                <RemoveAssignmentForm assignmentId={assignmentId} projectId={project.id} agentName={agent.name} />
-              </div>
-            </form>
+              </form>
+              <form action={removeAgentAssignment} className="pb-2">
+                <input type="hidden" name="assignmentId" value={assignmentId} />
+                <input type="hidden" name="projectId" value={project.id} />
+                <ConfirmButton
+                  confirmText={`"${agent.name}" aus diesem Projekt entfernen? Der Agent bleibt an anderen Projekten bestehen.`}
+                  className={buttonDangerQuietClass}
+                >
+                  Entfernen
+                </ConfirmButton>
+              </form>
+            </div>
           ))}
-          {project.agents.length === 0 && <p className="text-sm text-neutral-600">Noch keine Agenten im Team.</p>}
+          {project.agents.length === 0 && <EmptyHint>Noch keine Agenten im Team.</EmptyHint>}
         </div>
 
-        <details className="mt-6">
-          <summary className="cursor-pointer select-none text-sm text-neutral-500 hover:text-neutral-300">
-            + Agent hinzufügen
-          </summary>
-          <form action={createAgentAndAssign} className="mt-3 grid gap-3 rounded-md border border-neutral-900 p-4 sm:grid-cols-2">
+        <Disclosure label="Agent hinzufügen" className="mt-3">
+          <form action={createAgentAndAssign} className={formGridClass}>
             <input type="hidden" name="projectId" value={project.id} />
             <div>
               <label className={labelClass}>Name</label>
@@ -285,31 +299,8 @@ export default async function ProjectTeamPage({
               </button>
             </div>
           </form>
-        </details>
-      </section>
+        </Disclosure>
+      </Section>
     </main>
-  );
-}
-
-function RemoveAssignmentForm({
-  assignmentId,
-  projectId,
-  agentName,
-}: {
-  assignmentId: string;
-  projectId: string;
-  agentName: string;
-}) {
-  return (
-    <form action={removeAgentAssignment}>
-      <input type="hidden" name="assignmentId" value={assignmentId} />
-      <input type="hidden" name="projectId" value={projectId} />
-      <ConfirmButton
-        confirmText={`"${agentName}" aus diesem Projekt entfernen? Der Agent bleibt an anderen Projekten bestehen.`}
-        className="text-xs text-red-400 hover:text-red-300"
-      >
-        Aus Projekt entfernen
-      </ConfirmButton>
-    </form>
   );
 }

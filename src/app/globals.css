@@ -1,79 +1,202 @@
 @import "tailwindcss";
 
-:root {
-  --background: #0d0d0d;
-  --foreground: #ffffff;
-  --surface-card: #1a1a19;
-  --ink-secondary: #c3c2b7;
-  --ink-muted: #898781;
-  --border-hairline: rgba(255, 255, 255, 0.1);
+/* ---------------------------------------------------------------------------
+   Design-Tokens.
+   Alle Screens beziehen Flächen, Linien und Textfarben aus diesen wenigen
+   Stufen – nie direkt aus der Tailwind-Neutral-Skala. So sind Kontraste und
+   Abstufungen app-weit identisch, statt pro Seite neu erfunden zu werden.
+   --------------------------------------------------------------------------- */
+@theme {
+  /* Flächen: canvas (App-Hintergrund) -> surface (Karte) -> surface-2 (Feld,
+     Karte-in-Karte) -> surface-3 (Hover/aktiv). */
+  --color-canvas: #0a0a0c;
+  --color-canvas-raised: #0e0e11;
+  --color-surface: #121216;
+  --color-surface-2: #191920;
+  --color-surface-3: #232430;
 
-  /* Fixe Status-Palette (nie für Kategorien wiederverwendet). */
-  --status-good: #0ca30c;
-  --status-warning: #fab219;
-  --status-serious: #ec835a;
-  --status-critical: #d03b3b;
-  --status-info: #3987e5;
-}
+  /* Linien: hairline trennt, hairline-strong umrandet interaktive Elemente. */
+  --color-hairline: rgba(255, 255, 255, 0.08);
+  --color-hairline-strong: rgba(255, 255, 255, 0.16);
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  /* Text: ink (Titel) -> ink-2 (Fließtext) -> ink-3 (Meta) -> ink-4 (Platzhalter). */
+  --color-ink: #f3f3f5;
+  --color-ink-2: #a9a9b6;
+  --color-ink-3: #78788a;
+  --color-ink-4: #56566a;
+
+  /* Akzent: accent für Text/Rahmen auf dunklem Grund, accent-solid für
+     gefüllte Buttons (Weiß darauf bleibt lesbar). */
+  --color-accent: #7aa5f7;
+  --color-accent-solid: #2f6fe0;
+  --color-accent-solid-hover: #3d7cf0;
+  --color-accent-soft: rgba(122, 165, 247, 0.12);
+  --color-accent-border: rgba(122, 165, 247, 0.32);
+
+  /* Feste Status-Palette (nie für Kategorien wiederverwendet). */
+  --color-good: #35c05a;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #f0555a;
+  --color-info: #5b9bf5;
+
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --radius-card: 0.75rem;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
+@layer base {
+  html {
+    color-scheme: dark;
+    scrollbar-color: var(--color-surface-3) transparent;
+    scrollbar-width: thin;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+  }
+
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.011em;
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+  }
+
+  /* Ein einziger Fokus-Stil für die ganze App – Tastaturbedienung bleibt
+     überall gleich sichtbar. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* details/summary: eigener Marker wird in .disclosure gesetzt. */
+  summary::-webkit-details-marker {
+    display: none;
+  }
 }
 
-/* Status-Pill: für Agenten-/Connector-/Ticket-/Anfragenstatus – Farbe trägt nie
-   allein die Bedeutung, Text steht immer dabei. */
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  border-radius: 9999px;
-  padding: 0.125rem 0.625rem;
-  font-size: 0.6875rem;
-  font-weight: 500;
-  line-height: 1.4;
-  white-space: nowrap;
-  border: 1px solid transparent;
-}
+@layer components {
+  /* Karte: die eine Flächenform der App. Innenabstand kommt vom Aufrufer. */
+  .card {
+    border-radius: var(--radius-card);
+    border: 1px solid var(--color-hairline);
+    background-color: var(--color-surface);
+  }
 
-.pill-good {
-  background: color-mix(in oklab, var(--status-good) 18%, transparent);
-  color: #4ade80;
-  border-color: color-mix(in oklab, var(--status-good) 45%, transparent);
-}
+  /* Anklickbare Karte/Zeile. */
+  .card-interactive {
+    border-radius: var(--radius-card);
+    border: 1px solid var(--color-hairline);
+    background-color: var(--color-surface);
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease;
+  }
 
-.pill-warning {
-  background: color-mix(in oklab, var(--status-warning) 18%, transparent);
-  color: var(--status-warning);
-  border-color: color-mix(in oklab, var(--status-warning) 45%, transparent);
-}
+  .card-interactive:hover {
+    border-color: var(--color-hairline-strong);
+    background-color: var(--color-surface-2);
+  }
 
-.pill-serious {
-  background: color-mix(in oklab, var(--status-serious) 18%, transparent);
-  color: var(--status-serious);
-  border-color: color-mix(in oklab, var(--status-serious) 45%, transparent);
-}
+  /* Abschnittsüberschrift über einer Karten-/Listengruppe. */
+  .section-title {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-ink-3);
+  }
 
-.pill-critical {
-  background: color-mix(in oklab, var(--status-critical) 20%, transparent);
-  color: #f87171;
-  border-color: color-mix(in oklab, var(--status-critical) 50%, transparent);
-}
+  /* Zurückhaltender Textlink (Meta-Navigation, „Konfigurieren →"). */
+  .quiet-link {
+    color: var(--color-ink-3);
+    transition: color 150ms ease;
+  }
 
-.pill-info {
-  background: color-mix(in oklab, var(--status-info) 20%, transparent);
-  color: #7fb0f0;
-  border-color: color-mix(in oklab, var(--status-info) 45%, transparent);
-}
+  .quiet-link:hover {
+    color: var(--color-ink);
+  }
 
-.pill-neutral {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--ink-secondary);
-  border-color: var(--border-hairline);
+  /* Status-Pill: für Agenten-/Connector-/Ticket-/Anfragenstatus – Farbe trägt
+     nie allein die Bedeutung, Text steht immer dabei. */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3125rem;
+    border-radius: 9999px;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1.5;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+
+  /* Punkt vor dem Label: zweiter Kanal neben der Farbe (CVD/Graustufen). */
+  .pill-dot::before {
+    content: "";
+    width: 0.375rem;
+    height: 0.375rem;
+    border-radius: 9999px;
+    background: currentColor;
+    flex: none;
+  }
+
+  .pill-good {
+    background: color-mix(in oklab, var(--color-good) 16%, transparent);
+    color: #5cd97c;
+    border-color: color-mix(in oklab, var(--color-good) 40%, transparent);
+  }
+
+  .pill-warning {
+    background: color-mix(in oklab, var(--color-warning) 16%, transparent);
+    color: var(--color-warning);
+    border-color: color-mix(in oklab, var(--color-warning) 40%, transparent);
+  }
+
+  .pill-serious {
+    background: color-mix(in oklab, var(--color-serious) 16%, transparent);
+    color: var(--color-serious);
+    border-color: color-mix(in oklab, var(--color-serious) 40%, transparent);
+  }
+
+  .pill-critical {
+    background: color-mix(in oklab, var(--color-critical) 18%, transparent);
+    color: #ff8085;
+    border-color: color-mix(in oklab, var(--color-critical) 44%, transparent);
+  }
+
+  .pill-info {
+    background: color-mix(in oklab, var(--color-info) 18%, transparent);
+    color: #8fbcfa;
+    border-color: color-mix(in oklab, var(--color-info) 40%, transparent);
+  }
+
+  .pill-neutral {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--color-ink-2);
+    border-color: var(--color-hairline);
+  }
+
+  /* Aufklappbares Formular („+ Neuer Kunde"). */
+  .disclosure-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    font-size: 0.875rem;
+    color: var(--color-ink-2);
+    transition: color 150ms ease;
+  }
+
+  .disclosure-summary:hover {
+    color: var(--color-ink);
+  }
 }

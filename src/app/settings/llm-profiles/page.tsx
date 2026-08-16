@@ -1,8 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { LLM_PROVIDER_LABEL } from "@/lib/labels";
 import { ConfirmButton } from "@/components/ConfirmButton";
+import { PageHeader } from "@/components/PageHeader";
+import { EmptyHint } from "@/components/Section";
+import { Disclosure, formGridClass } from "@/components/Disclosure";
+import { ChevronRightIcon } from "@/components/icons";
 import { createLlmProfile, deleteLlmProfile, updateLlmProfile } from "@/lib/actions/llm-profiles";
-import { buttonDangerClass, buttonPrimaryClass, inputClass, labelClass } from "@/lib/ui";
+import { buttonDangerClass, buttonPrimaryClass, inputClass, labelClass, pageClass } from "@/lib/ui";
 import type { LlmProvider } from "@/generated/prisma/client";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
@@ -17,32 +21,32 @@ export default async function LlmProfilesSettingsPage() {
   });
 
   return (
-    <main className="flex-1 mx-auto w-full max-w-4xl px-6 py-12">
-      <header className="mb-4">
-        <p className="text-sm uppercase tracking-wider text-neutral-500">Einstellungen</p>
-        <h1 className="mt-1 text-3xl font-semibold">LLM-Profile</h1>
-        <p className="mt-2 max-w-2xl text-neutral-400">
-          Global für die gesamte Beratung – nicht pro Kunde. Cloud-Modelle oder ein lokaler
-          Ollama-Container, den Agenten in beliebigen Kundenprojekten zugewiesen werden können.
-        </p>
-      </header>
+    <main className={pageClass}>
+      <PageHeader
+        backHref="/"
+        backLabel="Kunden"
+        context="Einstellungen"
+        title="LLM-Profile"
+        description="Global für die gesamte Beratung – nicht pro Kunde. Cloud-Modelle oder ein lokaler Ollama-Container, die Agenten in beliebigen Kundenprojekten zugewiesen werden können."
+      />
 
-      <div className="mb-10 space-y-3">
+      <div className="mb-4 space-y-2">
         {profiles.map((profile) => (
-          <details key={profile.id} className="rounded-lg border border-neutral-800">
-            <summary className="flex cursor-pointer select-none items-center justify-between px-5 py-3">
-              <span className="flex items-center gap-2 text-sm">
-                <span className="font-medium">{profile.name}</span>
+          <details key={profile.id} className="group card overflow-hidden">
+            <summary className="flex cursor-pointer select-none list-none items-center gap-3 px-4 py-3">
+              <ChevronRightIcon className="h-4 w-4 shrink-0 text-ink-4 transition-transform group-open:rotate-90" />
+              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-sm">
+                <span className="font-medium text-ink">{profile.name}</span>
                 <span className="pill pill-neutral">{LLM_PROVIDER_LABEL[profile.provider]}</span>
-                <span className="text-xs text-neutral-500">{profile.model}</span>
-                {profile.isDefault && <span className="pill pill-good">Standard</span>}
+                <span className="font-mono text-xs text-ink-3">{profile.model}</span>
+                {profile.isDefault && <span className="pill pill-good pill-dot">Standard</span>}
               </span>
-              <span className="text-xs text-neutral-500">
+              <span className="shrink-0 text-xs text-ink-3">
                 {profile._count.agents} Agent{profile._count.agents === 1 ? "" : "en"}
               </span>
             </summary>
-            <div className="border-t border-neutral-900 p-5">
-              <form action={updateLlmProfile} className="grid gap-3 sm:grid-cols-2">
+            <div className="border-t border-hairline bg-surface-2/40 p-4">
+              <form action={updateLlmProfile} className={formGridClass}>
                 <input type="hidden" name="id" value={profile.id} />
                 <div>
                   <label className={labelClass}>Name</label>
@@ -86,17 +90,17 @@ export default async function LlmProfilesSettingsPage() {
                     placeholder="vault://scrumy/anthropic-api-key"
                   />
                 </div>
-                <label className="flex items-center gap-2 text-sm text-neutral-400 sm:col-span-2">
-                  <input type="checkbox" name="isDefault" defaultChecked={profile.isDefault} />
+                <label className="flex items-center gap-2 text-sm text-ink-2 sm:col-span-2">
+                  <input type="checkbox" name="isDefault" defaultChecked={profile.isDefault} className="accent-accent-solid" />
                   Als Standardprofil für neue Agenten verwenden
                 </label>
-                <div className="flex items-center gap-3 sm:col-span-2">
+                <div className="sm:col-span-2">
                   <button type="submit" className={buttonPrimaryClass}>
                     Speichern
                   </button>
                 </div>
               </form>
-              <form action={deleteLlmProfile} className="mt-4 border-t border-neutral-900 pt-4">
+              <form action={deleteLlmProfile} className="mt-5 border-t border-hairline pt-5">
                 <input type="hidden" name="id" value={profile.id} />
                 <ConfirmButton
                   confirmText={`Profil "${profile.name}" löschen? ${profile._count.agents} Agent(en) verlieren dadurch die Zuweisung.`}
@@ -108,14 +112,11 @@ export default async function LlmProfilesSettingsPage() {
             </div>
           </details>
         ))}
-        {profiles.length === 0 && <p className="text-sm text-neutral-600">Noch keine LLM-Profile angelegt.</p>}
+        {profiles.length === 0 && <EmptyHint>Noch keine LLM-Profile angelegt.</EmptyHint>}
       </div>
 
-      <details className="rounded-lg border border-neutral-800 open:bg-neutral-950">
-        <summary className="cursor-pointer select-none px-5 py-3 text-sm font-medium text-neutral-300">
-          + Neues LLM-Profil
-        </summary>
-        <form action={createLlmProfile} className="grid gap-3 border-t border-neutral-900 p-5 sm:grid-cols-2">
+      <Disclosure label="Neues LLM-Profil">
+        <form action={createLlmProfile} className={formGridClass}>
           <div>
             <label className={labelClass}>Name</label>
             <input name="name" required className={inputClass} placeholder="z.B. Lokaler Ollama-Container" />
@@ -142,8 +143,8 @@ export default async function LlmProfilesSettingsPage() {
             <label className={labelClass}>API-Key-Referenz (nie der Key selbst)</label>
             <input name="apiKeyRef" className={inputClass} placeholder="vault://scrumy/…" />
           </div>
-          <label className="flex items-center gap-2 text-sm text-neutral-400 sm:col-span-2">
-            <input type="checkbox" name="isDefault" />
+          <label className="flex items-center gap-2 text-sm text-ink-2 sm:col-span-2">
+            <input type="checkbox" name="isDefault" className="accent-accent-solid" />
             Als Standardprofil für neue Agenten verwenden
           </label>
           <div className="sm:col-span-2">
@@ -152,7 +153,7 @@ export default async function LlmProfilesSettingsPage() {
             </button>
           </div>
         </form>
-      </details>
+      </Disclosure>
     </main>
   );
 }

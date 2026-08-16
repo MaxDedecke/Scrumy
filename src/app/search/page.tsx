@@ -1,5 +1,9 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { PageHeader } from "@/components/PageHeader";
+import { EmptyHint, Section } from "@/components/Section";
+import { ArrowRightIcon } from "@/components/icons";
+import { pageClass } from "@/lib/ui";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
 export const dynamic = "force-dynamic";
@@ -29,74 +33,59 @@ export default async function SearchPage({
   const hasResults = organizations.length > 0 || projects.length > 0;
 
   return (
-    <main className="flex-1 mx-auto w-full max-w-3xl px-6 py-12">
-      <header className="mb-8">
-        <p className="text-sm uppercase tracking-wider text-neutral-500">Suche</p>
-        <h1 className="mt-1 text-2xl font-semibold">
-          {query ? (
-            <>
-              Ergebnisse für &bdquo;{query}&ldquo;
-            </>
-          ) : (
-            "Kunden & Projekte durchsuchen"
-          )}
-        </h1>
-      </header>
+    <main className={pageClass}>
+      <PageHeader
+        backHref="/"
+        backLabel="Kunden"
+        context="Suche"
+        title={query ? `Ergebnisse für „${query}“` : "Kunden & Projekte durchsuchen"}
+        description={
+          query
+            ? undefined
+            : "Suchbegriff oben in der Kopfzeile eingeben – gesucht wird in Kunden- und Projektnamen."
+        }
+      />
 
-      {!query && <p className="text-neutral-500">Suchbegriff oben in der Kopfzeile eingeben.</p>}
-
-      {query && !hasResults && (
-        <p className="text-neutral-500">Keine Kunden oder Projekte gefunden.</p>
-      )}
+      {query && !hasResults && <EmptyHint>Keine Kunden oder Projekte gefunden.</EmptyHint>}
 
       {organizations.length > 0 && (
-        <section className="mb-8">
-          <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-neutral-500">
-            Kunden
-          </h2>
+        <Section title="Kunden">
           <div className="space-y-2">
             {organizations.map((org) => (
               <Link
                 key={org.id}
                 href={`/organizations/${org.id}/inbox`}
-                className="flex items-center justify-between rounded-md border border-neutral-800 px-4 py-3 hover:border-neutral-600 hover:bg-neutral-900"
+                className="card-interactive group flex items-center justify-between gap-4 px-4 py-3"
               >
-                <div>
-                  <p className="font-medium">{org.name}</p>
-                  {org.industry && <p className="text-sm text-neutral-500">{org.industry}</p>}
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-ink">{org.name}</p>
+                  <p className="truncate text-sm text-ink-3">{org.industry ?? "Support-Postfach"}</p>
                 </div>
-                <span aria-hidden className="text-neutral-500">
-                  →
-                </span>
+                <ArrowRightIcon className="h-4 w-4 shrink-0 text-ink-4 transition-colors group-hover:text-ink-2" />
               </Link>
             ))}
           </div>
-        </section>
+        </Section>
       )}
 
       {projects.length > 0 && (
-        <section>
-          <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-neutral-500">
-            Projekte
-          </h2>
+        <Section title="Projekte" className="mb-0">
           <div className="space-y-2">
             {projects.map((project) => (
               <Link
                 key={project.id}
                 href={`/projects/${project.id}`}
-                className="flex items-center justify-between rounded-md border border-neutral-800 px-4 py-3 hover:border-neutral-600 hover:bg-neutral-900"
+                className="card-interactive group flex items-center justify-between gap-4 px-4 py-3"
               >
-                <div>
-                  <p className="font-medium">{project.name}</p>
-                  <p className="text-sm text-neutral-500">{project.organization.name}</p>
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-ink">{project.name}</p>
+                  <p className="truncate text-sm text-ink-3">{project.organization.name}</p>
                 </div>
-                <span aria-hidden className="text-neutral-500">
-                  →
-                </span>
+                <ArrowRightIcon className="h-4 w-4 shrink-0 text-ink-4 transition-colors group-hover:text-ink-2" />
               </Link>
             ))}
           </div>
-        </section>
+        </Section>
       )}
     </main>
   );

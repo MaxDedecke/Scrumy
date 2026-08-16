@@ -25,24 +25,27 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
 
   return (
     <html lang="de" className="h-full antialiased">
-      <body className="flex h-full flex-col overflow-hidden bg-neutral-950 text-neutral-100 font-sans">
-        <header className="shrink-0 border-b border-neutral-900">
-          <div className="flex items-center gap-4 px-6 py-3">
-            <Link href="/" className="flex shrink-0 items-center gap-2 font-semibold tracking-tight">
-              <span className="flex h-6 w-6 items-center justify-center rounded bg-sky-500 text-sm text-white">
+      <body className="flex h-full flex-col overflow-hidden bg-canvas font-sans text-ink">
+        <header className="shrink-0 border-b border-hairline bg-canvas-raised">
+          <div className="flex h-14 items-center gap-5 px-5">
+            <Link
+              href="/"
+              className="flex shrink-0 items-center gap-2.5 text-sm font-semibold tracking-tight text-ink"
+            >
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-solid text-sm font-bold text-white">
                 S
               </span>
               Scrumy
             </Link>
 
-            <form action="/search" className="w-full max-w-md">
+            <form action="/search" className="w-full max-w-sm">
               <div className="relative">
-                <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-600" />
+                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-4" />
                 <input
                   type="search"
                   name="q"
                   placeholder="Kunden, Projekte durchsuchen…"
-                  className="w-full rounded-md border border-neutral-800 bg-neutral-900 py-1.5 pl-8 pr-3 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-sky-600 focus:outline-none"
+                  className="w-full rounded-lg border border-hairline bg-surface py-2 pl-9 pr-3 text-sm text-ink transition-colors placeholder:text-ink-4 focus:border-accent-border focus:bg-surface-2 focus:outline-none"
                 />
               </div>
             </form>
@@ -53,7 +56,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
               href="/settings/llm-profiles"
               aria-label="Einstellungen"
               title="Einstellungen"
-              className="shrink-0 rounded-md p-1.5 text-neutral-500 hover:bg-neutral-900 hover:text-neutral-300"
+              className="shrink-0 rounded-lg p-2 text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
             >
               <SettingsIcon className="h-5 w-5" />
             </Link>

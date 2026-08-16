@@ -15,8 +15,11 @@ import {
 } from "@/lib/labels";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { ConfirmButton } from "@/components/ConfirmButton";
+import { PageHeader } from "@/components/PageHeader";
+import { EmptyHint, Section } from "@/components/Section";
+import { ExternalLinkIcon, InboxIcon, WarningIcon } from "@/components/icons";
 import { deleteProject, updateProject } from "@/lib/actions/projects";
-import { buttonDangerClass, buttonPrimaryClass, inputClass, labelClass } from "@/lib/ui";
+import { buttonDangerClass, buttonPrimaryClass, inputClass, labelClass, pageClass } from "@/lib/ui";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
 export const dynamic = "force-dynamic";
@@ -61,6 +64,9 @@ export default async function ProjectBoardPage({
     0,
   );
 
+  // Kennzahlen-Kacheln: ein Zustand pro Kachel, kein Diagramm. Der Farbton
+  // kommt aus der festen Statuspalette und steht nie allein – Label und Punkt
+  // tragen die Bedeutung mit.
   const stats: { label: string; value: number; tone?: "critical" | "warning" }[] = [
     { label: "Offene Tickets", value: openTickets.length },
     { label: "In Review", value: ticketsByStatus.find((c) => c.status === "IN_REVIEW")?.tickets.length ?? 0 },
@@ -69,215 +75,233 @@ export default async function ProjectBoardPage({
   ];
 
   return (
-    <main className="flex-1 mx-auto w-full max-w-7xl px-6 py-10">
-      <header className="mb-6">
-        <Link href="/" className="text-sm text-neutral-500 hover:text-neutral-300">
-          ← Kunden &amp; Projekte
-        </Link>
-        <div className="mt-2 flex items-baseline justify-between gap-4">
-          <div>
-            <p className="text-sm uppercase tracking-wider text-neutral-500">
-              {project.organization.name}
-            </p>
-            <div className="mt-1 flex items-baseline gap-3">
-              <h1 className="text-2xl font-semibold">{project.name}</h1>
-              <span className={PROJECT_STATUS_PILL[project.status]}>{PROJECT_STATUS_LABEL[project.status]}</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-4 text-sm text-neutral-500">
-            <Link href={`/organizations/${project.organizationId}/inbox`} className="hover:text-neutral-300">
-              Support-Postfach →
+    <main className={pageClass}>
+      <PageHeader
+        backHref="/"
+        backLabel="Kunden"
+        context={project.organization.name}
+        title={project.name}
+        status={
+          <span className={`${PROJECT_STATUS_PILL[project.status]} pill-dot`}>
+            {PROJECT_STATUS_LABEL[project.status]}
+          </span>
+        }
+        actions={
+          <>
+            <Link
+              href={`/organizations/${project.organizationId}/inbox`}
+              className="quiet-link inline-flex items-center gap-1.5"
+            >
+              <InboxIcon className="h-4 w-4" />
+              Support-Postfach
             </Link>
             {project.repoUrl && (
-              <a href={project.repoUrl} target="_blank" rel="noreferrer" className="hover:text-neutral-300">
-                Repository ↗
+              <a
+                href={project.repoUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="quiet-link inline-flex items-center gap-1.5"
+              >
+                <ExternalLinkIcon className="h-4 w-4" />
+                Repository
               </a>
             )}
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <ProjectTabs projectId={project.id} active="overview" />
 
       {(project.status === "DISCOVERY" || project.status === "CONCEPT") && (
-        <p className="mb-8 rounded-md border border-sky-900 bg-sky-950/40 px-4 py-3 text-sm text-sky-200">
+        <p className="mb-8 rounded-xl border border-accent-border bg-accent-soft px-4 py-3 text-sm text-accent">
           Team ist noch nicht gestartet – Projekt ist in der{" "}
           {project.status === "DISCOVERY" ? "Discovery-Phase" : "Konzeptphase"}.{" "}
-          <Link href={`/projects/${project.id}/discovery`} className="underline hover:text-sky-100">
+          <Link href={`/projects/${project.id}/discovery`} className="font-medium underline underline-offset-2 hover:text-ink">
             Anforderungen &amp; Konzept bearbeiten
           </Link>
           , um das Team zu starten.
         </p>
       )}
 
-      {/* Stat-Kacheln: Kennzahlen auf einen Blick, nicht als Chart – ein Zustand pro Kachel. */}
-      <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <section className="mb-9 grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((stat) => (
-          <div key={stat.label} className="rounded-lg border border-neutral-800 bg-neutral-950 p-4">
+          <div key={stat.label} className="card p-4">
             <p
-              className={`text-2xl font-semibold ${
+              className={`text-3xl font-semibold ${
                 stat.tone === "critical"
-                  ? "text-red-400"
+                  ? "text-critical"
                   : stat.tone === "warning"
-                    ? "text-amber-400"
-                    : "text-neutral-100"
+                    ? "text-warning"
+                    : "text-ink"
               }`}
             >
               {stat.value}
             </p>
-            <p className="mt-1 text-xs text-neutral-500">{stat.label}</p>
+            <p className="mt-1.5 flex items-center gap-1.5 text-xs text-ink-3">
+              {stat.tone && (
+                <span
+                  aria-hidden
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    stat.tone === "critical" ? "bg-critical" : "bg-warning"
+                  }`}
+                />
+              )}
+              {stat.label}
+            </p>
           </div>
         ))}
       </section>
 
-      <section className="mb-8">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">
-            Agenten-Team
-          </h2>
-          <Link href={`/projects/${project.id}/team`} className="text-xs text-neutral-500 hover:text-neutral-300">
+      <Section
+        title="Agenten-Team"
+        action={
+          <Link href={`/projects/${project.id}/team`} className="quiet-link text-xs font-medium">
             Konfigurieren →
           </Link>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          {project.agents.map(({ agent, connector }) => (
-            <div
-              key={agent.id}
-              className="flex items-center gap-2 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2"
-            >
-              <span className="text-sm font-medium">{agent.name}</span>
-              <span className="pill pill-neutral">{AGENT_ROLE_LABEL[agent.role]}</span>
-              <span className={AGENT_STATUS_PILL[agent.status]}>{AGENT_STATUS_LABEL[agent.status]}</span>
-              {connector && <span className="text-xs text-neutral-600">via {connector.name}</span>}
-            </div>
-          ))}
-          {project.agents.length === 0 && (
-            <p className="text-sm text-neutral-600">
-              Noch kein Agenten-Team – <Link href={`/projects/${project.id}/team`} className="underline hover:text-neutral-300">jetzt einrichten</Link>.
-            </p>
-          )}
-        </div>
-      </section>
+        }
+      >
+        {project.agents.length === 0 ? (
+          <EmptyHint>
+            Noch kein Agenten-Team –{" "}
+            <Link href={`/projects/${project.id}/team`} className="text-accent underline underline-offset-2">
+              jetzt einrichten
+            </Link>
+            .
+          </EmptyHint>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {project.agents.map(({ agent, connector }) => (
+              <div key={agent.id} className="card flex items-center gap-2 px-3 py-2">
+                <span className="text-sm font-medium text-ink">{agent.name}</span>
+                <span className="pill pill-neutral">{AGENT_ROLE_LABEL[agent.role]}</span>
+                <span className={`${AGENT_STATUS_PILL[agent.status]} pill-dot`}>
+                  {AGENT_STATUS_LABEL[agent.status]}
+                </span>
+                {connector && <span className="text-xs text-ink-4">via {connector.name}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
 
-      <section className="mb-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {ticketsByStatus.map(({ status, tickets }) => (
-          <div key={status} className="rounded-lg border border-neutral-800 bg-neutral-950">
-            <div className="border-b border-neutral-800 px-4 py-3">
-              <h3 className="text-sm font-medium">
-                {TICKET_STATUS_LABEL[status]}{" "}
-                <span className="text-neutral-500">({tickets.length})</span>
-              </h3>
-            </div>
-            <div className="space-y-3 p-3">
-              {tickets.length === 0 && (
-                <p className="px-1 py-2 text-sm text-neutral-600">Keine Tickets</p>
-              )}
-              {tickets.map((ticket) => {
-                const pendingReview = ticket.reviews.find((r) => r.decision === "PENDING");
-                return (
-                  <article
-                    key={ticket.id}
-                    className="rounded-md border border-neutral-800 bg-neutral-900 p-3 transition-colors hover:border-neutral-700"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-medium">{ticket.title}</p>
-                      {ticket.isCritical && (
-                        <span
-                          title="Kritische Änderung – benötigt menschliches Review"
-                          className="shrink-0 text-amber-400"
-                        >
-                          ⚠
-                        </span>
+      <Section title="Scrum-Board">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {ticketsByStatus.map(({ status, tickets }) => (
+            <div key={status} className="card flex flex-col">
+              <div className="flex items-center justify-between border-b border-hairline px-4 py-2.5">
+                <h3 className="text-sm font-medium text-ink">{TICKET_STATUS_LABEL[status]}</h3>
+                <span className="text-xs tabular-nums text-ink-3">{tickets.length}</span>
+              </div>
+              <div className="space-y-2 p-2">
+                {tickets.length === 0 && (
+                  <p className="px-2 py-3 text-center text-xs text-ink-4">Keine Tickets</p>
+                )}
+                {tickets.map((ticket) => {
+                  const pendingReview = ticket.reviews.find((r) => r.decision === "PENDING");
+                  return (
+                    <article key={ticket.id} className="card-interactive bg-surface-2 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-sm font-medium leading-snug text-ink">{ticket.title}</p>
+                        {ticket.isCritical && (
+                          <span
+                            title="Kritische Änderung – benötigt menschliches Review"
+                            className="shrink-0 text-warning"
+                          >
+                            <WarningIcon className="h-4 w-4" />
+                            <span className="sr-only">Kritische Änderung</span>
+                          </span>
+                        )}
+                      </div>
+                      {ticket.description && (
+                        <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-ink-3">
+                          {ticket.description}
+                        </p>
                       )}
-                    </div>
-                    {ticket.description && (
-                      <p className="mt-1 line-clamp-2 text-xs text-neutral-500">{ticket.description}</p>
-                    )}
-                    {ticket.plan && (
-                      <p className="mt-2 rounded border border-neutral-800 bg-neutral-950 p-2 text-[11px] text-neutral-400">
-                        <span className="font-medium text-neutral-300">Plan: </span>
-                        {ticket.plan}
-                      </p>
-                    )}
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      <span className="pill pill-neutral">{TICKET_TYPE_LABEL[ticket.type]}</span>
-                      <span className={PRIORITY_PILL[ticket.priority]}>{PRIORITY_LABEL[ticket.priority]}</span>
-                      {pendingReview && <span className="pill pill-warning">Review ausstehend</span>}
-                      {ticket.externalRef && <span className="pill pill-neutral">{ticket.externalRef}</span>}
-                    </div>
-                  </article>
-                );
-              })}
+                      {ticket.plan && (
+                        <p className="mt-2 rounded-lg border border-hairline bg-canvas p-2 text-[11px] leading-relaxed text-ink-2">
+                          <span className="font-medium text-ink">Plan: </span>
+                          {ticket.plan}
+                        </p>
+                      )}
+                      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                        <span className="pill pill-neutral">{TICKET_TYPE_LABEL[ticket.type]}</span>
+                        <span className={PRIORITY_PILL[ticket.priority]}>{PRIORITY_LABEL[ticket.priority]}</span>
+                        {pendingReview && <span className="pill pill-warning pill-dot">Review offen</span>}
+                        {ticket.externalRef && <span className="pill pill-neutral">{ticket.externalRef}</span>}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
-      </section>
-
-      <section className="mb-10">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-wider text-neutral-500">Aktivität</h2>
-        <ul className="space-y-2">
-          {activity.map((entry) => (
-            <li
-              key={entry.id}
-              className="flex items-baseline gap-3 rounded-md border border-neutral-900 px-3 py-2 text-sm"
-            >
-              <span className="shrink-0 text-neutral-600">{entry.createdAt.toLocaleString("de-DE")}</span>
-              <span className="shrink-0 font-medium text-neutral-300">{entry.actor}</span>
-              <span className="text-neutral-500">
-                → {entry.ticket?.title ?? entry.supportRequest?.subject ?? "Projekt"}:
-              </span>
-              <span className="text-neutral-400">{entry.detail ?? entry.action}</span>
-            </li>
           ))}
-          {activity.length === 0 && <p className="text-sm text-neutral-600">Noch keine Aktivität.</p>}
-        </ul>
-      </section>
+        </div>
+      </Section>
 
-      {/* Projekt-Einstellungen */}
-      <section className="rounded-lg border border-neutral-800 p-5">
-        <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-neutral-500">
-          Projekt-Einstellungen
-        </h2>
-        <form action={updateProject} className="grid gap-3 sm:grid-cols-2">
-          <input type="hidden" name="id" value={project.id} />
-          <div>
-            <label className={labelClass}>Name</label>
-            <input name="name" defaultValue={project.name} required className={inputClass} />
-          </div>
-          <div>
-            <label className={labelClass}>Status</label>
-            <select name="status" defaultValue={project.status} className={inputClass}>
-              <option value="DISCOVERY">{PROJECT_STATUS_LABEL.DISCOVERY}</option>
-              <option value="CONCEPT">{PROJECT_STATUS_LABEL.CONCEPT}</option>
-              <option value="ACTIVE">{PROJECT_STATUS_LABEL.ACTIVE}</option>
-              <option value="PAUSED">{PROJECT_STATUS_LABEL.PAUSED}</option>
-              <option value="ARCHIVED">{PROJECT_STATUS_LABEL.ARCHIVED}</option>
-            </select>
-          </div>
-          <div>
-            <label className={labelClass}>Repository-URL</label>
-            <input name="repoUrl" defaultValue={project.repoUrl ?? ""} className={inputClass} />
-          </div>
-          <div>
-            <label className={labelClass}>Beschreibung</label>
-            <input name="description" defaultValue={project.description ?? ""} className={inputClass} />
-          </div>
-          <div className="flex items-center gap-3 sm:col-span-2">
-            <button type="submit" className={buttonPrimaryClass}>
-              Speichern
-            </button>
-          </div>
-        </form>
-        <form action={deleteProject} className="mt-4 border-t border-neutral-900 pt-4">
-          <input type="hidden" name="id" value={project.id} />
-          <ConfirmButton
-            confirmText={`Projekt "${project.name}" inkl. aller Tickets und Agenten-Einsätze wirklich löschen?`}
-            className={buttonDangerClass}
-          >
-            Projekt löschen
-          </ConfirmButton>
-        </form>
-      </section>
+      <Section title="Aktivität">
+        {activity.length === 0 ? (
+          <EmptyHint>Noch keine Aktivität.</EmptyHint>
+        ) : (
+          <ul className="card divide-y divide-hairline">
+            {activity.map((entry) => (
+              <li key={entry.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
+                <span className="shrink-0 tabular-nums text-xs text-ink-4">
+                  {entry.createdAt.toLocaleString("de-DE")}
+                </span>
+                <span className="shrink-0 font-medium text-ink">{entry.actor}</span>
+                <span className="text-ink-3">
+                  → {entry.ticket?.title ?? entry.supportRequest?.subject ?? "Projekt"}:
+                </span>
+                <span className="text-ink-2">{entry.detail ?? entry.action}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      <Section title="Projekt-Einstellungen" className="mb-0">
+        <div className="card p-5">
+          <form action={updateProject} className="grid gap-4 sm:grid-cols-2">
+            <input type="hidden" name="id" value={project.id} />
+            <div>
+              <label className={labelClass}>Name</label>
+              <input name="name" defaultValue={project.name} required className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Status</label>
+              <select name="status" defaultValue={project.status} className={inputClass}>
+                <option value="DISCOVERY">{PROJECT_STATUS_LABEL.DISCOVERY}</option>
+                <option value="CONCEPT">{PROJECT_STATUS_LABEL.CONCEPT}</option>
+                <option value="ACTIVE">{PROJECT_STATUS_LABEL.ACTIVE}</option>
+                <option value="PAUSED">{PROJECT_STATUS_LABEL.PAUSED}</option>
+                <option value="ARCHIVED">{PROJECT_STATUS_LABEL.ARCHIVED}</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Repository-URL</label>
+              <input name="repoUrl" defaultValue={project.repoUrl ?? ""} className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Beschreibung</label>
+              <input name="description" defaultValue={project.description ?? ""} className={inputClass} />
+            </div>
+            <div className="sm:col-span-2">
+              <button type="submit" className={buttonPrimaryClass}>
+                Speichern
+              </button>
+            </div>
+          </form>
+          <form action={deleteProject} className="mt-5 border-t border-hairline pt-5">
+            <input type="hidden" name="id" value={project.id} />
+            <ConfirmButton
+              confirmText={`Projekt "${project.name}" inkl. aller Tickets und Agenten-Einsätze wirklich löschen?`}
+              className={buttonDangerClass}
+            >
+              Projekt löschen
+            </ConfirmButton>
+          </form>
+        </div>
+      </Section>
     </main>
   );
 }

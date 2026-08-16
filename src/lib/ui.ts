@@ -1,17 +1,27 @@
-// Gemeinsame Tailwind-Klassen für Formulare, damit alle CRUD-Screens gleich aussehen.
+// Gemeinsame Tailwind-Klassen. Jede Seite zieht Layout, Formulare und Buttons
+// von hier – so bleiben Innenabstände, Höhen und Rundungen app-weit identisch.
+
+// Ein einziger Seiten-Container für ALLE Seiten: gleiche Breite, gleiche
+// Ränder, gleicher oberer Abstand. Dadurch stehen Zurück-Pfeil und erste
+// Textzeile auf jeder Seite exakt an derselben Stelle.
+export const pageClass = "mx-auto w-full max-w-6xl flex-1 px-8 py-9";
 
 export const inputClass =
-  "w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-sky-600 focus:outline-none";
+  "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-sm text-ink transition-colors placeholder:text-ink-4 focus:border-accent-border focus:outline-none";
 
-export const labelClass = "mb-1 block text-xs font-medium text-neutral-500";
+export const labelClass = "mb-1.5 block text-xs font-medium text-ink-3";
 
-export const buttonPrimaryClass =
-  "rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-sky-500";
+const buttonBaseClass =
+  "inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors";
 
-export const buttonSecondaryClass =
-  "rounded-md border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 transition-colors hover:bg-neutral-900";
+export const buttonPrimaryClass = `${buttonBaseClass} bg-accent-solid text-white hover:bg-accent-solid-hover`;
 
-export const buttonDangerClass =
-  "rounded-md border border-red-900 px-3 py-1.5 text-sm text-red-400 transition-colors hover:bg-red-950";
+export const buttonSecondaryClass = `${buttonBaseClass} border border-hairline-strong text-ink-2 hover:bg-surface-2 hover:text-ink`;
 
-export const cardClass = "rounded-lg border border-neutral-800 bg-neutral-950";
+export const buttonDangerClass = `${buttonBaseClass} border border-critical/35 text-critical hover:bg-critical/10`;
+
+// Textbutton für destruktive Aktionen innerhalb einer Zeile (kein Rahmen).
+export const buttonDangerQuietClass =
+  "text-xs font-medium text-critical transition-colors hover:text-ink";
+
+export const cardClass = "card";
