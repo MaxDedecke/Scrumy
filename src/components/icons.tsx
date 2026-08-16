@@ -102,6 +102,14 @@ export function WarningIcon({ className }: { className?: string }) {
   );
 }
 
+export function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className={className} aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4.5 4.5L19 7" />
+    </svg>
+  );
+}
+
 export function SparklesIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>

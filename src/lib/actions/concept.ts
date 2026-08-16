@@ -34,9 +34,9 @@ export async function saveConceptDraft(formData: FormData) {
 }
 
 /// Fuellt das Konzept mit einer Vorlage vor ("baut mir ein eigenes <SaaS>").
-/// Ueberschreibt einen vorhandenen Entwurf bewusst komplett – die Bestaetigung
-/// dafuer holt die Oberflaeche ein. Ein freigegebenes Konzept bleibt
-/// unangetastet, sonst waere die Freigabe wertlos.
+/// Ueberschreibt den aktuellen Arbeitsstand bewusst komplett – die
+/// Bestaetigung dafuer holt die Oberflaeche ein. Bereits freigegebene
+/// `ConceptVersion`s bleiben davon unberuehrt, die sind eingefroren.
 export async function applyConceptTemplate(formData: FormData) {
   const projectId = str(formData, "projectId");
   const templateId = str(formData, "templateId");
@@ -44,9 +44,6 @@ export async function applyConceptTemplate(formData: FormData) {
 
   const template = findConceptTemplate(templateId);
   if (!template) return;
-
-  const existing = await prisma.concept.findUnique({ where: { projectId } });
-  if (existing?.status === "FINALIZED") return;
 
   const content = renderConceptTemplate(template);
 
@@ -76,27 +73,85 @@ export async function applyConceptTemplate(formData: FormData) {
   revalidatePath(`/projects/${projectId}`);
 }
 
-/// Gibt das Konzept frei und startet damit das Agenten-Team: Projekt springt
-/// auf ACTIVE. Ab hier arbeitet das Team laut Scrum-Board (`/projects/[id]`).
-export async function finalizeConceptAndStartTeam(formData: FormData) {
+/// Friert den aktuellen Konzeptstand als neue `ConceptVersion` ein.
+///
+/// Startet bewusst NICHT mehr das Team – das ist ein eigener Schritt
+/// (`startTeam`), der zusaetzlich freigegebene Anforderungen verlangt.
+/// Weiterarbeiten am Konzept bleibt erlaubt: Die naechste Freigabe erzeugt
+/// dann Version N+1, alte Versionen bleiben unveraendert.
+export async function releaseConcept(formData: FormData) {
   const projectId = str(formData, "projectId");
   if (!projectId) return;
 
-  const concept = await prisma.concept.findUnique({ where: { projectId } });
-  if (!concept || concept.content.trim().length === 0) return;
+  const concept = await prisma.concept.findUnique({
+    where: { projectId },
+    include: { versions: { orderBy: { version: "desc" }, take: 1 } },
+  });
+  if (!concept) return;
+
+  const content = concept.content.trim();
+  if (content.length === 0) return;
+
+  // Identischen Text nicht doppelt versionieren – sonst sammeln sich
+  // inhaltsgleiche Versionen an, sobald jemand zweimal klickt.
+  const latest = concept.versions[0];
+  if (latest && latest.content.trim() === content) return;
+
+  const nextVersion = (latest?.version ?? 0) + 1;
+  const releasedAt = new Date();
+
+  await prisma.$transaction(async (tx) => {
+    await tx.conceptVersion.create({
+      data: { conceptId: concept.id, version: nextVersion, content: concept.content, releasedAt },
+    });
+    await tx.concept.update({
+      where: { projectId },
+      data: { status: "FINALIZED", finalizedAt: releasedAt },
+    });
+
+    const project = await tx.project.findUniqueOrThrow({ where: { id: projectId } });
+    if (project.status === "DISCOVERY") {
+      await tx.project.update({ where: { id: projectId }, data: { status: "CONCEPT" } });
+    }
+
+    await tx.activityLogEntry.create({
+      data: {
+        projectId,
+        actor: "Mensch",
+        action: "concept_released",
+        detail: `Konzept als Version ${nextVersion} freigegeben`,
+      },
+    });
+  });
+
+  revalidatePath(`/projects/${projectId}/discovery`);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+/// Startet das Agenten-Team: Projekt springt auf ACTIVE. Setzt voraus, dass
+/// Konzept UND Anforderungen freigegeben sind – die Oberflaeche deaktiviert
+/// den Button sonst, hier steht die Pruefung noch einmal, damit der Zustand
+/// auch bei einem direkten Aufruf stimmt.
+export async function startTeam(formData: FormData) {
+  const projectId = str(formData, "projectId");
+  if (!projectId) return;
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { concept: true },
+  });
+  if (!project) return;
+  if (project.concept?.status !== "FINALIZED") return;
+  if (!project.requirementsApprovedAt) return;
 
   await prisma.$transaction([
-    prisma.concept.update({
-      where: { projectId },
-      data: { status: "FINALIZED", finalizedAt: new Date() },
-    }),
     prisma.project.update({ where: { id: projectId }, data: { status: "ACTIVE" } }),
     prisma.activityLogEntry.create({
       data: {
         projectId,
         actor: "Mensch",
-        action: "concept_finalized",
-        detail: "Konzept freigegeben – Agenten-Team gestartet",
+        action: "team_started",
+        detail: "Konzept und Anforderungen freigegeben – Agenten-Team gestartet",
       },
     }),
   ]);

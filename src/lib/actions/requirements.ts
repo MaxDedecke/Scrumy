@@ -52,7 +52,56 @@ export async function createRequirement(formData: FormData) {
     });
   }
 
+  await clearRequirementsApproval(projectId);
   revalidatePath(`/projects/${projectId}/discovery`);
+}
+
+/// Jede Aenderung an der Liste macht eine bestehende Freigabe ungueltig – sonst
+/// wuerde der "Team starten"-Button auf eine Liste zeigen, die so nie jemand
+/// geprueft hat.
+async function clearRequirementsApproval(projectId: string) {
+  await prisma.project.updateMany({
+    where: { id: projectId, requirementsApprovedAt: { not: null } },
+    data: { requirementsApprovedAt: null },
+  });
+}
+
+/// Bestaetigt die Anforderungsliste als vollstaendig. Zusammen mit einem
+/// freigegebenen Konzept ist das die Voraussetzung fuer "Team starten".
+export async function approveRequirements(formData: FormData) {
+  const projectId = str(formData, "projectId");
+  if (!projectId) return;
+
+  const count = await prisma.requirement.count({ where: { projectId } });
+  if (count === 0) return;
+
+  await prisma.$transaction([
+    prisma.project.update({
+      where: { id: projectId },
+      data: { requirementsApprovedAt: new Date() },
+    }),
+    prisma.activityLogEntry.create({
+      data: {
+        projectId,
+        actor: "Mensch",
+        action: "requirements_approved",
+        detail: `${count} Anforderung${count === 1 ? "" : "en"} freigegeben`,
+      },
+    }),
+  ]);
+
+  revalidatePath(`/projects/${projectId}/discovery`);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+/// Zieht die Freigabe der Anforderungen zurueck, um weiter zu ergaenzen.
+export async function reopenRequirements(formData: FormData) {
+  const projectId = str(formData, "projectId");
+  if (!projectId) return;
+
+  await clearRequirementsApproval(projectId);
+  revalidatePath(`/projects/${projectId}/discovery`);
+  revalidatePath(`/projects/${projectId}`);
 }
 
 export type GenerateRequirementsState = { ok: boolean; message: string } | null;
@@ -148,6 +197,7 @@ export async function generateRequirementsFromConcept(
 
   await prisma.$transaction([
     prisma.requirement.createMany({ data: parsed }),
+    prisma.project.update({ where: { id: projectId }, data: { requirementsApprovedAt: null } }),
     prisma.activityLogEntry.create({
       data: {
         projectId,
@@ -173,5 +223,6 @@ export async function deleteRequirement(formData: FormData) {
   if (!id || !projectId) return;
 
   await prisma.requirement.delete({ where: { id } });
+  await clearRequirementsApproval(projectId);
   revalidatePath(`/projects/${projectId}/discovery`);
 }

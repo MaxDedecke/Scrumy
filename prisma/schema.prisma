@@ -54,6 +54,10 @@ model Project {
   repoUrl        String?
   status         ProjectStatus @default(DISCOVERY)
   createdAt      DateTime      @default(now())
+  /// Wann der Mensch die Anforderungsliste als vollstaendig freigegeben hat.
+  /// Wird bei jeder Aenderung an den Anforderungen wieder auf null gesetzt –
+  /// eine Freigabe gilt immer nur fuer die Liste, die geprueft wurde.
+  requirementsApprovedAt DateTime?
 
   requirements Requirement[]
   concept      Concept?
@@ -104,9 +108,8 @@ enum RequirementSource {
 
 /// Das aus den `Requirement`s erarbeitete Konzept fuer ein Projekt – aktuell
 /// Freitext, den der Berater selbst verfasst/einfuegt (kein Konzept-Agent).
-/// Sobald `status` auf FINALIZED gesetzt wird ("Konzept freigeben & Team
-/// starten"), springt `Project.status` auf ACTIVE und das Agenten-Team kann
-/// loslegen.
+/// `content` ist immer der aktuelle Arbeitsstand; jede Freigabe friert ihn als
+/// `ConceptVersion` ein. `finalizedAt` ist das Datum der letzten Freigabe.
 model Concept {
   id          String        @id @default(cuid())
   projectId   String        @unique
@@ -117,12 +120,30 @@ model Concept {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
+  versions ConceptVersion[]
+
   @@map("concepts")
 }
 
 enum ConceptStatus {
   DRAFT
   FINALIZED
+}
+
+/// Eingefrorener Stand des Konzepts zum Zeitpunkt einer Freigabe. Rein
+/// additiv: Eine Version wird nie ueberschrieben, weiterarbeiten am Konzept
+/// erzeugt bei der naechsten Freigabe die naechste Version. Damit ist
+/// nachvollziehbar, welchen Text der Kunde wann freigegeben hat.
+model ConceptVersion {
+  id         String   @id @default(cuid())
+  conceptId  String
+  concept    Concept  @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  version    Int
+  content    String
+  releasedAt DateTime @default(now())
+
+  @@unique([conceptId, version])
+  @@map("concept_versions")
 }
 
 /// Ein LLM-Agent mit einer bestimmten Rolle im virtuellen Team.
