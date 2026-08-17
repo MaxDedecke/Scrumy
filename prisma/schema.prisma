@@ -550,6 +550,11 @@ model Clarification {
   options  Json?
   /// Einordnung und Empfehlung des Scrum Masters (siehe clarificationPrep).
   agenda   String?
+  /// Weg, den der Product Owner empfiehlt, wenn er die Klärung trotzdem dem
+  /// Auftraggeber vorlegt (siehe clarificationTriage) – key aus `options`.
+  /// Vorausgewählt in der Oberfläche, damit ein Zustimmen ohne eigene
+  /// Formulierung reicht.
+  recommendedOptionKey String?
 
   status    ClarificationStatus @default(OPEN)
   decision  String?
@@ -618,6 +623,14 @@ model ReviewApproval {
   comment      String?
   decidedAt    DateTime?
   createdAt    DateTime       @default(now())
+
+  /// Entscheidung, die der Product Owner empfiehlt, wenn er die Freigabe
+  /// trotzdem dem Auftraggeber vorlegt (siehe reviewTriage). Vorausgewählt in
+  /// der Oberfläche, damit ein Zustimmen ohne eigene Formulierung reicht.
+  recommendedDecision  ReviewDecision?
+  /// Bei recommendedDecision=REJECTED die vom Product Owner formulierte
+  /// Rückmeldung – vorausgefüllt im Kommentarfeld.
+  recommendedFeedback  String?
 
   @@map("review_approvals")
 }

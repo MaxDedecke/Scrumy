@@ -263,7 +263,7 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
                     <ActionForm action={decideClarification} className="mt-3 flex flex-col gap-2.5">
                       <input type="hidden" name="clarificationId" value={clarification.id} />
 
-                      <ClarificationChoice options={options} />
+                      <ClarificationChoice options={options} recommendedKey={clarification.recommendedOptionKey} />
 
                       <button type="submit" className={`${buttonPrimaryClass} self-start`}>
                         Beschluss festhalten
@@ -275,7 +275,18 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
 
               {pendingReviews.map((review) => (
                 <article key={review.id} className="rounded-lg border border-hairline p-3.5">
-                  <p className="text-xs text-ink-3">Freigabe angefragt</p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <p className="text-xs text-ink-3">Freigabe angefragt</p>
+                    {/* Empfehlung des Product Owner, wenn er die Freigabe trotzdem
+                        vorlegt (siehe reviewTriage): Zustimmen soll ein Klick sein,
+                        kein Formulieren – deshalb hier sichtbar und unten im
+                        Kommentarfeld vorausgefüllt. */}
+                    {review.recommendedDecision && (
+                      <span className="pill pill-info">
+                        Empfehlung: {review.recommendedDecision === "APPROVED" ? "Freigeben" : "Nachbessern"}
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-1 text-sm font-medium text-ink">{review.ticket.title}</p>
                   {review.comment && <p className="mt-1 text-sm text-ink-2">{review.comment}</p>}
                   <ActionForm action={decideReview} className="mt-2.5 flex flex-wrap items-center gap-2">
@@ -283,13 +294,24 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
                     <input
                       type="text"
                       name="comment"
+                      defaultValue={review.recommendedFeedback ?? ""}
                       placeholder="Anmerkung (bei Nachbessern die Begründung)"
                       className={`${inputClass} min-w-48 flex-1`}
                     />
-                    <button type="submit" name="decision" value="APPROVED" className={buttonPrimaryClass}>
+                    <button
+                      type="submit"
+                      name="decision"
+                      value="APPROVED"
+                      className={`${buttonPrimaryClass}${review.recommendedDecision === "APPROVED" ? " ring-2 ring-offset-1 ring-offset-surface-1 ring-accent-border" : ""}`}
+                    >
                       Freigeben
                     </button>
-                    <button type="submit" name="decision" value="REJECTED" className={buttonDangerClass}>
+                    <button
+                      type="submit"
+                      name="decision"
+                      value="REJECTED"
+                      className={`${buttonDangerClass}${review.recommendedDecision === "REJECTED" ? " ring-2 ring-offset-1 ring-offset-surface-1 ring-accent-border" : ""}`}
+                    >
                       Nachbessern
                     </button>
                   </ActionForm>

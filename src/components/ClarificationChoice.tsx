@@ -17,8 +17,20 @@ import { inputClass } from "@/lib/ui";
 // Weg ist eine gleichberechtigte Auswahl mit dem Textfeld darin. Wer ins Feld
 // schreibt, wählt ihn automatisch – niemand muss daran denken, das Radio
 // umzustellen.
-export function ClarificationChoice({ options }: { options: ClarificationOption[] }) {
-  const [choice, setChoice] = useState(options[0]?.key ?? OWN_OPTION_KEY);
+//
+// `recommendedKey`: Legt der Product Owner eine Klärung trotzdem vor (siehe
+// clarificationTriage), empfiehlt er einen der Wege. Der steht dann statt des
+// ersten Wegs vorausgewählt da und trägt ein Pill – zustimmen soll ein Klick
+// sein, kein Formulieren.
+export function ClarificationChoice({
+  options,
+  recommendedKey,
+}: {
+  options: ClarificationOption[];
+  recommendedKey?: string | null;
+}) {
+  const recommended = recommendedKey ? options.find((option) => option.key === recommendedKey) : undefined;
+  const [choice, setChoice] = useState(recommended?.key ?? options[0]?.key ?? OWN_OPTION_KEY);
   const ownChosen = choice === OWN_OPTION_KEY;
 
   return (
@@ -37,7 +49,12 @@ export function ClarificationChoice({ options }: { options: ClarificationOption[
             className="mt-0.5 accent-[var(--color-accent-solid)]"
           />
           <span className="min-w-0">
-            <span className="block text-sm text-ink">{option.label}</span>
+            <span className="block text-sm text-ink">
+              {option.label}
+              {option.key === recommended?.key && (
+                <span className="ml-2 pill pill-info align-middle">Empfehlung</span>
+              )}
+            </span>
             {option.detail && <span className="mt-0.5 block text-xs text-ink-3">{option.detail}</span>}
           </span>
         </label>

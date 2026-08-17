@@ -63,18 +63,20 @@ ${options.map((option, index) => `${index + 1}. ${option.label}${option.detail ?
 
 Entscheide selbst, wenn eine falsche Wahl sich mit überschaubarem Aufwand wieder geradebiegen lässt. Leg die Klärung dem Auftraggeber vor (kritisch = true), wenn sie schwer umkehrbar ist – Datenverlust, Sicherheit oder Datenschutz, spürbare Mehrkosten, Auswirkungen auf Produktivsysteme oder Kundendaten, oder eine Änderung am Auftrag selbst. Im Zweifel: vorlegen.
 
+Nenne den empfohlenen Weg in jedem Fall, auch wenn du sie vorlegst – der Auftraggeber soll deiner Einschätzung notfalls mit einem Klick zustimmen können, statt selbst etwas zu formulieren.
+
 Antworte nur mit diesem JSON-Objekt:
 {
   "kritisch": true oder false,
   "begruendung": "ein bis zwei Sätze, wie du zu der Einschätzung kommst",
-  "gewaehlter_weg": "bei kritisch=false: der Titel des gewählten Wegs, wortgleich aus der Liste oben"
+  "empfohlener_weg": "immer angeben: der Titel des Wegs, den du empfiehlst, wortgleich aus der Liste oben"
 }`,
     });
 
     const parsed = extractJsonObject(text);
     const critical = Boolean(parsed.kritisch);
     const reasoning = typeof parsed.begruendung === "string" ? parsed.begruendung.trim().slice(0, 600) : "";
-    const chosenLabel = typeof parsed.gewaehlter_weg === "string" ? parsed.gewaehlter_weg.trim() : "";
+    const chosenLabel = typeof parsed.empfohlener_weg === "string" ? parsed.empfohlener_weg.trim() : "";
     const chosen = options.find(
       (option) => option.label.toLowerCase() === chosenLabel.toLowerCase() && chosenLabel.length > 0,
     );
@@ -88,14 +90,17 @@ Antworte nur mit diesem JSON-Objekt:
     }
 
     // Heikel, oder das Modell hat keinen der Wege eindeutig getroffen: Die
-    // Klärung bleibt offen, nur um die Einschätzung ergänzt. `updateMany` statt
-    // `update`: Hat der Mensch in der Zwischenzeit schon entschieden, darf die
+    // Klärung bleibt offen, nur um die Einschätzung ergänzt – inklusive des
+    // empfohlenen Wegs, damit die Oberfläche ihn vorauswählen kann und ein
+    // Zustimmen ohne eigene Formulierung reicht. `updateMany` statt `update`:
+    // Hat der Mensch in der Zwischenzeit schon entschieden, darf die
     // Einschätzung den Beschluss nicht mehr anfassen.
     const note = reasoning || "Das lege ich dir vor – zu heikel für eine Eigenentscheidung.";
     await prisma.clarification.updateMany({
       where: { id: clarificationId, status: "OPEN" },
       data: {
         agenda: [`**${role}:** ${note}`, clarification.agenda].filter(Boolean).join("\n\n"),
+        recommendedOptionKey: chosen?.key ?? null,
       },
     });
 

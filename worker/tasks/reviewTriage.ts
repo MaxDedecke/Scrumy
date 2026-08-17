@@ -23,6 +23,7 @@ import { prisma } from "@/lib/prisma";
 import { extractJsonObject } from "@/lib/llm";
 import { AGENT_ROLE_LABEL, PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
 import { resolveReview } from "@/lib/reviewDecision";
+import type { ReviewDecision } from "@/generated/prisma/client";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import type { ReviewTriagePayload } from "../taskTypes";
@@ -63,11 +64,13 @@ ${ticket.result ?? "(kein Abschlussbericht)"}
 
 Entscheide selbst, wenn eine falsche Entscheidung sich mit überschaubarem Aufwand wieder geradebiegen lässt – freigeben, was sich notfalls in einem späteren Ticket nachbessern lässt, oder mit klarer Rückmeldung zur Nacharbeit zurückschicken. Leg die Freigabe dem Auftraggeber vor (kritisch = true), wenn eine falsche Entscheidung schwer umkehrbar ist – Datenverlust, Sicherheit oder Datenschutz, spürbare Mehrkosten, Auswirkungen auf Produktivsysteme oder Kundendaten, oder eine Änderung am Auftrag selbst. Im Zweifel: vorlegen.
 
+Nenne deine Entscheidung in jedem Fall, auch wenn du sie vorlegst – der Auftraggeber soll deiner Einschätzung notfalls mit einem Klick zustimmen können, statt selbst etwas zu formulieren.
+
 Antworte nur mit diesem JSON-Objekt:
 {
   "kritisch": true oder false,
   "begruendung": "ein bis zwei Sätze, wie du zu der Einschätzung kommst",
-  "entscheidung": "freigeben oder nachbessern – nur wenn kritisch=false",
+  "entscheidung": "immer angeben: freigeben oder nachbessern",
   "rueckmeldung": "bei nachbessern: was der Kollege konkret ändern soll"
 }`,
     });
@@ -89,13 +92,21 @@ Antworte nur mit diesem JSON-Objekt:
     }
 
     // Heikel, oder das Modell hat keine eindeutige Entscheidung getroffen: Die
-    // Freigabe bleibt offen, nur um die Einschätzung ergänzt. `updateMany`
-    // statt `update`: Hat der Mensch in der Zwischenzeit schon entschieden,
-    // darf die Einschätzung den Beschluss nicht mehr anfassen.
+    // Freigabe bleibt offen, nur um die Einschätzung ergänzt – inklusive der
+    // empfohlenen Entscheidung, damit die Oberfläche sie vorauswählen kann und
+    // ein Zustimmen ohne eigene Formulierung reicht. `updateMany` statt
+    // `update`: Hat der Mensch in der Zwischenzeit schon entschieden, darf die
+    // Einschätzung den Beschluss nicht mehr anfassen.
     const note = reasoning || "Das lege ich dir vor – zu heikel für eine Eigenentscheidung.";
+    const recommendedDecision: ReviewDecision | null =
+      verdict === "freigeben" ? "APPROVED" : verdict === "nachbessern" ? "REJECTED" : null;
     await prisma.reviewApproval.updateMany({
       where: { id: reviewId, decision: "PENDING" },
-      data: { comment: [`**${role}:** ${note}`, review.comment].filter(Boolean).join("\n\n") },
+      data: {
+        comment: [`**${role}:** ${note}`, review.comment].filter(Boolean).join("\n\n"),
+        recommendedDecision,
+        recommendedFeedback: recommendedDecision === "REJECTED" ? feedback || null : null,
+      },
     });
 
     await logActivity({
