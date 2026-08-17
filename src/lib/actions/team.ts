@@ -199,3 +199,44 @@ export async function decideReview(formData: FormData): Promise<ActionResult> {
   revalidateProject(projectId);
   return ok(outcome);
 }
+
+/// „Team soll entscheiden": Liegt vom Product Owner schon eine Empfehlung vor
+/// (siehe reviewTriage), setzt sie das Team sofort um. Sonst prueft der
+/// Product Owner die Freigabe jetzt selbst, mit `forceDecide` – auch bei als
+/// kritisch markierten Tickets, die reviewTriage sonst nie anfasst: Diesmal
+/// hat der Auftraggeber die Entscheidung ausdruecklich abgegeben.
+export async function delegateReview(formData: FormData): Promise<ActionResult> {
+  const reviewId = str(formData, "reviewId");
+  if (!reviewId) return fail("Keine Freigabe angegeben.");
+
+  const review = await prisma.reviewApproval.findUnique({ where: { id: reviewId }, include: { ticket: true } });
+  if (!review) return fail("Freigabe nicht gefunden.");
+  if (review.decision !== "PENDING") return note("Diese Freigabe ist bereits entschieden.");
+
+  const projectId = review.ticket.projectId;
+
+  if (review.recommendedDecision) {
+    const outcome = await resolveReview({
+      reviewId,
+      decision: review.recommendedDecision,
+      comment: review.recommendedFeedback,
+      decidedBy: "Team (auf deinen Wunsch)",
+    });
+    revalidateProject(projectId);
+    return ok(`An das Team delegiert. ${outcome}`);
+  }
+
+  const decider = (await agentForRole(projectId, "PRODUCT_OWNER")) ?? (await agentForRole(projectId, "SCRUM_MASTER"));
+  if (!decider) return fail("Kein Product Owner oder Scrum Master im Team – bitte selbst entscheiden.");
+
+  await enqueueAgentJob("reviewTriage", {
+    agentId: decider.id,
+    projectId,
+    reviewId,
+    reason: "Auftraggeber hat die Entscheidung delegiert",
+    forceDecide: true,
+  });
+
+  revalidateProject(projectId);
+  return ok(`${decider.name} entscheidet jetzt – die Freigabe schließt sich gleich von selbst.`);
+}

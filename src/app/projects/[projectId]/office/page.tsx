@@ -19,7 +19,7 @@ import { ConfirmButton } from "@/components/ConfirmButton";
 import { IconSubmit } from "@/components/IconSubmit";
 import { Panel, PanelEmpty, PanelGrid, PanelStrip } from "@/components/Panel";
 import { ArchiveIcon, SendIcon } from "@/components/icons";
-import { askTeam, decideReview } from "@/lib/actions/team";
+import { askTeam, decideReview, delegateReview } from "@/lib/actions/team";
 import {
   decideClarification,
   forwardClarification,
@@ -29,6 +29,7 @@ import { readOptions } from "@/lib/clarificationOptions";
 import {
   buttonDangerClass,
   buttonPrimaryClass,
+  buttonSecondaryClass,
   iconButtonClass,
   iconButtonDangerClass,
   inputClass,
@@ -313,6 +314,12 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
                       className={`${buttonDangerClass}${review.recommendedDecision === "REJECTED" ? " ring-2 ring-offset-1 ring-offset-surface-1 ring-accent-border" : ""}`}
                     >
                       Nachbessern
+                    </button>
+                  </ActionForm>
+                  <ActionForm action={delegateReview} className="mt-1.5">
+                    <input type="hidden" name="reviewId" value={review.id} />
+                    <button type="submit" className={buttonSecondaryClass}>
+                      Team soll entscheiden
                     </button>
                   </ActionForm>
                 </article>

@@ -8,12 +8,16 @@
 // heikel, bleibt sie unangetastet im Büro liegen, nur um seine Einschätzung
 // ergänzt.
 //
-// Läuft nie für als kritisch markierte Tickets: `isCritical` erzwingt
-// menschliches Review vor Deploy, und diese Einstufung hat der Product Owner
-// selbst schon bei der Sprint-Planung getroffen (siehe worker/tasks/
-// sprintPlanning.ts) – eine erneute Prüfung durch dieselbe Rolle würde den
-// eigenen Beschluss nur unterlaufen. `requestHumanReview` in ticketWork.ts
-// reiht diesen Task deshalb gar nicht erst ein.
+// Läuft von sich aus nie für als kritisch markierte Tickets: `isCritical`
+// erzwingt menschliches Review vor Deploy, und diese Einstufung hat der
+// Product Owner selbst schon bei der Sprint-Planung getroffen (siehe
+// worker/tasks/sprintPlanning.ts) – eine erneute Prüfung durch dieselbe Rolle
+// würde den eigenen Beschluss nur unterlaufen. `requestHumanReview` in
+// ticketWork.ts reiht diesen Task deshalb gar nicht erst ein.
+//
+// Ausnahme: `forceDecide` (siehe delegateReview-Action). Delegiert der
+// Auftraggeber ausdrücklich, gilt das auch für ein kritisches Ticket – seine
+// Entscheidung, nicht die des Product Owner, hebt die Ausnahme auf.
 //
 // Wie clarificationTriage: kein eigener Klärungs-Umschlag im Fehlerfall.
 // Scheitert die Prüfung, bleibt die Freigabe einfach ungeprüft im Büro
@@ -29,7 +33,7 @@ import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import type { ReviewTriagePayload } from "../taskTypes";
 
 const reviewTriage: Task<"reviewTriage"> = async (payload: ReviewTriagePayload, helpers) => {
-  const { agentId, projectId, reviewId } = payload;
+  const { agentId, projectId, reviewId, forceDecide } = payload;
 
   const review = await prisma.reviewApproval.findUnique({ where: { id: reviewId }, include: { ticket: true } });
   if (!review || review.decision !== "PENDING") return;
@@ -50,7 +54,11 @@ const reviewTriage: Task<"reviewTriage"> = async (payload: ReviewTriagePayload, 
       maxTokens: 1200,
       system: `${TEAM_GRUNDREGELN}
 
-Du bist ${agent.name}, ${AGENT_ROLE_LABEL[agent.role]}. Das Team bittet den Auftraggeber um eine Freigabe. Bevor sie vorgelegt wird, prüfst du: Darfst du sie im Sinne des Auftrags selbst entscheiden, oder gehört sie ihm vorgelegt? Du antwortest ausschließlich mit einem JSON-Objekt.`,
+Du bist ${agent.name}, ${AGENT_ROLE_LABEL[agent.role]}. ${
+        forceDecide
+          ? "Der Auftraggeber hat diese Freigabe ausdrücklich an dich delegiert – er will keine Rückfrage mehr, sondern deine Entscheidung. Du legst sie unter keinen Umständen erneut vor."
+          : "Das Team bittet den Auftraggeber um eine Freigabe. Bevor sie vorgelegt wird, prüfst du: Darfst du sie im Sinne des Auftrags selbst entscheiden, oder gehört sie ihm vorgelegt?"
+      } Du antwortest ausschließlich mit einem JSON-Objekt.`,
       prompt: `${context}
 
 # Das Ticket
@@ -62,9 +70,13 @@ ${review.comment ?? "(kein Grund vermerkt)"}
 ## Stand der Umsetzung
 ${ticket.result ?? "(kein Abschlussbericht)"}
 
-Entscheide selbst, wenn eine falsche Entscheidung sich mit überschaubarem Aufwand wieder geradebiegen lässt – freigeben, was sich notfalls in einem späteren Ticket nachbessern lässt, oder mit klarer Rückmeldung zur Nacharbeit zurückschicken. Leg die Freigabe dem Auftraggeber vor (kritisch = true), wenn eine falsche Entscheidung schwer umkehrbar ist – Datenverlust, Sicherheit oder Datenschutz, spürbare Mehrkosten, Auswirkungen auf Produktivsysteme oder Kundendaten, oder eine Änderung am Auftrag selbst. Im Zweifel: vorlegen.
+${
+  forceDecide
+    ? 'Entscheide jetzt: freigeben oder zur Nachbesserung zurückschicken – auch wenn du das normalerweise vorlegen würdest. "kritisch" gibt weiterhin an, wie heikel die Sache ist (das merkt sich das Protokoll), ändert aber nichts mehr daran, dass du jetzt entscheidest.'
+    : "Entscheide selbst, wenn eine falsche Entscheidung sich mit überschaubarem Aufwand wieder geradebiegen lässt – freigeben, was sich notfalls in einem späteren Ticket nachbessern lässt, oder mit klarer Rückmeldung zur Nacharbeit zurückschicken. Leg die Freigabe dem Auftraggeber vor (kritisch = true), wenn eine falsche Entscheidung schwer umkehrbar ist – Datenverlust, Sicherheit oder Datenschutz, spürbare Mehrkosten, Auswirkungen auf Produktivsysteme oder Kundendaten, oder eine Änderung am Auftrag selbst. Im Zweifel: vorlegen."
+}
 
-Nenne deine Entscheidung in jedem Fall, auch wenn du sie vorlegst – der Auftraggeber soll deiner Einschätzung notfalls mit einem Klick zustimmen können, statt selbst etwas zu formulieren.
+Nenne deine Entscheidung in jedem Fall${forceDecide ? "" : ", auch wenn du sie vorlegst"} – der Auftraggeber soll deiner Einschätzung notfalls mit einem Klick zustimmen können, statt selbst etwas zu formulieren.
 
 Antworte nur mit diesem JSON-Objekt:
 {
@@ -88,6 +100,20 @@ Antworte nur mit diesem JSON-Objekt:
       // `resolveReview` haelt den Beschluss bereits im Protokoll fest – ein
       // zweiter Eintrag waere nur Wiederholung.
       await resolveReview({ reviewId, decision, comment, decidedBy: role });
+      return;
+    }
+
+    // Bei `forceDecide` gibt es keinen Vorlage-Ausweg mehr: Trifft das Modell
+    // keine eindeutige Entscheidung, greift „nachbessern" als sicherer
+    // Standard – lieber eine Runde Nacharbeit zu viel, als ohne echte Prüfung
+    // freizugeben.
+    if (forceDecide) {
+      const decision = verdict === "freigeben" ? "APPROVED" : "REJECTED";
+      const comment =
+        decision === "APPROVED"
+          ? reasoning || null
+          : [feedback, reasoning].filter(Boolean).join(" – ") || "Bitte nochmal prüfen.";
+      await resolveReview({ reviewId, decision, comment, decidedBy: `${role} · auf deinen Wunsch entschieden` });
       return;
     }
 

@@ -33,6 +33,13 @@ export interface ClarificationOption {
 /// sondern das Recht des Auftraggebers, eine eigene Antwort zu geben.
 export const OWN_OPTION_KEY = "__own";
 
+/// Der Weg, der die Entscheidung an das Team zurückgibt, statt sie selbst zu
+/// treffen. Anders als `OWN_OPTION_KEY` ist das kein Textfeld – der Klick
+/// allein muss reichen, sonst landet „entscheide du das bitte" wortwörtlich
+/// als unausführbarer Beschluss im Protokoll und die Klärung kommt genauso
+/// zurück (siehe decideClarification in actions/clarifications.ts).
+export const DELEGATE_OPTION_KEY = "__delegate";
+
 /// Wie viele Wege ein Agent höchstens vorschlagen darf. Mehr macht die
 /// Entscheidung nicht besser, nur länger.
 const MAX_AGENT_OPTIONS = 4;

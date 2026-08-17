@@ -13,6 +13,11 @@
 // (Sprint-Budget, leerer Backlog, fehlender Kollege, …) laufen bewusst ohne
 // Vorbereitung und damit auch ohne Prüfung – sie gehören immer dem Menschen.
 //
+// `forceDecide` (siehe decideClarification-Action): Der Auftraggeber hat
+// selbst „Team soll entscheiden" gewählt. Dann entfällt der Vorlage-Ausweg
+// komplett – sonst würde genau die Klärung, die gerade delegiert wurde, dem
+// Menschen postwendend wieder vor die Tür gelegt.
+//
 // Wie clarificationPrep: kein eigener Klärungs-Umschlag im Fehlerfall. Scheitert
 // die Prüfung, bleibt die Klärung einfach ungeprüft im Büro stehen – lieber
 // das als eine falsch automatisch getroffene Entscheidung.
@@ -27,7 +32,7 @@ import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import type { ClarificationTriagePayload } from "../taskTypes";
 
 const clarificationTriage: Task<"clarificationTriage"> = async (payload: ClarificationTriagePayload, helpers) => {
-  const { agentId, projectId, clarificationId } = payload;
+  const { agentId, projectId, clarificationId, forceDecide } = payload;
 
   const clarification = await prisma.clarification.findUnique({ where: { id: clarificationId } });
   if (!clarification || clarification.status !== "OPEN") return;
@@ -52,7 +57,11 @@ const clarificationTriage: Task<"clarificationTriage"> = async (payload: Clarifi
       maxTokens: 1200,
       system: `${TEAM_GRUNDREGELN}
 
-Du bist ${agent.name}, ${AGENT_ROLE_LABEL[agent.role]}. Der Scrum Master hat eine Klärung mit gangbaren Wegen vorbereitet. Bevor sie dem Auftraggeber vorgelegt wird, prüfst du: Darfst du sie im Sinne des Auftrags selbst entscheiden, oder gehört sie ihm vorgelegt? Du antwortest ausschließlich mit einem JSON-Objekt.`,
+Du bist ${agent.name}, ${AGENT_ROLE_LABEL[agent.role]}. ${
+        forceDecide
+          ? "Der Auftraggeber hat diese Klärung ausdrücklich an dich delegiert – er will keine Rückfrage mehr, sondern deine Entscheidung. Du legst sie unter keinen Umständen erneut vor."
+          : "Der Scrum Master hat eine Klärung mit gangbaren Wegen vorbereitet. Bevor sie dem Auftraggeber vorgelegt wird, prüfst du: Darfst du sie im Sinne des Auftrags selbst entscheiden, oder gehört sie ihm vorgelegt?"
+      } Du antwortest ausschließlich mit einem JSON-Objekt.`,
       prompt: `${context}
 
 # Die Klärung
@@ -61,9 +70,13 @@ ${clarification.agenda ? `\nEntscheidungsvorlage des Scrum Masters:\n${clarifica
 Wege:
 ${options.map((option, index) => `${index + 1}. ${option.label}${option.detail ? ` – ${option.detail}` : ""}`).join("\n")}
 
-Entscheide selbst, wenn eine falsche Wahl sich mit überschaubarem Aufwand wieder geradebiegen lässt. Leg die Klärung dem Auftraggeber vor (kritisch = true), wenn sie schwer umkehrbar ist – Datenverlust, Sicherheit oder Datenschutz, spürbare Mehrkosten, Auswirkungen auf Produktivsysteme oder Kundendaten, oder eine Änderung am Auftrag selbst. Im Zweifel: vorlegen.
+${
+  forceDecide
+    ? 'Wähle jetzt einen der Wege oben – auch wenn du ihn normalerweise vorlegen würdest. "kritisch" gibt weiterhin an, wie heikel die Sache ist (das merkt sich das Protokoll), ändert aber nichts mehr daran, dass du jetzt entscheidest.'
+    : "Entscheide selbst, wenn eine falsche Wahl sich mit überschaubarem Aufwand wieder geradebiegen lässt. Leg die Klärung dem Auftraggeber vor (kritisch = true), wenn sie schwer umkehrbar ist – Datenverlust, Sicherheit oder Datenschutz, spürbare Mehrkosten, Auswirkungen auf Produktivsysteme oder Kundendaten, oder eine Änderung am Auftrag selbst. Im Zweifel: vorlegen."
+}
 
-Nenne den empfohlenen Weg in jedem Fall, auch wenn du sie vorlegst – der Auftraggeber soll deiner Einschätzung notfalls mit einem Klick zustimmen können, statt selbst etwas zu formulieren.
+Nenne den empfohlenen Weg in jedem Fall${forceDecide ? "" : ", auch wenn du sie vorlegst"} – der Auftraggeber soll deiner Einschätzung notfalls mit einem Klick zustimmen können, statt selbst etwas zu formulieren.
 
 Antworte nur mit diesem JSON-Objekt:
 {
@@ -81,11 +94,19 @@ Antworte nur mit diesem JSON-Objekt:
       (option) => option.label.toLowerCase() === chosenLabel.toLowerCase() && chosenLabel.length > 0,
     );
 
-    if (!critical && chosen) {
+    // Bei `forceDecide` gibt es keinen Vorlage-Ausweg mehr: Trifft das Modell
+    // keinen der Wege eindeutig, greift die schon vorhandene Empfehlung
+    // (falls die Klärung vorher schon einmal geprüft wurde) und sonst der
+    // erste Weg – Hauptsache, es entsteht ein Beschluss statt eines erneuten
+    // Rückspiels an den Auftraggeber.
+    const resolved =
+      chosen ?? (forceDecide ? (options.find((option) => option.key === clarification.recommendedOptionKey) ?? options[0]) : undefined);
+
+    if (resolved && (forceDecide || !critical)) {
       // `resolveClarification` haelt den Beschluss bereits im Protokoll fest
       // (Frage + gewaehlter Weg) – ein zweiter Eintrag waere nur Wiederholung.
-      const decision = `${chosen.label}${reasoning ? ` – ${reasoning}` : ""}`;
-      await resolveClarification({ clarificationId, decision, effect: chosen.effect, decidedBy: role });
+      const decision = `${resolved.label}${reasoning ? ` – ${reasoning}` : ""}${forceDecide ? " · auf deinen Wunsch entschieden" : ""}`;
+      await resolveClarification({ clarificationId, decision, effect: resolved.effect, decidedBy: role });
       return;
     }
 

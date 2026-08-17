@@ -13,8 +13,10 @@ import { prisma } from "@/lib/prisma";
 import { fail, note, ok, type ActionResult } from "@/lib/actions/result";
 import { revalidateProject } from "@/lib/actions/revalidate";
 import { resolveClarification } from "@/lib/clarificationDecision";
-import { OWN_OPTION_KEY, readOptions, type ClarificationEffect } from "@/lib/clarificationOptions";
-import type { ConnectorProvider, SupportChannel } from "@/generated/prisma/client";
+import { DELEGATE_OPTION_KEY, OWN_OPTION_KEY, readOptions, type ClarificationEffect } from "@/lib/clarificationOptions";
+import { agentForRole } from "@/lib/team";
+import type { Clarification, ConnectorProvider, SupportChannel } from "@/generated/prisma/client";
+import { enqueueAgentJob } from "../../../worker/queue";
 
 function str(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
@@ -34,6 +36,8 @@ export async function decideClarification(formData: FormData): Promise<ActionRes
   });
   if (!clarification) return fail("Klärung nicht gefunden.");
   if (clarification.status !== "OPEN") return note("Diese Klärung ist bereits entschieden.");
+
+  if (optionKey === DELEGATE_OPTION_KEY) return delegateClarification(clarification);
 
   // „Eigener Weg" ist keine gespeicherte Option, sondern das Textfeld: Dann
   // zaehlt allein, was der Mensch aufgeschrieben hat – ohne dass ihm der Titel
@@ -59,6 +63,51 @@ export async function decideClarification(formData: FormData): Promise<ActionRes
   });
   revalidateProject(projectId);
   return ok(`Beschluss festgehalten. ${outcome}`);
+}
+
+/// „Team soll entscheiden": Liegt vom Product Owner schon eine Empfehlung vor
+/// (siehe clarificationTriage), setzt sie das Team sofort um – kein LLM-Aufruf
+/// noetig, der Mensch hat ja gerade zugestimmt. Sonst prueft der Product Owner
+/// die Klaerung jetzt selbst, mit `forceDecide`: anders als beim normalen
+/// Triage-Lauf legt er sie diesmal unter keinen Umstaenden erneut vor.
+async function delegateClarification(
+  clarification: Clarification & { ticket: { id: string } | null },
+): Promise<ActionResult> {
+  const options = readOptions(clarification.options);
+  const recommended = clarification.recommendedOptionKey
+    ? options.find((option) => option.key === clarification.recommendedOptionKey)
+    : undefined;
+
+  if (recommended) {
+    const outcome = await resolveClarification({
+      clarificationId: clarification.id,
+      decision: `${recommended.label} – auf deinen Wunsch entschieden`,
+      effect: recommended.effect,
+      decidedBy: "Team (auf deinen Wunsch)",
+    });
+    revalidateProject(clarification.projectId);
+    return ok(`An das Team delegiert. ${outcome}`);
+  }
+
+  if (options.length === 0) {
+    return fail("Es gibt noch keine Wege, zwischen denen das Team wählen könnte – bitte kurz warten oder selbst entscheiden.");
+  }
+
+  const decider =
+    (await agentForRole(clarification.projectId, "PRODUCT_OWNER")) ??
+    (await agentForRole(clarification.projectId, "SCRUM_MASTER"));
+  if (!decider) return fail("Kein Product Owner oder Scrum Master im Team – bitte selbst einen Weg auswählen.");
+
+  await enqueueAgentJob("clarificationTriage", {
+    agentId: decider.id,
+    projectId: clarification.projectId,
+    clarificationId: clarification.id,
+    reason: "Auftraggeber hat die Entscheidung delegiert",
+    forceDecide: true,
+  });
+
+  revalidateProject(clarification.projectId);
+  return ok(`${decider.name} entscheidet jetzt – die Klärung schließt sich gleich von selbst.`);
 }
 
 /// Klaerung zuruecknehmen – wenn sich die Frage von selbst erledigt hat.

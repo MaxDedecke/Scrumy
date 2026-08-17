@@ -59,6 +59,9 @@ export interface ClarificationTriagePayload {
   projectId: string;
   clarificationId: string;
   reason: string;
+  /** Der Auftraggeber hat „Team soll entscheiden" gewählt: kein Vorlegen mehr
+   *  erlaubt, selbst wenn die Klärung als kritisch gilt. */
+  forceDecide?: boolean;
 }
 
 /** Product Owner prüft eine angefragte Freigabe: selbst freigeben/zur
@@ -69,6 +72,9 @@ export interface ReviewTriagePayload {
   projectId: string;
   reviewId: string;
   reason: string;
+  /** Der Auftraggeber hat „Team soll entscheiden" gewählt: kein Vorlegen mehr
+   *  erlaubt, selbst wenn das Ticket als kritisch gilt. */
+  forceDecide?: boolean;
 }
 
 declare global {
