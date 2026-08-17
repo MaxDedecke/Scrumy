@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-import { createOrganization, deleteOrganization, updateOrganization } from "@/lib/actions/organizations";
+import { deleteOrganization, updateOrganization } from "@/lib/actions/organizations";
 import { createProject } from "@/lib/actions/projects";
 import { ActionForm } from "@/components/ActionForm";
 import { ConfirmButton } from "@/components/ConfirmButton";
+import { NewOrganizationDialog } from "@/components/NewOrganizationDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { Disclosure, formGridClass } from "@/components/Disclosure";
 import { EmptyHint } from "@/components/Section";
@@ -35,30 +36,9 @@ export default async function DashboardPage() {
       <PageHeader
         context="Übersicht"
         title="Kunden & Projekte"
+        actions={<NewOrganizationDialog />}
         description="Für jeden Kunden läuft ein virtuelles Scrum-Team aus LLM-Agenten, das dessen Individualsoftware baut und wartet – mit menschlichem Review bei kritischen Änderungen."
       />
-
-      <Disclosure label="Neuer Kunde" className="mb-8">
-        <ActionForm action={createOrganization} className={formGridClass}>
-          <div>
-            <label className={labelClass} htmlFor="org-name">
-              Name
-            </label>
-            <input id="org-name" name="name" required className={inputClass} placeholder="Musterfirma GmbH" />
-          </div>
-          <div>
-            <label className={labelClass} htmlFor="org-industry">
-              Branche (optional)
-            </label>
-            <input id="org-industry" name="industry" className={inputClass} placeholder="z.B. Großhandel" />
-          </div>
-          <div className="sm:col-span-2">
-            <button type="submit" className={buttonPrimaryClass}>
-              Kunde anlegen
-            </button>
-          </div>
-        </ActionForm>
-      </Disclosure>
 
       {organizations.length === 0 ? (
         <EmptyHint>Noch keine Kunden angelegt.</EmptyHint>

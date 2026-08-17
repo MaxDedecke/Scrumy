@@ -19,11 +19,14 @@ export function ActionForm({
   children,
   className,
   encType,
+  onResult,
 }: {
   action: (formData: FormData) => Promise<ActionResult>;
   children: ReactNode;
   className?: string;
   encType?: string;
+  /** Clientseitige Reaktion nach einer beantworteten Action, z.B. Dialog schließen. */
+  onResult?: (result: ActionResult) => void;
 }) {
   const showToast = useToast();
   const router = useRouter();
@@ -47,6 +50,7 @@ export function ActionForm({
         }
 
         showToast({ variant: result.status, message: result.message });
+        onResult?.(result);
         if (result.redirectTo) router.push(result.redirectTo);
       }}
     >
