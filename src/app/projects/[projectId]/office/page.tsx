@@ -273,14 +273,14 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
                     <input
                       type="text"
                       name="comment"
-                      placeholder="Anmerkung (bei Rückweisung die Begründung)"
+                      placeholder="Anmerkung (bei Nachbessern die Begründung)"
                       className={`${inputClass} min-w-48 flex-1`}
                     />
                     <button type="submit" name="decision" value="APPROVED" className={buttonPrimaryClass}>
                       Freigeben
                     </button>
                     <button type="submit" name="decision" value="REJECTED" className={buttonDangerClass}>
-                      Zurückweisen
+                      Nachbessern
                     </button>
                   </ActionForm>
                 </article>

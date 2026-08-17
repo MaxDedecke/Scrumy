@@ -217,7 +217,7 @@ export async function decideReview(formData: FormData): Promise<ActionResult> {
         actor: "Mensch",
         action: decision === "APPROVED" ? "human_approved" : "human_rejected",
         detail:
-          `„${ticket.title}" ${decision === "APPROVED" ? "freigegeben" : "zurückgewiesen"}` +
+          `„${ticket.title}" ${decision === "APPROVED" ? "freigegeben" : "zur Nachbesserung zurückgegeben"}` +
           (comment ? `: ${comment}` : ""),
       },
     }),
@@ -242,7 +242,7 @@ export async function decideReview(formData: FormData): Promise<ActionResult> {
         agentId: assignee.id,
         projectId,
         ticketId: ticket.id,
-        reason: `Nacharbeit nach Rückweisung durch den Auftraggeber: ${(comment ?? "").slice(0, 200)}`,
+        reason: `Nacharbeit nach Nachbesserung durch den Auftraggeber: ${(comment ?? "").slice(0, 200)}`,
       });
     }
   }
@@ -251,6 +251,6 @@ export async function decideReview(formData: FormData): Promise<ActionResult> {
   return ok(
     decision === "APPROVED"
       ? `„${ticket.title}" freigegeben.`
-      : `„${ticket.title}" zurückgewiesen – das Team arbeitet nach.`,
+      : `„${ticket.title}" zur Nachbesserung zurückgegeben – das Team arbeitet nach.`,
   );
 }

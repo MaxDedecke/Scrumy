@@ -288,7 +288,7 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   review_rework: "QA: Nacharbeit",
   human_review_requested: "Freigabe angefragt",
   human_approved: "Vom Menschen freigegeben",
-  human_rejected: "Vom Menschen zurückgewiesen",
+  human_rejected: "Nachbesserung angefordert",
   inquiry_answered: "Rückfrage beantwortet",
   clarification_opened: "Klärung einberufen",
   clarification_raised: "Agent bittet um Entscheidung",
