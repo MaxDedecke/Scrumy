@@ -21,7 +21,13 @@ ENV NODE_ENV=production
 
 # git gehoert zur Laufzeit dazu: Die Agenten arbeiten in echten lokalen
 # Repositories (siehe src/lib/workspace.ts), Commits sind ihr Arbeitsnachweis.
-RUN apk add --no-cache git
+#
+# docker-cli + su-exec sind nur fuer den "app"-Dienst da (siehe
+# docker/app-entrypoint.sh, src/lib/preview.ts): jede Frontend-Vorschau laeuft
+# als eigener Sibling-Container statt als Kindprozess in diesem Container.
+# "worker" bekommt dieselben Pakete mit (ein Image fuer beide Dienste), nutzt
+# sie aber nicht – vernachlaessigbare Groesse.
+RUN apk add --no-cache git docker-cli su-exec
 
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs
@@ -33,10 +39,16 @@ RUN mkdir -p /workspaces && chown nextjs:nodejs /workspaces
 ENV WORKSPACE_ROOT=/workspaces
 
 COPY --from=builder --chown=nextjs:nodejs /app ./
+RUN chmod +x docker/app-entrypoint.sh
 
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 
-# Migrationen vor jedem Start anwenden, dann den Server starten.
+# Migrationen vor jedem Start anwenden, dann den Server starten. "worker"
+# ueberschreibt CMD (siehe docker-compose.yml) und laeuft damit als "nextjs"
+# (Default hier oben) direkt durch. "app" ueberschreibt zusaetzlich
+# ENTRYPOINT + user (siehe docker-compose.yml), um kurz als root den
+# Docker-Socket nutzbar zu machen, bevor es selbst auf "nextjs" wechselt –
+# CMD bleibt dabei unveraendert, docker/app-entrypoint.sh reicht es durch.
 CMD ["sh", "-c", "npx prisma migrate deploy && npm run start"]

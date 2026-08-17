@@ -19,6 +19,14 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # Startet zunaechst als root (docker/app-entrypoint.sh), damit der
+    # gemountete Docker-Socket nutzbar wird, dann sofort auf "nextjs" fallen
+    # gelassen (siehe dort und src/lib/preview.ts). Ein ueberschriebenes
+    # ENTRYPOINT verwirft das im Dockerfile gebackene CMD, deshalb hier
+    # explizit erneut mitgeben – app-entrypoint.sh reicht es per "$@" durch.
+    user: root
+    entrypoint: ["/app/docker/app-entrypoint.sh"]
+    command: ["sh", "-c", "npx prisma migrate deploy && npm run start"]
     depends_on:
       db:
         condition: service_healthy
@@ -30,21 +38,37 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
-      # Portbereich fuer die Frontend-Vorschau (siehe src/lib/preview.ts). Jede
-      # laufende Vorschau bekommt einen freien Port aus diesem Bereich und
-      # laeuft dort an ihrer eigenen Seitenwurzel – kein Pfad-Proxy noetig, das
-      # iframe zeigt direkt auf <host>:<port>. Deshalb muss der ganze Bereich
-      # veroeffentlicht sein, nicht nur der App-Port.
+      # Frontend-Vorschau (siehe src/lib/preview.ts): jede laufende Vorschau
+      # ist ein eigener, ressourcenbegrenzter Sibling-Container aus dem Image
+      # unten, verbunden mit "app" ueber ein eigenes, isoliertes Netz (siehe
+      # "networks" unten – NICHT das Netz von db/worker) und dasselbe
+      # Workspace-Volume (nur lesend fuer die Erkennung gebraucht; der
+      # Vorschau-Container selbst schreibt node_modules/Build-Cache).
+      PREVIEW_DOCKER_NETWORK: scrumy_preview
+      PREVIEW_WORKSPACE_VOLUME: scrumy_scrumy_workspaces
+      PREVIEW_RUNNER_IMAGE: scrumy-preview-runner
+      # Portbereich, aus dem jede laufende Vorschau einen Port bekommt. Jeder
+      # Vorschau-Container veroeffentlicht seinen eigenen Port selbst (siehe
+      # "docker run -p" in src/lib/preview.ts) – NICHT "app" hier drunter,
+      # das wuerde denselben Hostport doppelt belegen wollen.
       PREVIEW_PORT_RANGE_START: "4100"
       PREVIEW_PORT_RANGE_END: "4119"
     ports:
       - "3001:3000"
-      - "4100-4119:4100-4119"
     volumes:
-      # Ueberwiegend lesend (Commit-Historie und Diffs in den Nachweisen), seit
-      # der Frontend-Vorschau aber auch schreibend: `npm install` und der
-      # Dev-Server legen node_modules/Build-Cache im Arbeitsverzeichnis an.
+      # Lesend: Commit-Historie/Diffs in den Nachweisen, und die
+      # Frontend-Erkennung der Vorschau (package.json/index.html suchen).
       - scrumy_workspaces:/workspaces
+      # Fuer die Frontend-Vorschau: startet Sibling-Container auf demselben
+      # Docker-Host. Das ist praktisch aequivalent zu Root-Rechten auf dem
+      # Host (wer den Socket erreicht, kann beliebige Container starten) –
+      # ein bewusster, dokumentierter Kompromiss fuer dieses interne Tool,
+      # kein Schritt, der leichtfertig auf eine oeffentlich erreichbare
+      # Instanz uebertragen werden sollte.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - default
+      - scrumy_preview
 
   # Fuehrt die eigentliche Agenten-Arbeit aus (Job-Queue via graphile-worker),
   # komplett getrennt vom Next.js-App-Container. Skaliert horizontal unabhaengig
@@ -74,6 +98,40 @@ services:
       # Schreibend: hier committen die Agenten.
       - scrumy_workspaces:/workspaces
 
+  # Kein laufender Dienst, nur ein Image: die generische Laufzeit fuer JEDE
+  # Frontend-Vorschau (siehe docker/preview-runner.Dockerfile). "app" startet
+  # daraus pro laufender Vorschau einen eigenen Container per Docker-API, das
+  # hier baut/aktualisiert nur das Image dafuer:
+  #   docker compose build preview-runner
+  preview-runner:
+    build:
+      context: .
+      dockerfile: docker/preview-runner.Dockerfile
+    image: scrumy-preview-runner
+    profiles: ["build-only"]
+
 volumes:
+  # Explizit an die schon bestehenden, echten Volume-Namen gepinnt
+  # (`docker volume ls`), NICHT an die kurzen Compose-Schluessel unten
+  # (`external: true` heisst: Compose legt sie nie an oder loescht sie,
+  # sondern nutzt nur, was schon da ist). Grund: ohne "external" wuerde ein
+  # anderer Projektname (z.B. nach einem Verzeichnis-Umzug) einen NEUEN,
+  # leeren Volume-Namen ergeben – und die ganze Datenbank samt allen
+  # Kunden-Repos schiene "verschwunden". PREVIEW_WORKSPACE_VOLUME oben
+  # referenziert denselben festen Namen.
   scrumy_db_data:
+    external: true
+    name: scrumy_scrumy_db_data
   scrumy_workspaces:
+    external: true
+    name: scrumy_scrumy_workspaces
+
+networks:
+  # Eigenes Netz fuer die Frontend-Vorschau: nur "app" und die Vorschau-
+  # Container sind hier drin, NICHT "db" oder "worker" – ein Vorschau-
+  # Container (generierter, potenziell fehlerhafter Code) kommt damit
+  # netzwerkseitig nicht an die Datenbank oder die Agenten-Arbeit heran.
+  # Fester Name (statt vom Projektnamen abgeleitet), damit "docker run
+  # --network" in src/lib/preview.ts nicht raten muss.
+  scrumy_preview:
+    name: scrumy_preview

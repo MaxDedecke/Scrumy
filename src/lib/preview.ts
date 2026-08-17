@@ -6,112 +6,89 @@
 // nach einem `package.json` mit einem `dev`/`start`/`preview`-Script oder,
 // ohne Bundler, nach einer statischen `index.html`.
 //
-// Architektur bewusst OHNE Pfad-Proxy (z.B. "/projects/x/preview/proxy/..."):
-// generierte Frontends verlinken ihre Assets fast immer absolut ("/assets/…"),
-// was unter einem Pfadpräfix bricht, sobald der Browser diese Pfade gegen die
-// Seitenwurzel statt gegen den Präfix auflöst. Stattdessen bekommt jede
-// laufende Vorschau einen echten Port aus einem festen, in docker-compose.yml
-// veröffentlichten Bereich (PREVIEW_PORT_RANGE_START..END) – das iframe zeigt
-// direkt auf `http://<host>:<port>/`, die App läuft an ihrer eigenen
-// Seitenwurzel, genau wie ihr Bundler es erwartet. Nebeneffekt: WebSockets
-// (Vite/Next-HMR) funktionieren dadurch sogar mit, ganz ohne eigenen
-// WS-Proxy-Code.
+// Architektur: jede laufende Vorschau ist ein eigener, ressourcenbegrenzter
+// Sibling-Container (docker/preview-runner.Dockerfile + preview-entrypoint.js),
+// nicht ein Kindprozess dieses Prozesses. Gruende:
+//  * Isolation – generierter Code (von der LLM geschrieben, potenziell
+//    fehlerhaft oder aus einem kompromittierten npm-Paket) laeuft NICHT mit
+//    denselben Rechten wie Scrumy selbst, sieht nicht dieselben Secrets
+//    (eigenes, sehr kleines Environment statt geerbtem `process.env`) und
+//    kommt netzwerkseitig nicht an db/worker heran (eigenes Docker-Netz
+//    "scrumy_preview", siehe docker-compose.yml).
+//  * Blast Radius – CPU/RAM/Prozesslimits pro Container; eine Endlosschleife
+//    im generierten Code reisst nicht den ganzen App-Container mit.
+//  * `npm install`/Build-Cache landen NIE im getrackten Git-Arbeitsverzeichnis
+//    (Audit-Trail der Agenten), sondern nur in der Container-Sicht darauf.
+//  * Ueberlebt einen Neustart von "app": der Container laeuft unabhaengig
+//    weiter, `getPreviewInfo` liest den echten Zustand per `docker inspect`
+//    statt einem In-Memory-Zustand zu vertrauen, der beim Neustart verloren
+//    ginge. Das macht "app" nebenbei horizontal skalierbar (auf demselben
+//    Docker-Host): jede Replica sieht denselben Docker-Daemon und dieselbe DB.
 //
-// Prozesse leben nur im Speicher DIESES App-Prozesses (analog zum Muster in
-// worker/llmProfileLimiter.ts) – bei `--scale app=N` säße die Vorschau eines
-// Projekts u.U. im falschen Replica. Für den aktuellen Umfang (nur `app`
-// skaliert i.d.R. nicht, siehe docker-compose.yml) ist das die bewusst
-// einfachere Wahl.
-import { type ChildProcess, spawn } from "node:child_process";
-import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
-import { createServer as createNetServer, connect as netConnect } from "node:net";
+// Kein Pfad-Proxy fuers iframe: generierte Frontends verlinken Assets fast
+// immer absolut ("/assets/…"), was unter einem Pfadpräfix bricht. Jede
+// Vorschau bekommt stattdessen einen echten Port aus einem in
+// docker-compose.yml veroeffentlichten Bereich (PREVIEW_PORT_RANGE_START..END),
+// das iframe zeigt direkt auf `http://<host>:<port>/`.
+import { execFile } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
+import { createServer as createNetServer, connect as netConnect } from "node:net";
 import path from "node:path";
+import { promisify } from "node:util";
 import { prisma } from "@/lib/prisma";
 import { fail, note, ok, type ActionResult } from "@/lib/actions/result";
 import type { PreviewStatus } from "@/generated/prisma/client";
 
-const LOG_LINES_KEPT = 200;
-const READY_TIMEOUT_MS = 60_000;
-const INSTALL_TIMEOUT_MS = 5 * 60_000;
+const execFileAsync = promisify(execFile);
 
-interface PreviewState {
-  child: ChildProcess | null;
-  server: HttpServer | null;
-  port: number;
-  logs: string[];
-  /// Wird beim Beenden hochgezaehlt, damit ein spaeter feuernder `exit`-Handler
-  /// eines bereits abgeloesten Kindprozesses (nach Stop+Neustart) den neuen
-  /// Zustand nicht ueberschreibt.
-  generation: number;
+const LOG_LINES = 40;
+
+function dockerNetwork(): string {
+  return process.env.PREVIEW_DOCKER_NETWORK || "scrumy_preview";
 }
-
-const active = new Map<string, PreviewState>();
-
-function appendLog(state: PreviewState, chunk: string): void {
-  for (const line of chunk.split("\n")) {
-    if (line.trim().length === 0) continue;
-    state.logs.push(line);
-  }
-  if (state.logs.length > LOG_LINES_KEPT) {
-    state.logs.splice(0, state.logs.length - LOG_LINES_KEPT);
-  }
+function workspaceVolume(): string {
+  return process.env.PREVIEW_WORKSPACE_VOLUME || "scrumy_scrumy_workspaces";
 }
-
+function runnerImage(): string {
+  return process.env.PREVIEW_RUNNER_IMAGE || "scrumy-preview-runner";
+}
 function portRange(): { start: number; end: number } {
-  const start = Number(process.env.PREVIEW_PORT_RANGE_START ?? 4100);
-  const end = Number(process.env.PREVIEW_PORT_RANGE_END ?? 4119);
-  return { start, end };
+  return {
+    start: Number(process.env.PREVIEW_PORT_RANGE_START ?? 4100),
+    end: Number(process.env.PREVIEW_PORT_RANGE_END ?? 4119),
+  };
 }
 
-function isPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const tester = createNetServer();
-    tester.once("error", () => resolve(false));
-    tester.once("listening", () => tester.close(() => resolve(true)));
-    tester.listen(port, "0.0.0.0");
+/// Ohne Shell (wie `git()` in workspace.ts): Projekt-IDs/Pfade duerfen
+/// niemals als Shell-Code interpretiert werden.
+async function docker(args: string[], options: { timeoutMs?: number } = {}): Promise<string> {
+  const { stdout } = await execFileAsync("docker", args, {
+    maxBuffer: 5 * 1024 * 1024,
+    timeout: options.timeoutMs ?? 15_000,
   });
+  return stdout;
 }
 
-async function pickFreePort(): Promise<number> {
-  const { start, end } = portRange();
-  const used = new Set([...active.values()].map((s) => s.port));
-  for (let port = start; port <= end; port++) {
-    if (used.has(port)) continue;
-    if (await isPortFree(port)) return port;
-  }
-  throw new Error(
-    `Keine freie Vorschau-Portnummer zwischen ${start} und ${end} – zu viele laufende Vorschauen gleichzeitig.`,
-  );
-}
-
-function canConnect(port: number, timeoutMs = 1000): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = netConnect({ port, host: "127.0.0.1" });
-    const done = (result: boolean) => {
-      socket.removeAllListeners();
-      socket.destroy();
-      resolve(result);
-    };
-    socket.setTimeout(timeoutMs);
-    socket.once("connect", () => done(true));
-    socket.once("timeout", () => done(false));
-    socket.once("error", () => done(false));
-  });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/// Docker-Containernamen sind an die Projekt-ID gebunden – dieselbe Regel wie
+/// `removeWorkspace` in workspace.ts, damit hier nie ein manipulierter Wert
+/// zu einem beliebigen Containernamen wird.
+function containerName(projectId: string): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(projectId)) throw new Error(`Ungültige Projekt-ID: ${projectId}`);
+  return `scrumy-preview-${projectId}`;
 }
 
 // --- Frontend-Erkennung ------------------------------------------------------
+// Läuft in DIESEM Prozess (liest direkt aus dem gemounteten Workspace-Volume,
+// nicht im Vorschau-Container) – nur eine Erkennung, kein Schreibzugriff.
 
 const FRONTEND_CANDIDATE_DIRS = [".", "frontend", "web", "client", "app", "ui"];
 const STATIC_CANDIDATE_DIRS = [".", "public", "dist", "build", "frontend", "web"];
 const SCRIPT_PRIORITY = ["dev", "start", "preview"];
 
 export interface FrontendTarget {
-  /// Absoluter Pfad innerhalb des Repos, in dem der Server laeuft.
+  /// Absoluter Pfad innerhalb des Workspace-Volumes – identisch sichtbar in
+  /// diesem Prozess UND im Vorschau-Container (beide mounten dasselbe Volume
+  /// unter /workspaces), deshalb ohne Übersetzung als FRONTEND_DIR verwendbar.
   dir: string;
   kind: "npm" | "static";
   scriptName?: string;
@@ -167,95 +144,58 @@ export async function detectFrontend(repoDir: string): Promise<FrontendTarget | 
   return null;
 }
 
-// --- Statischer Fallback-Server ---------------------------------------------
+// --- Ports --------------------------------------------------------------------
 
-const MIME: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".txt": "text/plain; charset=utf-8",
-  ".map": "application/json; charset=utf-8",
-};
-
-function startStaticServer(dir: string, port: number): HttpServer {
-  const root = path.resolve(dir);
-  const server = createHttpServer((req, res) => {
-    void (async () => {
-      try {
-        const url = new URL(req.url ?? "/", "http://internal");
-        let relative = decodeURIComponent(url.pathname);
-        if (relative.endsWith("/")) relative += "index.html";
-        const target = path.resolve(root, `.${relative}`);
-        if (target !== root && !target.startsWith(root + path.sep)) {
-          res.writeHead(403).end("Verboten");
-          return;
-        }
-
-        let data;
-        try {
-          data = await readFile(/* turbopackIgnore: true */ target);
-        } catch {
-          // Kein Treffer und keine Dateiendung: vermutlich eine Client-Route
-          // eines SPA-Routers – mit index.html beantworten statt 404.
-          data = path.extname(target)
-            ? null
-            : await readFile(/* turbopackIgnore: true */ path.join(root, "index.html")).catch(() => null);
-        }
-        if (!data) {
-          res.writeHead(404).end("Nicht gefunden");
-          return;
-        }
-        res.writeHead(200, { "Content-Type": MIME[path.extname(target)] ?? "application/octet-stream" });
-        res.end(data);
-      } catch (error) {
-        res.writeHead(500).end(error instanceof Error ? error.message : String(error));
-      }
-    })();
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const tester = createNetServer();
+    tester.once("error", () => resolve(false));
+    tester.once("listening", () => tester.close(() => resolve(true)));
+    tester.listen(port, "0.0.0.0");
   });
-  server.listen(port, "0.0.0.0");
-  return server;
 }
 
-// --- Start / Stop -------------------------------------------------------------
+/// Wahrheit ueber belegte Ports kommt aus der DB (gilt projektuebergreifend
+/// und ueberlebt einen Neustart), der OS-Check ist nur ein zusaetzliches
+/// Sicherheitsnetz gegen Fremdbelegung desselben Ports auf dem Host.
+async function pickFreePort(excludeProjectId: string): Promise<number> {
+  const { start, end } = portRange();
+  const occupied = await prisma.project.findMany({
+    where: { previewPort: { not: null }, id: { not: excludeProjectId } },
+    select: { previewPort: true },
+  });
+  const used = new Set(occupied.map((p) => p.previewPort));
 
-function isCurrent(projectId: string, state: PreviewState, generation: number): boolean {
-  return active.get(projectId) === state && state.generation === generation;
-}
-
-async function markRunning(projectId: string): Promise<void> {
-  await prisma.project.update({ where: { id: projectId }, data: { previewStatus: "RUNNING", previewError: null } });
-}
-
-async function markError(projectId: string, state: PreviewState, message: string): Promise<void> {
-  appendLog(state, `✗ ${message}`);
-  await prisma.project
-    .update({ where: { id: projectId }, data: { previewStatus: "ERROR", previewError: message } })
-    .catch(() => {});
-}
-
-async function waitUntilReady(projectId: string, state: PreviewState, generation: number, port: number): Promise<boolean> {
-  const deadline = Date.now() + READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (!isCurrent(projectId, state, generation)) return false;
-    if (await canConnect(port)) return true;
-    await sleep(700);
+  for (let port = start; port <= end; port++) {
+    if (used.has(port)) continue;
+    if (await isPortFree(port)) return port;
   }
-  return false;
+  throw new Error(
+    `Keine freie Vorschau-Portnummer zwischen ${start} und ${end} – zu viele laufende Vorschauen gleichzeitig.`,
+  );
 }
 
-/// Kernlogik hinter dem Start-Knopf. Kehrt sofort zurueck (Status STARTING);
-/// npm install + Prozessstart laufen im Hintergrund weiter (siehe `launch`).
+function canConnect(host: string, port: number, timeoutMs = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = netConnect({ port, host });
+    const done = (result: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => done(true));
+    socket.once("timeout", () => done(false));
+    socket.once("error", () => done(false));
+  });
+}
+
+// --- Start / Stop ---------------------------------------------------------------
+
+/// Kernlogik hinter dem Start-Knopf: startet einen frischen Sibling-Container
+/// und kehrt sofort zurueck. Ob/wann er wirklich bedient, entscheidet
+/// `getPreviewInfo` bei jedem Lesen live per `docker inspect` – hier gibt es
+/// keinen Hintergrund-Task, der das nachverfolgt.
 export async function startPreview(projectId: string): Promise<ActionResult> {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
@@ -263,9 +203,10 @@ export async function startPreview(projectId: string): Promise<ActionResult> {
   });
   if (!project?.workspacePath) return fail("Das Team hat noch kein Repository angelegt – erst das Team starten.");
 
-  const existing = active.get(projectId);
-  if (existing?.child && existing.child.exitCode === null) return note("Die Vorschau läuft bereits.");
-  if (existing?.server) return note("Die Vorschau läuft bereits.");
+  const existing = await getPreviewInfo(projectId);
+  if (existing.status === "RUNNING" || existing.status === "STARTING") {
+    return note("Die Vorschau läuft bereits.");
+  }
 
   const target = await detectFrontend(project.workspacePath);
   if (!target) {
@@ -276,174 +217,105 @@ export async function startPreview(projectId: string): Promise<ActionResult> {
         previewError:
           "Kein Frontend gefunden – weder ein package.json mit dev/start/preview-Script noch eine index.html im Repository.",
         previewPort: null,
-        previewPid: null,
+        previewContainerId: null,
       },
     });
     return fail("Kein Frontend im Repository gefunden.");
   }
 
-  const port = await pickFreePort().catch((error: unknown) => {
-    throw error instanceof Error ? error : new Error(String(error));
-  });
+  const name = containerName(projectId);
+  // Ueberbleibsel eines vorherigen Laufs raeumen (z.B. nach einem Absturz),
+  // sonst meldet `docker run` "name already in use".
+  await docker(["rm", "-f", name]).catch(() => {});
 
-  const state: PreviewState = { child: null, server: null, port, logs: [], generation: (existing?.generation ?? 0) + 1 };
-  active.set(projectId, state);
+  let port: number;
+  try {
+    port = await pickFreePort(projectId);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
 
-  await prisma.project.update({
-    where: { id: projectId },
-    data: {
-      previewStatus: "STARTING",
-      previewPort: port,
-      previewPid: null,
-      previewDir: target.dir,
-      previewCommand: target.description,
-      previewStartedAt: new Date(),
-      previewError: null,
-    },
-  });
+  const args = [
+    "run",
+    "-d",
+    "--name",
+    name,
+    "--network",
+    dockerNetwork(),
+    "-p",
+    `${port}:${port}`,
+    "-v",
+    `${workspaceVolume()}:/workspaces`,
+    // Ressourcenbegrenzung: ein hängender/entgleister Dev-Server reisst
+    // weder den Docker-Host noch andere Vorschauen mit.
+    "--memory",
+    "512m",
+    "--cpus",
+    "1",
+    "--pids-limit",
+    "256",
+    // Bewusst NUR das Noetigste im Environment – kein `...process.env`, das
+    // waere sonst inklusive DATABASE_URL/ANTHROPIC_API_KEY an generierten
+    // Code weitergereicht.
+    "-e",
+    `PORT=${port}`,
+    "-e",
+    `FRONTEND_DIR=${target.dir}`,
+    "-e",
+    `KIND=${target.kind}`,
+  ];
+  if (target.kind === "npm" && target.scriptName) args.push("-e", `SCRIPT_NAME=${target.scriptName}`);
+  args.push(runnerImage());
 
-  launch(projectId, target, port, state, state.generation).catch(async (error) => {
-    if (!isCurrent(projectId, state, state.generation)) return;
-    await markError(projectId, state, error instanceof Error ? error.message : String(error));
-  });
+  try {
+    const containerId = await docker(args);
+    await prisma.project.update({
+      where: { id: projectId },
+      data: {
+        previewStatus: "STARTING",
+        previewPort: port,
+        previewContainerId: containerId.trim(),
+        previewDir: target.dir,
+        previewCommand: target.description,
+        previewStartedAt: new Date(),
+        previewError: null,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { previewStatus: "ERROR", previewError: `Container-Start fehlgeschlagen: ${message}`, previewPort: null },
+    });
+    return fail("Vorschau-Container konnte nicht gestartet werden – Log unten prüft die Ursache.");
+  }
 
   return ok(`Vorschau wird gestartet (${target.description}) …`);
 }
 
-async function launch(
-  projectId: string,
-  target: FrontendTarget,
-  port: number,
-  state: PreviewState,
-  generation: number,
-): Promise<void> {
-  if (target.kind === "static") {
-    state.server = startStaticServer(target.dir, port);
-    appendLog(state, `Statischer Server gestartet auf Port ${port}.`);
-    if (isCurrent(projectId, state, generation)) await markRunning(projectId);
-    return;
-  }
-
-  const hasNodeModules = await stat(/* turbopackIgnore: true */ path.join(target.dir, "node_modules")).then(
-    () => true,
-    () => false,
-  );
-  if (!hasNodeModules) {
-    appendLog(state, "$ npm install");
-    const installed = await runToCompletion("npm", ["install"], target.dir, state, INSTALL_TIMEOUT_MS);
-    if (!isCurrent(projectId, state, generation)) return;
-    if (!installed) {
-      await markError(projectId, state, "„npm install“ ist fehlgeschlagen – Log unten prüft die Ursache.");
-      return;
-    }
-  }
-
-  appendLog(state, `$ npm run ${target.scriptName}`);
-  const child = spawn("npm", ["run", target.scriptName ?? "dev"], {
-    cwd: target.dir,
-    env: { ...process.env, PORT: String(port), HOST: "0.0.0.0", BROWSER: "none", CI: "true" },
-  });
-  state.child = child;
-
-  await prisma.project.update({ where: { id: projectId }, data: { previewPid: child.pid ?? null } }).catch(() => {});
-
-  child.stdout?.on("data", (chunk: Buffer) => appendLog(state, chunk.toString()));
-  child.stderr?.on("data", (chunk: Buffer) => appendLog(state, chunk.toString()));
-  child.on("exit", (code) => {
-    if (!isCurrent(projectId, state, generation)) return; // gewollt gestoppt/abgeloest
-    void markError(projectId, state, `Der Server ist unerwartet beendet worden (Code ${code ?? "?"}).`);
-  });
-
-  const ready = await waitUntilReady(projectId, state, generation, port);
-  if (!isCurrent(projectId, state, generation)) return;
-  if (ready) {
-    await markRunning(projectId);
-  } else {
-    await markError(projectId, state, "Der Server antwortet nach 60 Sekunden nicht – Log unten prüfen.");
-  }
-}
-
-function runToCompletion(
-  command: string,
-  args: string[],
-  cwd: string,
-  state: PreviewState,
-  timeoutMs: number,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd });
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      appendLog(state, `✗ Zeitüberschreitung nach ${Math.round(timeoutMs / 1000)}s.`);
-      resolve(false);
-    }, timeoutMs);
-
-    child.stdout?.on("data", (chunk: Buffer) => appendLog(state, chunk.toString()));
-    child.stderr?.on("data", (chunk: Buffer) => appendLog(state, chunk.toString()));
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      resolve(code === 0);
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      appendLog(state, `✗ ${error.message}`);
-      resolve(false);
-    });
-  });
-}
-
-/// Beendet eine laufende Vorschau. `persist=false` fuer den Fall, in dem das
-/// Projekt gleich darauf geloescht wird und ein DB-Update ins Leere liefe.
+/// Beendet den Sibling-Container einer Vorschau. `persist=false` fuer den
+/// Fall, in dem das Projekt gleich darauf geloescht wird und ein DB-Update
+/// ins Leere liefe.
 export async function stopPreview(projectId: string, persist = true): Promise<ActionResult> {
-  const state = active.get(projectId);
-  active.delete(projectId);
-
-  if (state) {
-    state.generation += 1; // laesst spaeter feuernde exit-Handler verstummen
-    state.server?.close();
-    const pid = state.child?.pid;
-    if (pid) {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        /* Prozess ist schon weg */
-      }
-      setTimeout(() => {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          /* schon beendet */
-        }
-      }, 5000);
-    }
-  } else {
-    // Kein In-Memory-Zustand (z.B. nach einem Neustart des App-Containers),
-    // aber laut DB laeuft noch etwas: letzten bekannten PID-Versuch wagen.
-    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { previewPid: true } });
-    if (project?.previewPid) {
-      try {
-        process.kill(project.previewPid, "SIGTERM");
-      } catch {
-        /* Prozess existiert nicht mehr (anderer Container-Neustart) */
-      }
-    }
-  }
+  const name = containerName(projectId);
+  await docker(["stop", "-t", "5", name]).catch(() => {});
+  await docker(["rm", "-f", name]).catch(() => {});
 
   if (persist) {
     await prisma.project.update({
       where: { id: projectId },
-      data: { previewStatus: "STOPPED", previewPort: null, previewPid: null, previewError: null },
+      data: { previewStatus: "STOPPED", previewPort: null, previewContainerId: null, previewError: null },
     });
   }
 
   return ok("Vorschau gestoppt.");
 }
 
-/// Fuer `stopProjectWork` beim Loeschen eines Projekts: nur den Prozess
+/// Fuer `stopProjectWork` beim Loeschen eines Projekts: nur den Container
 /// beenden, keine DB-Schreibvorgaenge (die Projektzeile ist gleich weg).
 export async function killPreviewIfRunning(projectId: string): Promise<void> {
-  if (!active.has(projectId)) return;
-  await stopPreview(projectId, false);
+  const name = containerName(projectId);
+  await docker(["rm", "-f", name]).catch(() => {});
 }
 
 // --- Status lesen --------------------------------------------------------------
@@ -457,11 +329,11 @@ export interface PreviewInfo {
   log: string;
 }
 
-/// Liest den Vorschau-Status fuer die Oberflaeche. Gleicht dabei mit dem
-/// In-Memory-Zustand ab: Meldet die DB "läuft"/"startet", ohne dass DIESER
-/// Prozess einen passenden Kindprozess kennt (Neustart des App-Containers),
-/// ist der gemeldete Zustand veraltet – dann wird er hier auf STOPPED
-/// zurueckgesetzt, statt der Oberflaeche ewig "läuft" vorzugaukeln.
+/// Liest den Vorschau-Status fuer die Oberflaeche – IMMER live per
+/// `docker inspect`/`docker logs` statt einem gecachten Zustand zu
+/// vertrauen, und schreibt Abweichungen direkt in die DB zurueck. Dadurch
+/// ist es egal, ob "app" zwischendurch neu gestartet wurde oder mehrfach
+/// laeuft: der Container ist die Wahrheit, nicht der Node-Prozess.
 export async function getPreviewInfo(projectId: string): Promise<PreviewInfo> {
   const project = await prisma.project.findUniqueOrThrow({
     where: { id: projectId },
@@ -471,25 +343,59 @@ export async function getPreviewInfo(projectId: string): Promise<PreviewInfo> {
       previewCommand: true,
       previewStartedAt: true,
       previewError: true,
+      previewContainerId: true,
     },
   });
 
-  const state = active.get(projectId);
-  const stale = !state && (project.previewStatus === "RUNNING" || project.previewStatus === "STARTING");
-  if (stale) {
-    await prisma.project.update({
-      where: { id: projectId },
-      data: { previewStatus: "STOPPED", previewPort: null, previewPid: null },
-    });
-    return { status: "STOPPED", port: null, command: null, startedAt: null, error: null, log: "" };
-  }
-
-  return {
+  const base: PreviewInfo = {
     status: project.previewStatus,
     port: project.previewPort,
     command: project.previewCommand,
     startedAt: project.previewStartedAt,
     error: project.previewError,
-    log: state ? state.logs.slice(-40).join("\n") : "",
+    log: "",
   };
+
+  // Kein Container bekannt: DB-Stand ist entweder STOPPED oder eine ERROR
+  // aus der Erkennung (siehe startPreview) – beides braucht keinen Docker-Blick.
+  if (!project.previewContainerId) return base;
+
+  const name = containerName(projectId);
+  const inspect = await docker([
+    "inspect",
+    "--format",
+    "{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}",
+    name,
+  ]).catch(() => null);
+
+  if (!inspect) {
+    // Container existiert nicht (mehr) – von aussen gestoppt/entfernt.
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { previewStatus: "STOPPED", previewPort: null, previewContainerId: null, previewError: null },
+    });
+    return { ...base, status: "STOPPED", port: null, error: null };
+  }
+
+  const [running, , exitCodeRaw] = inspect.trim().split("|");
+  const log = await docker(["logs", "--tail", String(LOG_LINES), name]).catch(() => "");
+
+  if (running === "true") {
+    const reachable = project.previewPort ? await canConnect(name, project.previewPort) : false;
+    const status: PreviewStatus = reachable ? "RUNNING" : "STARTING";
+    if (status !== project.previewStatus) {
+      await prisma.project.update({ where: { id: projectId }, data: { previewStatus: status, previewError: null } });
+    }
+    return { ...base, status, error: null, log };
+  }
+
+  // Container ist beendet, aber noch da (kein --rm, siehe stopPreview): das
+  // war unerwartet, sonst haette stopPreview ihn schon entfernt.
+  const exitCode = exitCodeRaw ?? "?";
+  const message = `Der Server ist unerwartet beendet worden (Code ${exitCode}). Log unten prüft die Ursache.`;
+  await prisma.project.update({
+    where: { id: projectId },
+    data: { previewStatus: "ERROR", previewError: message, previewPort: null },
+  });
+  return { ...base, status: "ERROR", port: null, error: message, log };
 }

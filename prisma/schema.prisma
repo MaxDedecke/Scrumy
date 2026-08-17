@@ -78,7 +78,10 @@ model Project {
   /// STOPPED zurueckgesetzt (siehe `getPreviewInfo`).
   previewStatus          PreviewStatus @default(STOPPED)
   previewPort            Int?
-  previewPid             Int?
+  /// Name/ID des laufenden Sibling-Containers dieser Vorschau (siehe
+  /// src/lib/preview.ts) – Wahrheit ist immer `docker inspect`, dieses Feld
+  /// ist nur der Schluessel dafuer, kein eigener Zustand.
+  previewContainerId     String?
   /// Erkanntes Verzeichnis innerhalb des Repos, in dem der Dev-Server laeuft
   /// (z.B. das Repo-Wurzelverzeichnis oder ein `frontend/`-Unterordner).
   previewDir             String?
