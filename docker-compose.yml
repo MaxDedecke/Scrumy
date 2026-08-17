@@ -30,10 +30,20 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
+      # Portbereich fuer die Frontend-Vorschau (siehe src/lib/preview.ts). Jede
+      # laufende Vorschau bekommt einen freien Port aus diesem Bereich und
+      # laeuft dort an ihrer eigenen Seitenwurzel – kein Pfad-Proxy noetig, das
+      # iframe zeigt direkt auf <host>:<port>. Deshalb muss der ganze Bereich
+      # veroeffentlicht sein, nicht nur der App-Port.
+      PREVIEW_PORT_RANGE_START: "4100"
+      PREVIEW_PORT_RANGE_END: "4119"
     ports:
       - "3001:3000"
+      - "4100-4119:4100-4119"
     volumes:
-      # Lesend: Commit-Historie und Diffs in den Nachweisen.
+      # Ueberwiegend lesend (Commit-Historie und Diffs in den Nachweisen), seit
+      # der Frontend-Vorschau aber auch schreibend: `npm install` und der
+      # Dev-Server legen node_modules/Build-Cache im Arbeitsverzeichnis an.
       - scrumy_workspaces:/workspaces
 
   # Fuehrt die eigentliche Agenten-Arbeit aus (Job-Queue via graphile-worker),

@@ -11,6 +11,7 @@ import type {
   ConnectorStatus,
   LlmProvider,
   Priority,
+  PreviewStatus,
   ProjectStatus,
   RequirementSource,
   SupportChannel,
@@ -137,6 +138,20 @@ export const PROJECT_STATUS_PILL: Record<ProjectStatus, string> = {
   ACTIVE: "pill pill-good",
   PAUSED: "pill pill-warning",
   ARCHIVED: "pill pill-neutral",
+};
+
+export const PREVIEW_STATUS_LABEL: Record<PreviewStatus, string> = {
+  STOPPED: "Gestoppt",
+  STARTING: "Startet …",
+  RUNNING: "Läuft",
+  ERROR: "Fehler",
+};
+
+export const PREVIEW_STATUS_PILL: Record<PreviewStatus, string> = {
+  STOPPED: "pill pill-neutral",
+  STARTING: "pill pill-info",
+  RUNNING: "pill pill-good",
+  ERROR: "pill pill-critical",
 };
 
 export const REQUIREMENT_SOURCE_LABEL: Record<RequirementSource, string> = {

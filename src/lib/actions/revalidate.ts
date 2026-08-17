@@ -11,4 +11,5 @@ export function revalidateProject(projectId: string) {
   revalidatePath(`/projects/${projectId}/office`);
   revalidatePath(`/projects/${projectId}/records`);
   revalidatePath(`/projects/${projectId}/discovery`);
+  revalidatePath(`/projects/${projectId}/preview`);
 }

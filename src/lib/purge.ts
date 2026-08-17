@@ -16,6 +16,7 @@
 // Diese drei Reste sind der Grund fuer dieses Modul: Die Server Actions rufen
 // `stopProjectWork` VOR dem Loeschen und `purgeProjectRemains` DANACH auf.
 import { prisma } from "@/lib/prisma";
+import { killPreviewIfRunning } from "@/lib/preview";
 import { removeWorkspace } from "@/lib/workspace";
 import { cancelAgentJobs } from "../../worker/queue";
 
@@ -24,11 +25,14 @@ export interface ProjectToPurge {
   workspacePath: string | null;
 }
 
-/// Nimmt die wartende Arbeit der betroffenen Teams aus der Queue. Vor dem
-/// Loeschen, damit kein Job mehr anlaufen kann, dessen Projekt es nicht mehr
-/// gibt.
+/// Nimmt die wartende Arbeit der betroffenen Teams aus der Queue und beendet
+/// eine laufende Frontend-Vorschau (siehe src/lib/preview.ts). Vor dem
+/// Loeschen, damit weder ein Job noch ein Vorschau-Prozess auf ein
+/// Arbeitsverzeichnis zugreift, das gleich verschwindet.
 export async function stopProjectWork(projectIds: string[]): Promise<number> {
   if (projectIds.length === 0) return 0;
+
+  await Promise.all(projectIds.map((id) => killPreviewIfRunning(id)));
 
   const assignments = await prisma.agentAssignment.findMany({
     where: { projectId: { in: projectIds } },

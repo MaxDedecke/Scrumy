@@ -71,6 +71,23 @@ model Project {
   /// dort aufstocken.
   sprintBudget           Int           @default(12)
 
+  /// Zustand der Frontend-Vorschau (siehe src/lib/preview.ts). Getrennt vom
+  /// Projektstatus: die Vorschau wird von Hand gestartet/gestoppt und lebt nur
+  /// im Speicher des App-Prozesses – nach einem Neustart des Containers ist
+  /// jeder gemeldete Zustand hier veraltet und wird beim naechsten Lesen auf
+  /// STOPPED zurueckgesetzt (siehe `getPreviewInfo`).
+  previewStatus          PreviewStatus @default(STOPPED)
+  previewPort            Int?
+  previewPid             Int?
+  /// Erkanntes Verzeichnis innerhalb des Repos, in dem der Dev-Server laeuft
+  /// (z.B. das Repo-Wurzelverzeichnis oder ein `frontend/`-Unterordner).
+  previewDir             String?
+  /// Klartext des zuletzt verwendeten Start-Kommandos, fuer die Anzeige im
+  /// Panel (z.B. "npm run dev").
+  previewCommand         String?
+  previewStartedAt       DateTime?
+  previewError           String?
+
   requirements   Requirement[]
   concept        Concept?
   tickets        Ticket[]
@@ -91,6 +108,14 @@ enum ProjectStatus {
   ACTIVE
   PAUSED
   ARCHIVED
+}
+
+/// Lebenszyklus der Frontend-Vorschau eines Projekts (siehe `Project.previewStatus`).
+enum PreviewStatus {
+  STOPPED
+  STARTING
+  RUNNING
+  ERROR
 }
 
 /// Eine einzelne Anforderung fuer ein Projekt in der Discovery-Phase – entweder
