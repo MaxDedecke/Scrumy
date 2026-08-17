@@ -113,7 +113,7 @@ Schreibe das Dokument "Projektverständnis" als Markdown (ohne Code-Fence drumhe
 ## Umfang (was gehört dazu – und was ausdrücklich nicht)
 ## Fachliche Kernbegriffe
 ## Technischer Rahmen
-(Vorschlag für Technologie und Architektur, passend zu Konzept und Anforderungen – begründet, aber knapp.)
+(Technologie und Container-Zuschnitt, passend zu Konzept und Anforderungen – begründet, aber knapp. Docker-Compose mit einem Container je Dienst ist der Standard aus den Grundregeln; nenne konkret, welche Dienste es geben wird, und in welchem Verzeichnis ein etwaiges Frontend liegt. Weichst du davon ab, nenne ausdrücklich, welche der drei Ausnahmen aus den Grundregeln greift.)
 ## Annahmen
 (Was wir annehmen, weil es im Auftrag nicht steht.)
 ## Risiken
