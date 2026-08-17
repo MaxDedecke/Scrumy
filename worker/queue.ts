@@ -129,6 +129,16 @@ export async function cancelJobsOfDeletedAgents(): Promise<number> {
 
   const utils = await getWorkerUtils();
   const removed = rows.length > 0 ? await utils.completeJobs(rows.map((row) => row.id)) : [];
-  await utils.cleanup({ tasks: ["GC_JOB_QUEUES", "GC_TASK_IDENTIFIERS"] });
+  // Nur die Queue-Zeilen aufraeumen, ausdruecklich NICHT die Task-Namen
+  // (`GC_TASK_IDENTIFIERS`): graphile-worker gibt jedem Task-Namen eine
+  // Zahlen-ID, und ein laufender Worker merkt sich die IDs seiner Tasks beim
+  // Start. Loescht das Aufraeumen einen gerade jobfreien Task-Namen, bekommt er
+  // beim naechsten Einreihen eine NEUE ID – und der laufende Worker sucht
+  // weiter nach der alten. Die Jobs dieses Tasks bleiben dann bis zum naechsten
+  // Neustart unsichtbar liegen. Genau so sind die Entscheidungsvorlagen des
+  // Scrum Masters (clarificationPrep) stillschweigend ausgefallen; der Mensch
+  // sah im Buero nur noch die Standardvorschlaege. Ein paar Zeilen mit
+  // Task-Namen kosten nichts – das Aufraeumen kostete die halbe Arbeitskette.
+  await utils.cleanup({ tasks: ["GC_JOB_QUEUES"] });
   return removed.length;
 }

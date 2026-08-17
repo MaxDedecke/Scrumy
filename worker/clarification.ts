@@ -16,7 +16,7 @@
 import { prisma } from "@/lib/prisma";
 import { agentForRole } from "@/lib/team";
 import type { Clarification, ClarificationScope } from "@/generated/prisma/client";
-import type { ClarificationOption } from "@/lib/clarificationOptions";
+import { withFallbackOptions, type ClarificationOption } from "@/lib/clarificationOptions";
 import { enqueueAgentJob } from "./queue";
 
 export interface OpenClarificationInput {
@@ -40,25 +40,11 @@ export interface OpenClarificationInput {
 /// Standardvorschläge, wenn weder Agent noch Scrum Master eigene liefern. Sie
 /// sind bewusst schlicht: Die Oberfläche soll nie mit einer Frage ohne
 /// Antwortmöglichkeit dastehen.
-function defaultOptions(scope: ClarificationScope, hasTicket: boolean): ClarificationOption[] {
-  const options: ClarificationOption[] = [
-    { key: "resume", label: "Nochmal versuchen", detail: "Das Team nimmt den Schritt erneut auf.", effect: "resume" },
-  ];
-  if (hasTicket && scope === "TICKET") {
-    options.push({
-      key: "skip",
-      label: "Zurückstellen, Team macht weiter",
-      detail: "Das Ticket geht zurück in den Backlog, der Sprint läuft mit den übrigen Tickets weiter.",
-      effect: "skip",
-    });
-  }
-  options.push({
-    key: "stop",
-    label: "Team anhalten",
-    detail: "Niemand arbeitet weiter, bis du den nächsten Schritt anstößt.",
-    effect: "stop",
-  });
-  return options;
+function defaultOptions(canSkipTicket: boolean): ClarificationOption[] {
+  return withFallbackOptions(
+    [{ key: "resume", label: "Nochmal versuchen", detail: "Das Team nimmt den Schritt erneut auf.", effect: "resume" }],
+    { canSkipTicket },
+  );
 }
 
 /// Beruft eine Klärung ein. Läuft für denselben Anlass schon eine offene
@@ -74,7 +60,12 @@ export async function openClarification(input: OpenClarificationInput): Promise<
   });
   if (existing) return existing;
 
-  const options = input.options?.length ? input.options : defaultOptions(scope, Boolean(ticketId));
+  // Ein zurückgestelltes Ticket gibt es nur, wenn die Klärung an einem Ticket
+  // hängt – sonst wäre es ein Weg, den Scrumy gar nicht gehen kann.
+  const canSkipTicket = Boolean(ticketId) && scope === "TICKET";
+  const options = input.options?.length
+    ? withFallbackOptions(input.options, { canSkipTicket })
+    : defaultOptions(canSkipTicket);
 
   const clarification = await prisma.clarification.create({
     data: {

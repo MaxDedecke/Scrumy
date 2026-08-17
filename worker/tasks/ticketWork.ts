@@ -23,6 +23,7 @@ import {
 } from "@/lib/workspace";
 import { agentForRole } from "@/lib/team";
 import { PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
+import { optionsFromAgent, type ClarificationOption } from "@/lib/clarificationOptions";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { continueSprint, loadWorkingProject } from "../orchestration";
@@ -203,12 +204,16 @@ Setze das Ticket um. Gib jede Datei, die du anlegst oder änderst, VOLLSTÄNDIG 
 
 Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wesentliches offen lassen, das du nicht selbst entscheiden darfst (Fachlogik, Datenhaltung, Kosten, Rechte): Erfinde nichts. Setze um, was zweifelsfrei ist, und stelle die Frage im Feld KLÄRUNG – der Auftraggeber entscheidet, und das Team arbeitet danach mit dem Beschluss weiter.
 
+Zu jeder Klärung gehören die Wege, zwischen denen entschieden wird: Schreibe sie ins Feld WEGE, zwei bis vier Stück, jeden in einer eigenen Zeile als „Kurzer Titel: was das konkret bedeutet, mit Für und Wider in einem Satz". Es sind die fachlichen Möglichkeiten, die DU siehst (welcher Server, welches Datenmodell, welche Bibliothek) – nicht „nochmal versuchen" oder „abbrechen", die kennt Scrumy selbst.
+
 Antworte genau in diesem Format – der Dateiinhalt steht wörtlich zwischen den Markierungen, ohne Code-Fence und ohne Escaping:
 
 COMMIT: Betreffzeile im Imperativ, max. 72 Zeichen
 ZUSAMMENFASSUNG: 2-4 Sätze für den Auftraggeber: was jetzt anders ist und warum
 OFFEN: offene Punkte oder Annahmen (weglassen, wenn es keine gibt)
 KLÄRUNG: eine einzelne Frage an den Auftraggeber (nur wenn du wirklich nicht entscheiden darfst, sonst weglassen)
+WEGE: erster Weg: was das heißt
+- zweiter Weg: was das heißt
 --- DATEI: relativer/pfad.ts ---
 vollständiger Dateiinhalt
 --- DATEI: naechste/datei.md ---
@@ -231,6 +236,10 @@ vollständiger Dateiinhalt
   // Formatfehler des Modells darf kein Ticket blockieren, bis ihn jemand
   // wegklickt – deshalb die Mindestlaenge.
   const raisedQuestion = result.clarification.length >= 15 ? result.clarification : "";
+  // Die Wege, die der Umsetzer selbst sieht. Sie sind die einzigen fachlichen
+  // Vorschlaege, die es sofort gibt – die ausgearbeitete Vorlage des Scrum
+  // Masters kommt erst einen Modellaufruf spaeter.
+  const raisedOptions = raisedQuestion ? optionsFromAgent(result.clarificationOptions) : [];
 
   if (rejected.length > 0) {
     await logActivity({
@@ -267,6 +276,9 @@ vollständiger Dateiinhalt
       sprintId: ticket.sprintId,
       raisedById: implementer.id,
       question: `„${ticket.title}": ${implementer.name} hat keine Änderung geliefert. Wie sollen wir mit dem Ticket umgehen?`,
+      // Hat er dabei selbst eine Frage gestellt, sind seine Wege auch hier die
+      // fachlich richtigen – sonst bleibt es bei den Standardvorschlägen.
+      options: raisedOptions,
       context:
         `Was ${implementer.name} dazu sagt:\n${summary}` +
         (notes ? `\n\nOffene Punkte: ${notes}` : "") +
@@ -325,6 +337,7 @@ vollständiger Dateiinhalt
       sprintId: ticket.sprintId,
       raisedById: implementer.id,
       question: `„${ticket.title}": ${raisedQuestion}`,
+      options: raisedOptions,
       context:
         `${implementer.name} hat den unstrittigen Teil umgesetzt und committet (${commit?.shortSha ?? "kein Commit"}).\n\n` +
         `Zusammenfassung: ${summary}${notes ? `\n\nOffene Punkte: ${notes}` : ""}`,
@@ -366,14 +379,16 @@ Antworte nur mit diesem JSON-Objekt:
 {
   "verdict": "approve" | "rework" | "needs_decision",
   "comment": "Begründung in 2-5 Sätzen, konkret auf Dateien bezogen",
-  "risk": "low" | "medium" | "high"
+  "risk": "low" | "medium" | "high",
+  "wege": [{ "label": "kurzer Titel", "detail": "was das konkret heißt, mit Für und Wider in 1-2 Sätzen" }]
 }
 
 "rework" nur bei echten Mängeln, nicht für Geschmacksfragen.
-"needs_decision", wenn das Team die Frage gar nicht selbst beantworten kann – wenn Auftrag und Anforderungen sich widersprechen oder etwas Fachliches offen lassen. Schreibe dann in "comment" die Frage, die der Auftraggeber entscheiden muss. Nacharbeit hilft in dem Fall nicht: Ein zweiter Anlauf würde dieselbe Lücke nur anders raten.`,
+"needs_decision", wenn das Team die Frage gar nicht selbst beantworten kann – wenn Auftrag und Anforderungen sich widersprechen oder etwas Fachliches offen lassen. Schreibe dann in "comment" die Frage, die der Auftraggeber entscheiden muss. Nacharbeit hilft in dem Fall nicht: Ein zweiter Anlauf würde dieselbe Lücke nur anders raten.
+"wege" nur bei "needs_decision": zwei bis vier fachliche Möglichkeiten, zwischen denen der Auftraggeber wählt – nicht „nochmal versuchen" oder „abbrechen", die kennt Scrumy selbst. Sonst leer lassen.`,
   });
 
-  const { verdict, comment, risk } = readVerdict(review.text);
+  const { verdict, comment, risk, options: reviewOptions } = readVerdict(review.text);
 
   await logActivity({
     projectId,
@@ -400,6 +415,7 @@ Antworte nur mit diesem JSON-Objekt:
       sprintId: ticket.sprintId,
       raisedById: reviewer.id,
       question: `„${ticket.title}": ${comment}`,
+      options: reviewOptions,
       context:
         `${reviewer.name} (QA) hat die Umsetzung von ${implementer.name} geprüft und kommt zu einer Frage, ` +
         `die das Team nicht selbst entscheiden kann.\n\nStand: ${commit?.shortSha ?? "kein Commit"} – ${summary}` +
@@ -473,7 +489,12 @@ const VERDICT_WORD: Record<Verdict, string> = {
 /// Code ist an dieser Stelle schon committet, und ein unlesbares Urteil ist
 /// kein Grund, die Arbeit zu verwerfen. Im Zweifel gilt Nacharbeit – lieber
 /// ein zweiter Blick als eine Freigabe, die niemand gegeben hat.
-function readVerdict(text: string): { verdict: Verdict; comment: string; risk: string } {
+function readVerdict(text: string): {
+  verdict: Verdict;
+  comment: string;
+  risk: string;
+  options: ClarificationOption[];
+} {
   try {
     const data = extractJsonObject(text);
     const raw = String(data.verdict ?? "").toLowerCase();
@@ -483,17 +504,19 @@ function readVerdict(text: string): { verdict: Verdict; comment: string; risk: s
       verdict,
       comment: String(data.comment ?? "").trim() || "(ohne Kommentar)",
       risk: String(data.risk ?? "").toLowerCase(),
+      options: optionsFromAgent(data.wege),
     };
   } catch {
     const lower = text.toLowerCase();
     if (lower.includes("needs_decision")) {
-      return { verdict: "needs_decision", comment: text.trim().slice(0, 2000), risk: "unbekannt" };
+      return { verdict: "needs_decision", comment: text.trim().slice(0, 2000), risk: "unbekannt", options: [] };
     }
     const approved = lower.includes("approve") && !lower.includes("rework");
     return {
       verdict: approved ? "approve" : "rework",
       comment: text.trim().slice(0, 2000) || "(unlesbare Antwort)",
       risk: "unbekannt",
+      options: [],
     };
   }
 }
