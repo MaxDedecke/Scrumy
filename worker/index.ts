@@ -9,7 +9,7 @@
 import "dotenv/config";
 import { run } from "graphile-worker";
 import { taskList } from "./tasks";
-import { reconcileStaleRuns } from "./reconcile";
+import { reconcileOrphanWorkspaces, reconcileStaleRuns } from "./reconcile";
 
 /// Wie oft nach verwaisten Laeufen gesucht wird. Beim Start einmal sofort,
 /// danach stuendlich – ein abgestuerzter Nachbar-Worker soll nicht bis zum
@@ -22,6 +22,14 @@ async function reconcile() {
     if (cleaned > 0) console.log(`[worker] ${cleaned} abgebrochene Agentenlaeufe aufgeraeumt.`);
   } catch (error) {
     console.error("[worker] Aufraeumen fehlgeschlagen:", error);
+  }
+
+  // Getrennter try-Block: Ein Dateisystem-Problem im Volume darf das Aufraeumen
+  // der Laeufe nicht verhindern (und umgekehrt).
+  try {
+    await reconcileOrphanWorkspaces();
+  } catch (error) {
+    console.error("[worker] Aufraeumen verwaister Arbeitsverzeichnisse fehlgeschlagen:", error);
   }
 }
 

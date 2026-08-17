@@ -10,11 +10,56 @@
 // ist Absicht – bei mehreren Worker-Replicas darf ein frisch gestarteter
 // Prozess niemals einen Lauf abräumen, der bei einem anderen gerade läuft.
 import { prisma } from "@/lib/prisma";
+import { listWorkspaceProjectIds, removeWorkspace } from "@/lib/workspace";
+import { deleteUnassignedAgents } from "@/lib/purge";
+import { cancelJobsOfDeletedAgents, unlockStaleJobs } from "./queue";
 import { openClarification } from "./clarification";
 
 /// Deutlich über dem längsten Zeitlimit eines Modellaufrufs (15 Minuten für
 /// Umsetzungsschritte, siehe worker/tasks/ticketWork.ts).
 const STALE_AFTER_MS = 60 * 60 * 1000;
+
+/// Zweite Sicherung fuer geloeschte Projekte: Arbeitsverzeichnisse ohne
+/// Projektzeile wegwerfen.
+///
+/// Das Loeschen selbst passiert in der Server Action (src/lib/purge.ts). Die
+/// braucht aber zwei Schritte – Datenbank und Dateisystem – und zwischen beiden
+/// kann der App-Container sterben. Ohne diesen Durchlauf lebte die Software
+/// eines geloeschten Kunden dann unbemerkt im Volume weiter.
+///
+/// Sicher gegen ein Loeschen zur falschen Zeit: Verzeichnisse sind nach der
+/// Projekt-ID benannt, und die Projektzeile existiert immer schon, bevor
+/// `ensureRepo` das Verzeichnis anlegt. Kein Verzeichnis ist also "noch nicht"
+/// in der Datenbank – fehlt die Zeile, ist sie geloescht.
+export async function reconcileOrphanWorkspaces(): Promise<number> {
+  const dirIds = await listWorkspaceProjectIds();
+  const known = await prisma.project.findMany({
+    where: { id: { in: dirIds } },
+    select: { id: true },
+  });
+  const knownIds = new Set(known.map((project) => project.id));
+  const orphans = dirIds.filter((id) => !knownIds.has(id));
+
+  for (const id of orphans) {
+    await removeWorkspace(id);
+    console.log(`[worker] Verwaistes Arbeitsverzeichnis geloescht: ${id}`);
+  }
+
+  // Aus demselben Grund koennen Agenten ohne Projekt liegengeblieben sein.
+  const agents = await deleteUnassignedAgents();
+  if (agents > 0) console.log(`[worker] ${agents} Agenten ohne Projekt aufgeloest.`);
+
+  // Erst die Sperren toter Worker loesen, sonst waeren genau die Jobs eines
+  // abgestuerzten Containers vom naechsten Schritt ausgenommen.
+  const unlocked = await unlockStaleJobs(STALE_AFTER_MS);
+  if (unlocked > 0) console.log(`[worker] Sperren von ${unlocked} toten Worker-Pools geloest.`);
+
+  // Und Jobs, deren Agent schon weg ist – siehe cancelJobsOfDeletedAgents.
+  const jobs = await cancelJobsOfDeletedAgents();
+  if (jobs > 0) console.log(`[worker] ${jobs} Jobs geloeschter Agenten aus der Queue genommen.`);
+
+  return orphans.length;
+}
 
 export async function reconcileStaleRuns(): Promise<number> {
   const cutoff = new Date(Date.now() - STALE_AFTER_MS);

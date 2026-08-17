@@ -107,7 +107,7 @@ export default async function DashboardPage() {
                       <ActionForm action={deleteOrganization} className="mt-4 border-t border-hairline pt-4">
                         <input type="hidden" name="id" value={org.id} />
                         <ConfirmButton
-                          confirmText={`Kunde "${org.name}" inkl. aller Projekte, Tickets und Anfragen wirklich löschen?`}
+                          confirmText={`Kunde "${org.name}" inkl. aller Projekte, Tickets und Anfragen wirklich löschen? Die Repositories mit der gebauten Software werden dabei unwiderruflich mitgelöscht.`}
                           className={`${buttonDangerClass} w-full`}
                         >
                           Kunde löschen

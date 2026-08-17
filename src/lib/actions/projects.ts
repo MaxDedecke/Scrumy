@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { fail, ok, type ActionResult } from "@/lib/actions/result";
+import { purgeProjectRemains, stopProjectWork } from "@/lib/purge";
 import type { ProjectStatus } from "@/generated/prisma/client";
 
 function str(formData: FormData, key: string): string | null {
@@ -50,11 +51,27 @@ export async function updateProject(formData: FormData): Promise<ActionResult> {
   return ok(`Projekt „${name}“ gespeichert.`);
 }
 
+/// Loescht das Projekt vollstaendig: Daten, wartende Arbeit und das
+/// Repository, in dem das Team die Software gebaut hat (siehe src/lib/purge.ts).
 export async function deleteProject(formData: FormData): Promise<ActionResult> {
   const id = str(formData, "id");
   if (!id) return fail("Kein Projekt angegeben.");
 
-  const project = await prisma.project.delete({ where: { id } });
+  const project = await prisma.project.findUnique({
+    where: { id },
+    select: { id: true, name: true, workspacePath: true },
+  });
+  if (!project) return fail("Projekt nicht gefunden.");
+
+  await stopProjectWork([project.id]);
+  await prisma.project.delete({ where: { id } });
+  const purged = await purgeProjectRemains([project]);
+
   revalidatePath("/");
-  return ok(`Projekt „${project.name}“ gelöscht.`, "/");
+  const hint = purged.failedWorkspaces.length > 0
+    ? ` Achtung: Das Arbeitsverzeichnis (${purged.failedWorkspaces.join(", ")}) konnte nicht gelöscht werden – der Code liegt noch im Volume.`
+    : project.workspacePath
+      ? " Das Repository mit der gebauten Software wurde mitgelöscht."
+      : "";
+  return ok(`Projekt „${project.name}“ gelöscht.${hint}`, "/");
 }

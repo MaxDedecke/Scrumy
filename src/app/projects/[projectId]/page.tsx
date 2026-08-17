@@ -353,7 +353,12 @@ export default async function ProjectBoardPage({
           <ActionForm action={deleteProject} className="mt-5 border-t border-hairline pt-5">
             <input type="hidden" name="id" value={project.id} />
             <ConfirmButton
-              confirmText={`Projekt "${project.name}" inkl. aller Tickets und Agenten-Einsätze wirklich löschen?`}
+              confirmText={
+                `Projekt "${project.name}" inkl. aller Tickets und Agenten-Einsätze wirklich löschen?` +
+                (project.workspacePath
+                  ? " Das Repository mit der gebauten Software wird dabei unwiderruflich mitgelöscht."
+                  : "")
+              }
               className={buttonDangerClass}
             >
               Projekt löschen

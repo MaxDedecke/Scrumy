@@ -10,7 +10,7 @@
 // sich `app` und `worker` teilen: Der Worker schreibt (Agenten committen), die
 // App liest (Commit-Historie und Diffs in der Oberflaeche).
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -61,6 +61,46 @@ export async function ensureRepo(projectId: string): Promise<{ dir: string; crea
     // hier nur das, was fuer jeden Commit gleich gilt.
     await git(dir, ["config", "commit.gpgsign", "false"]);
     return { dir, created: true };
+  }
+}
+
+/// Loescht das Arbeitsverzeichnis eines Projekts mitsamt der Software, die das
+/// Team dort gebaut hat. Gegenstueck zu `ensureRepo` – wird ein Projekt
+/// geloescht, darf sein Code nicht im Volume weiterleben: er enthaelt
+/// Kundenanforderungen und Modellausgaben, und ein spaeteres Projekt mit
+/// derselben ID (Restore eines DB-Dumps) wuerde auf fremder Arbeit aufsetzen.
+///
+/// `storedPath` ist der in der DB vermerkte Pfad. Er wird zusaetzlich zum
+/// berechneten Pfad beruecksichtigt, damit auch Repos verschwinden, die unter
+/// einem frueheren `WORKSPACE_ROOT` angelegt wurden. Beide Kandidaten muessen
+/// auf die Projekt-ID enden – ein verrutschter oder manipulierter Wert in der
+/// Datenbank soll niemals ein beliebiges Verzeichnis loeschen koennen.
+export async function removeWorkspace(projectId: string, storedPath?: string | null): Promise<void> {
+  if (!/^[A-Za-z0-9_-]+$/.test(projectId)) {
+    throw new WorkspaceError(`Ungueltige Projekt-ID: ${projectId}`);
+  }
+
+  const targets = new Set<string>([workspacePathFor(projectId)]);
+  if (storedPath && path.isAbsolute(storedPath) && path.basename(storedPath) === projectId) {
+    targets.add(path.resolve(storedPath));
+  }
+
+  for (const target of targets) {
+    // `force`: Ein Projekt, an dem nie ein Team gearbeitet hat, hat kein
+    // Verzeichnis – das ist kein Fehlerfall.
+    await rm(target, { recursive: true, force: true });
+  }
+}
+
+/// Die Projekt-IDs aller Verzeichnisse im Workspace-Volume. Grundlage fuer das
+/// Aufraeumen verwaister Repos (siehe worker/reconcile.ts).
+export async function listWorkspaceProjectIds(): Promise<string[]> {
+  try {
+    const entries = await readdir(workspaceRoot(), { withFileTypes: true });
+    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch {
+    // Volume noch nicht angelegt: dann gibt es auch nichts aufzuraeumen.
+    return [];
   }
 }
 
