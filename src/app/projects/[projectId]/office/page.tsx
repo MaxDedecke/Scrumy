@@ -17,6 +17,7 @@ import {
   TICKET_STATUS_LABEL,
 } from "@/lib/labels";
 import { ActionForm } from "@/components/ActionForm";
+import { ClarificationChoice } from "@/components/ClarificationChoice";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { IconSubmit } from "@/components/IconSubmit";
 import { Panel, PanelEmpty, PanelGrid, PanelStrip } from "@/components/Panel";
@@ -252,37 +253,7 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
                     <ActionForm action={decideClarification} className="mt-3 flex flex-col gap-2.5">
                       <input type="hidden" name="clarificationId" value={clarification.id} />
 
-                      {options.length > 0 && (
-                        <div className="grid gap-1.5">
-                          {options.map((option, index) => (
-                            <label
-                              key={option.key}
-                              className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-hairline bg-surface-2 px-3 py-2 transition-colors hover:border-hairline-strong has-checked:border-accent-border"
-                            >
-                              <input
-                                type="radio"
-                                name="option"
-                                value={option.key}
-                                defaultChecked={index === 0}
-                                className="mt-0.5 accent-[var(--color-accent-solid)]"
-                              />
-                              <span className="min-w-0">
-                                <span className="block text-sm text-ink">{option.label}</span>
-                                {option.detail && (
-                                  <span className="mt-0.5 block text-xs text-ink-3">{option.detail}</span>
-                                )}
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      )}
-
-                      <textarea
-                        name="comment"
-                        rows={2}
-                        placeholder="Beschluss in eigenen Worten – das Team bekommt ihn ab jetzt in jedem Arbeitsschritt mit."
-                        className={inputClass}
-                      />
+                      <ClarificationChoice options={options} />
 
                       <button type="submit" className={`${buttonPrimaryClass} self-start`}>
                         Beschluss festhalten

@@ -13,7 +13,7 @@ import { prisma } from "@/lib/prisma";
 import { fail, note, ok, type ActionResult } from "@/lib/actions/result";
 import { revalidateProject } from "@/lib/actions/revalidate";
 import { scheduleNextStep } from "@/lib/nextStep";
-import { readOptions, type ClarificationEffect } from "@/lib/clarificationOptions";
+import { OWN_OPTION_KEY, readOptions, type ClarificationEffect } from "@/lib/clarificationOptions";
 import { enqueueAgentJob } from "../../../worker/queue";
 import type { ConnectorProvider, SupportChannel } from "@/generated/prisma/client";
 
@@ -40,7 +40,14 @@ export async function decideClarification(formData: FormData): Promise<ActionRes
   if (!clarification) return fail("Klärung nicht gefunden.");
   if (clarification.status !== "OPEN") return note("Diese Klärung ist bereits entschieden.");
 
-  const option = readOptions(clarification.options).find((entry) => entry.key === optionKey);
+  // „Eigener Weg" ist keine gespeicherte Option, sondern das Textfeld: Dann
+  // zaehlt allein, was der Mensch aufgeschrieben hat – ohne dass ihm der Titel
+  // eines Vorschlags vorangestellt wird, den er gerade abgelehnt hat.
+  const ownWay = optionKey === OWN_OPTION_KEY;
+  const option = ownWay ? null : readOptions(clarification.options).find((entry) => entry.key === optionKey);
+  if (ownWay && !comment) {
+    return fail("Bitte den eigenen Weg aufschreiben – oder einen der Vorschläge auswählen.");
+  }
   if (!optionKey && !comment) {
     return fail("Bitte einen Weg auswählen oder den Beschluss aufschreiben.");
   }

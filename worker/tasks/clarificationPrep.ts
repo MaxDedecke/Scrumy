@@ -16,7 +16,12 @@ import { prisma } from "@/lib/prisma";
 import { extractJsonObject } from "@/lib/llm";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
-import { CLARIFICATION_EFFECTS, readOptions, type ClarificationOption } from "@/lib/clarificationOptions";
+import {
+  CLARIFICATION_EFFECTS,
+  readOptions,
+  withFallbackOptions,
+  type ClarificationOption,
+} from "@/lib/clarificationOptions";
 import type { ClarificationPrepPayload } from "../taskTypes";
 
 /// Mehr Wege als das macht die Entscheidung nicht besser, nur länger.
@@ -76,7 +81,11 @@ Antworte nur mit diesem JSON-Objekt:
     });
 
     const parsed = extractJsonObject(text);
-    const options = normalizeOptions(parsed.optionen, fallback);
+    const options = normalizeOptions(
+      parsed.optionen,
+      fallback,
+      Boolean(clarification.ticketId) && clarification.scope === "TICKET",
+    );
     const situation = String(parsed.lage ?? "").trim();
     const recommendation = String(parsed.empfehlung ?? "").trim();
     const agenda = [situation, recommendation ? `**Empfehlung:** ${recommendation}` : ""]
@@ -101,6 +110,19 @@ Antworte nur mit diesem JSON-Objekt:
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     helpers.logger.error(`Klärung ${clarificationId} konnte nicht vorbereitet werden: ${message}`);
+
+    // Ohne diesen Vermerk stünde im Büro bis in alle Ewigkeit „der Scrum Master
+    // arbeitet noch an einer Vorlage" – und der Mensch wartete auf etwas, das
+    // nicht mehr kommt.
+    await prisma.clarification.updateMany({
+      where: { id: clarificationId, status: "OPEN", agenda: null },
+      data: {
+        agenda:
+          `${agent.name} konnte keine Entscheidungsvorlage erstellen (${message.slice(0, 200)}). ` +
+          `Entscheide bitte anhand der Frage und dem, was passiert ist – oder schreibe den Beschluss selbst auf.`,
+      },
+    });
+
     await logActivity({
       projectId,
       ticketId: clarification.ticketId ?? undefined,
@@ -114,7 +136,11 @@ Antworte nur mit diesem JSON-Objekt:
 
 /// Aus der Modellantwort werden geprüfte Optionen. Kommt nichts Brauchbares
 /// zurück, bleiben die Standardvorschläge – nie eine Frage ohne Antwortweg.
-function normalizeOptions(value: unknown, fallback: ClarificationOption[]): ClarificationOption[] {
+function normalizeOptions(
+  value: unknown,
+  fallback: ClarificationOption[],
+  canSkipTicket: boolean,
+): ClarificationOption[] {
   if (!Array.isArray(value)) return fallback;
 
   const options: ClarificationOption[] = [];
@@ -135,19 +161,10 @@ function normalizeOptions(value: unknown, fallback: ClarificationOption[]): Clar
 
   if (options.length === 0) return fallback;
 
-  // Der Ausstieg muss immer wählbar bleiben, auch wenn das Modell ihn vergisst:
-  // Der Mensch darf das Team jederzeit anhalten statt nur zwischen zwei
-  // Weiterarbeits-Varianten zu wählen.
-  if (!options.some((option) => option.effect === "stop")) {
-    options.push({
-      key: `option-${options.length + 1}`,
-      label: "Team anhalten",
-      detail: "Niemand arbeitet weiter, bis du den nächsten Schritt anstößt.",
-      effect: "stop",
-    });
-  }
-
-  return options;
+  // Die Ausstiege muessen immer waehlbar bleiben, auch wenn das Modell sie
+  // vergisst: Der Mensch darf das Team jederzeit anhalten oder das Ticket
+  // zurueckstellen, statt nur zwischen zwei Weiterarbeits-Varianten zu waehlen.
+  return withFallbackOptions(options, { canSkipTicket });
 }
 
 export default clarificationPrep;

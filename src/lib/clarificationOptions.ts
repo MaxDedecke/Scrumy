@@ -27,6 +27,95 @@ export interface ClarificationOption {
   effect: ClarificationEffect;
 }
 
+/// Der Weg, den es in jeder Klärung zusätzlich gibt und der nie aus der
+/// Datenbank kommt: „Nichts davon – ich schreibe es selbst auf." Er gehört
+/// nicht zu den gespeicherten Optionen, weil er keine Empfehlung des Teams ist,
+/// sondern das Recht des Auftraggebers, eine eigene Antwort zu geben.
+export const OWN_OPTION_KEY = "__own";
+
+/// Wie viele Wege ein Agent höchstens vorschlagen darf. Mehr macht die
+/// Entscheidung nicht besser, nur länger.
+const MAX_AGENT_OPTIONS = 4;
+
+/// Macht aus den Vorschlägen eines Agenten geprüfte Optionen.
+///
+/// Die Umsetzer liefern ihre Wege als Freitext-Liste („- Nur server.js
+/// verwenden: index.js entfällt, ein Einstiegspunkt weniger"), QA und Scrum
+/// Master als JSON-Objekte. Beide landen hier, damit eine Klärung nicht mehr
+/// mit den immer gleichen drei Standardwegen dasteht, sondern mit den Wegen,
+/// um die es tatsächlich geht.
+///
+/// Alle so entstandenen Optionen wirken „resume": Der Beschluss geht ins Ticket
+/// und ins Beschlussregister, das Team nimmt die Arbeit damit wieder auf.
+export function optionsFromAgent(value: unknown): ClarificationOption[] {
+  const entries: { label: string; detail?: string }[] = [];
+
+  if (typeof value === "string") {
+    for (const line of value.split(/\r?\n/)) {
+      // Aufzählungszeichen und Nummerierung sind Zierrat des Modells.
+      const text = line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim();
+      if (text.length < 3) continue;
+      // „Titel: Erklärung" oder „Titel | Erklärung" – beides schreiben Modelle.
+      const split = text.match(/^(.{3,90}?)\s*(?::|\||–|—)\s+(.+)$/);
+      entries.push(split ? { label: split[1], detail: split[2] } : { label: text });
+    }
+  } else if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (typeof entry === "string") {
+        if (entry.trim().length >= 3) entries.push({ label: entry.trim() });
+        continue;
+      }
+      const item = (entry ?? {}) as { label?: unknown; detail?: unknown };
+      const label = String(item.label ?? "").trim();
+      if (label.length < 3) continue;
+      entries.push({
+        label,
+        detail: typeof item.detail === "string" ? item.detail.trim() : undefined,
+      });
+    }
+  }
+
+  return entries.slice(0, MAX_AGENT_OPTIONS).map((entry, index) => ({
+    key: `option-${index + 1}`,
+    label: entry.label.slice(0, 160),
+    detail: entry.detail ? entry.detail.slice(0, 600) : undefined,
+    effect: "resume" as const,
+  }));
+}
+
+/// Hängt die Auswege an, die immer wählbar bleiben müssen.
+///
+/// Ein Agent schlägt fachliche Wege vor („so oder so lösen") – er denkt nicht
+/// daran, dass der Auftraggeber das Ticket auch zurückstellen oder das Team
+/// anhalten können muss. Diese beiden Wege stehen deshalb hinter den
+/// Vorschlägen, nicht davor: erst die Sache, dann der Notausgang.
+export function withFallbackOptions(
+  options: ClarificationOption[],
+  { canSkipTicket }: { canSkipTicket: boolean },
+): ClarificationOption[] {
+  const complete = [...options];
+
+  if (canSkipTicket && !complete.some((option) => option.effect === "skip")) {
+    complete.push({
+      key: "skip",
+      label: "Zurückstellen, Team macht weiter",
+      detail: "Das Ticket geht zurück in den Backlog, der Sprint läuft mit den übrigen Tickets weiter.",
+      effect: "skip",
+    });
+  }
+
+  if (!complete.some((option) => option.effect === "stop")) {
+    complete.push({
+      key: "stop",
+      label: "Team anhalten",
+      detail: "Niemand arbeitet weiter, bis du den nächsten Schritt anstößt.",
+      effect: "stop",
+    });
+  }
+
+  return complete;
+}
+
 /// Liest die in der DB abgelegten Optionen zurück – aus `Json` wird wieder eine
 /// geprüfte Liste. Unbekannte `effect`-Werte gelten als "resume": Ein Beschluss
 /// soll im Zweifel weiterarbeiten lassen, nicht ins Leere laufen.

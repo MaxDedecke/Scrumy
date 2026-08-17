@@ -14,6 +14,8 @@
 //   OFFEN: offene Punkte (optional)
 //   KLÄRUNG: Frage an den Auftraggeber, die der Agent selbst nicht entscheiden
 //            darf (optional – siehe worker/clarification.ts)
+//   WEGE: die Antwortmöglichkeiten zu dieser Frage, eine je Zeile
+//         (optional, nur zusammen mit KLÄRUNG)
 //   --- DATEI: src/beispiel.ts ---
 //   <vollständiger Dateiinhalt>
 //   --- DATEI: docs/weiteres.md ---
@@ -26,6 +28,12 @@ export interface ParsedImplementation {
   notes: string;
   /** Frage, die der Agent nicht selbst entscheiden will (leer = keine). */
   clarification: string;
+  /**
+   * Die Wege, die der Agent zu seiner Frage sieht – Rohtext, eine Zeile je Weg.
+   * Ohne sie bekäme der Auftraggeber zu einer fachlichen Frage nur die
+   * allgemeinen Standardwege angeboten (siehe optionsFromAgent).
+   */
+  clarificationOptions: string;
   files: { path: string; content: string }[];
 }
 
@@ -33,7 +41,7 @@ const FILE_MARKER = /^\s*-{2,}\s*DATEI:\s*(.+?)\s*-{2,}\s*$/i;
 const END_MARKER = /^\s*-{2,}\s*ENDE\s*-{2,}\s*$/i;
 // KLAERUNG ohne Umlaut wird mitgelesen: Modelle schreiben Feldnamen gern
 // transliteriert, und daran soll eine Frage ans Team nicht scheitern.
-const FIELD = /^\s*(COMMIT|ZUSAMMENFASSUNG|OFFEN|KLÄRUNG|KLAERUNG)\s*:\s*(.*)$/i;
+const FIELD = /^\s*(COMMIT|ZUSAMMENFASSUNG|OFFEN|KLÄRUNG|KLAERUNG|WEGE)\s*:\s*(.*)$/i;
 
 /// Entfernt einen Code-Fence, den ein Modell um den Dateiinhalt gelegt hat.
 /// Der Fence gehört nie zur Datei – bliebe er stehen, wäre die Datei kaputt.
@@ -108,6 +116,7 @@ export function parseImplementation(text: string): ParsedImplementation {
     summary: fieldValue(header.ZUSAMMENFASSUNG),
     notes: fieldValue(header.OFFEN),
     clarification: fieldValue(header["KLÄRUNG"] ?? header.KLAERUNG),
+    clarificationOptions: fieldValue(header.WEGE),
     files: files
       .filter((file) => file.path.length > 0)
       .map((file) => ({ path: file.path, content: stripCodeFence(file.content).join("\n").trim() }))
