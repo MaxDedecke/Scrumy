@@ -16,9 +16,17 @@ export type ClarificationEffect =
   /** Team hält an und wartet auf den Menschen. */
   | "stop"
   /** Sprint-Budget aufstocken und weiterarbeiten. */
-  | "budget";
+  | "budget"
+  /**
+   * Ticket ohne weiteren Anlauf als erledigt verbuchen. Anders als "resume"
+   * wird der eingefrorene Arbeitsschritt NICHT erneut eingereiht – sonst
+   * scheitert ein strukturell blockierter Schritt (z.B. eine gesperrte Datei)
+   * bei jedem Anlauf identisch wieder und erzeugt Klärung um Klärung, obwohl
+   * der Beschluss längst "schließen" lautete.
+   */
+  | "close";
 
-export const CLARIFICATION_EFFECTS: ClarificationEffect[] = ["resume", "skip", "stop", "budget"];
+export const CLARIFICATION_EFFECTS: ClarificationEffect[] = ["resume", "skip", "stop", "budget", "close"];
 
 export interface ClarificationOption {
   key: string;

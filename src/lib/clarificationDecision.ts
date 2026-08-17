@@ -119,6 +119,30 @@ async function applyEffect(
     return `„${ticket.title}" liegt wieder im Backlog. ${next}`;
   }
 
+  if (effect === "close" && clarification.ticketId) {
+    // Anders als "resume" wird hier bewusst NICHTS erneut eingereiht: Der
+    // Beschluss lautet "fertig", nicht "nochmal versuchen". Ohne diese
+    // Abzweigung landete ein "schließen"-Beschluss auf dem eingefrorenen
+    // Arbeitsschritt und der scheiterte bei strukturell blockierten Tickets
+    // (z.B. eine gesperrte Datei) identisch wieder – Klärung um Klärung, ohne
+    // dass der Ticket-Status sich je bewegte.
+    const ticket = await prisma.ticket.update({
+      where: { id: clarification.ticketId },
+      data: { status: "DONE" },
+    });
+    await prisma.activityLogEntry.create({
+      data: {
+        projectId,
+        ticketId: ticket.id,
+        actor: clarification.decidedBy ?? "Mensch",
+        action: "ticket_closed_by_decision",
+        detail: `„${ticket.title}" auf Beschluss hin geschlossen, ohne weiteren Anlauf.`,
+      },
+    });
+    const next = await scheduleNextStep(projectId);
+    return `„${ticket.title}" ist geschlossen. ${next}`;
+  }
+
   if (effect === "budget") {
     const project = await prisma.project.update({
       where: { id: projectId },
