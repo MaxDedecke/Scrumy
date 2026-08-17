@@ -12,10 +12,13 @@
 //   FRONTEND_DIR  – Verzeichnis im gemounteten Workspace-Volume
 //   KIND          – "npm" oder "static"
 //   SCRIPT_NAME   – nur bei KIND=npm: der auszuführende package.json-Script
-//   PORT          – Port, auf dem der Server lauschen soll
+//   PORT          – Port, auf dem von außen erreichbar sein soll (bei KIND=npm
+//                   nur ein Angebot per Env – ignoriert der Dev-Server es,
+//                   proxied `watchForActualPort` unten auf den echten Port)
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
+const { createServer: createNetServer, connect: netConnect } = require("node:net");
 const path = require("node:path");
 
 const dir = process.env.FRONTEND_DIR;
@@ -55,10 +58,87 @@ function runNpm(targetDir, script, targetPort) {
   console.log(`$ npm run ${script}`);
   const child = spawn("npm", ["run", script], {
     cwd: targetDir,
-    stdio: "inherit",
+    // Nicht "inherit": wir muessen die Ausgabe mitlesen (siehe unten), reichen
+    // sie aber unveraendert an stdout/stderr weiter, damit `docker logs`
+    // weiterhin alles zeigt.
+    stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, PORT: String(targetPort), HOST: "0.0.0.0", BROWSER: "none", CI: "true" },
   });
   forwardSignalsTo(child);
+  watchForActualPort(child, targetPort);
+}
+
+// PORT/HOST oben sind nur ein Angebot – viele Dev-Server ignorieren sie
+// (Vite z.B. lauscht nur ueber --port/--host, nicht per Env, und bindet ohne
+// diese Flags an seinen eigenen Default-Port, meist nur auf localhost). Statt
+// Flags pro Tool zu erraten (die Namen unterscheiden sich: Next.js nutzt
+// z.B. --hostname statt --host), lesen wir mit, wohin der Server laut seiner
+// eigenen Ausgabe tatsaechlich gebunden hat ("Local: http://localhost:5173/"
+// o.ae.), und bauen im Bedarfsfall einen TCP-Proxy vom veroeffentlichten
+// PORT zu diesem echten internen Port. Das funktioniert unabhaengig vom
+// Tool und selbst wenn der Server nur auf localhost lauscht, weil der Proxy
+// im selben Netzwerk-Namespace laeuft wie der Dev-Server.
+const LOCAL_ADDR_PORT = /(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):(\d{2,5})\b/i;
+// Farbcodes wie in Vites eigener Ausgabe stehen oft MITTEN im Port ("localhost:
+// \x1b[1m5173\x1b[22m/") – vorm Suchen raus, sonst reisst das die Ziffern vom
+// vorangehenden ":" ab und die Regex oben trifft nie.
+const ANSI_ESCAPE = /\x1b\[[0-9;]*m/g;
+
+function watchForActualPort(child, targetPort) {
+  let done = false;
+  // Die Zeile mit der Adresse kann ueber zwei Chunks der Pipe zerrissen
+  // ankommen – deshalb ueber einen rollenden Puffer matchen statt pro Chunk
+  // isoliert (der waere sonst blind fuer genau diesen Fall).
+  let buffer = "";
+  const scan = (chunk) => {
+    if (done) return;
+    buffer = (buffer + chunk.toString("utf8")).replace(ANSI_ESCAPE, "").slice(-4096);
+    const match = buffer.match(LOCAL_ADDR_PORT);
+    if (!match) return;
+    done = true;
+    proxyToActualPort(targetPort, Number(match[1]));
+  };
+  child.stdout.on("data", (chunk) => {
+    process.stdout.write(chunk);
+    scan(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    process.stderr.write(chunk);
+    scan(chunk);
+  });
+}
+
+/// Versucht, auf dem veroeffentlichten Port selbst zu lauschen und alles zum
+/// tatsaechlichen internen Port des Dev-Servers durchzureichen. Laeuft der
+/// Dev-Server (entgegen PORT/HOST oben) bereits direkt auf 0.0.0.0:targetPort,
+/// schlaegt das Binden mit EADDRINUSE fehl – dann ist kein Proxy noetig, das
+/// ist kein Fehlerfall.
+function proxyToActualPort(targetPort, actualPort) {
+  const server = createNetServer((socket) => {
+    // "localhost" statt fest "127.0.0.1": manche Dev-Server (z.B. Vite ohne
+    // --host) binden nur auf IPv6-Loopback ("::1"), nicht IPv4 – Node loest
+    // "localhost" ueber beide Familien auf (Happy Eyeballs) statt sich auf
+    // eine einzelne IP festzulegen, die es vielleicht gar nicht gibt.
+    const upstream = netConnect({ host: "localhost", port: actualPort });
+    socket.pipe(upstream);
+    upstream.pipe(socket);
+    const cleanup = () => {
+      socket.destroy();
+      upstream.destroy();
+    };
+    socket.on("error", cleanup);
+    upstream.on("error", cleanup);
+  });
+  server.once("error", (error) => {
+    if (error.code === "EADDRINUSE") {
+      console.log(`Kein Proxy noetig: Port ${targetPort} ist bereits belegt.`);
+    } else {
+      console.error(`Proxy zu Port ${actualPort} fehlgeschlagen: ${error.message}`);
+    }
+  });
+  server.listen(targetPort, "0.0.0.0", () => {
+    console.log(`Proxy: 0.0.0.0:${targetPort} -> 127.0.0.1:${actualPort}`);
+  });
 }
 
 const MIME = {
