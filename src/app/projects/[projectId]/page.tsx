@@ -7,63 +7,42 @@ import {
   AGENT_STATUS_PILL,
   PRIORITY_LABEL,
   PRIORITY_PILL,
-  PROJECT_STATUS_LABEL,
-  PROJECT_STATUS_PILL,
-  TICKET_STATUS_LABEL,
   SPRINT_STATUS_LABEL,
+  TICKET_STATUS_LABEL,
   TICKET_STATUS_ORDER,
   TICKET_TYPE_LABEL,
 } from "@/lib/labels";
-import { ActionForm } from "@/components/ActionForm";
-import { ProjectTabs } from "@/components/ProjectTabs";
-import { ConfirmButton } from "@/components/ConfirmButton";
-import { PageHeader } from "@/components/PageHeader";
-import { EmptyHint, Section } from "@/components/Section";
-import { ExternalLinkIcon, InboxIcon, UsersIcon, WarningIcon } from "@/components/icons";
-import { deleteProject, updateProject } from "@/lib/actions/projects";
-import { buttonDangerClass, buttonPrimaryClass, inputClass, labelClass, pageClass } from "@/lib/ui";
+import { Panel, PanelEmpty, PanelGrid, PanelStrip } from "@/components/Panel";
+import { WarningIcon } from "@/components/icons";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
 export const dynamic = "force-dynamic";
 
 export default async function ProjectBoardPage({
   params,
-}: {
-  params: Promise<{ projectId: string }>;
-}) {
+}: PageProps<"/projects/[projectId]">) {
   const { projectId } = await params;
 
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
-      organization: true,
-      tickets: {
-        orderBy: { updatedAt: "desc" },
-        include: { reviews: true },
-      },
+      tickets: { orderBy: { updatedAt: "desc" }, include: { reviews: true } },
       agents: { include: { agent: true, connector: true } },
     },
   });
 
   if (!project) notFound();
 
-  const sprint = await prisma.sprint.findFirst({
-    where: { projectId },
-    orderBy: { number: "desc" },
-    include: { tickets: true },
-  });
-
-  const openClarifications = await prisma.clarification.findMany({
-    where: { projectId, status: "OPEN" },
-    orderBy: { createdAt: "asc" },
-  });
-
-  const activity = await prisma.activityLogEntry.findMany({
-    where: { OR: [{ projectId }, { ticket: { projectId } }] },
-    orderBy: { createdAt: "desc" },
-    take: 10,
-    include: { ticket: true, supportRequest: true },
-  });
+  const [sprint, openClarifications, activity] = await Promise.all([
+    prisma.sprint.findFirst({ where: { projectId }, orderBy: { number: "desc" }, include: { tickets: true } }),
+    prisma.clarification.findMany({ where: { projectId, status: "OPEN" }, orderBy: { createdAt: "asc" } }),
+    prisma.activityLogEntry.findMany({
+      where: { OR: [{ projectId }, { ticket: { projectId } }] },
+      orderBy: { createdAt: "desc" },
+      take: 60,
+      include: { ticket: true, supportRequest: true },
+    }),
+  ]);
 
   const ticketsByStatus = TICKET_STATUS_ORDER.map((status) => ({
     status,
@@ -77,9 +56,9 @@ export default async function ProjectBoardPage({
     0,
   );
 
-  // Kennzahlen-Kacheln: ein Zustand pro Kachel, kein Diagramm. Der Farbton
-  // kommt aus der festen Statuspalette und steht nie allein – Label und Punkt
-  // tragen die Bedeutung mit.
+  // Kennzahlen: ein Zustand pro Kachel, kein Diagramm. Der Farbton kommt aus
+  // der festen Statuspalette und steht nie allein – Label und Punkt tragen die
+  // Bedeutung mit.
   const stats: { label: string; value: number; tone?: "critical" | "warning" }[] = [
     { label: "Offene Tickets", value: openTickets.length },
     { label: "In Review", value: ticketsByStatus.find((c) => c.status === "IN_REVIEW")?.tickets.length ?? 0 },
@@ -88,284 +67,228 @@ export default async function ProjectBoardPage({
   ];
 
   return (
-    <main className={pageClass}>
-      <PageHeader
-        backHref="/"
-        backLabel="Kunden"
-        context={project.organization.name}
-        title={project.name}
-        status={
-          <span className={`${PROJECT_STATUS_PILL[project.status]} pill-dot`}>
-            {PROJECT_STATUS_LABEL[project.status]}
-          </span>
-        }
-        actions={
-          <>
-            {(project.status === "ACTIVE" || project.status === "PAUSED") && (
-              <Link
-                href={`/projects/${project.id}/office`}
-                className="quiet-link inline-flex items-center gap-1.5"
-              >
-                <UsersIcon className="h-4 w-4" />
-                Team-Büro
-              </Link>
-            )}
-            <Link
-              href={`/organizations/${project.organizationId}/inbox`}
-              className="quiet-link inline-flex items-center gap-1.5"
-            >
-              <InboxIcon className="h-4 w-4" />
-              Support-Postfach
-            </Link>
-            {project.repoUrl && (
-              <a
-                href={project.repoUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="quiet-link inline-flex items-center gap-1.5"
-              >
-                <ExternalLinkIcon className="h-4 w-4" />
-                Repository
-              </a>
-            )}
-          </>
-        }
-      />
-
-      <ProjectTabs projectId={project.id} active="overview" />
-
+    <>
       {(project.status === "DISCOVERY" || project.status === "CONCEPT") && (
-        <p className="mb-8 rounded-xl border border-accent-border bg-accent-soft px-4 py-3 text-sm text-accent">
-          Team ist noch nicht gestartet – Projekt ist in der{" "}
-          {project.status === "DISCOVERY" ? "Discovery-Phase" : "Konzeptphase"}.{" "}
-          <Link href={`/projects/${project.id}/discovery`} className="font-medium underline underline-offset-2 hover:text-ink">
-            Anforderungen &amp; Konzept bearbeiten
-          </Link>
-          , um das Team zu starten.
-        </p>
+        <PanelStrip>
+          <p className="rounded-xl border border-accent-border bg-accent-soft px-4 py-2.5 text-sm text-accent">
+            Team ist noch nicht gestartet – Projekt ist in der{" "}
+            {project.status === "DISCOVERY" ? "Discovery-Phase" : "Konzeptphase"}.{" "}
+            <Link
+              href={`/projects/${project.id}/discovery`}
+              className="font-medium underline underline-offset-2 hover:text-ink"
+            >
+              Anforderungen &amp; Konzept bearbeiten
+            </Link>
+            , um das Team zu starten.
+          </p>
+        </PanelStrip>
       )}
 
       {openClarifications.length > 0 && (
-        <Link
-          href={`/projects/${project.id}/office`}
-          className="mb-8 flex items-start gap-2.5 rounded-xl border border-critical/35 bg-critical/10 px-4 py-3 text-sm text-ink transition-colors hover:border-critical/60"
-        >
-          <WarningIcon className="mt-0.5 h-4 w-4 shrink-0 text-critical" />
-          <span>
-            <span className="font-medium">
-              {openClarifications.length === 1
-                ? "Das Team braucht eine Entscheidung"
-                : `Das Team braucht ${openClarifications.length} Entscheidungen`}
-              :
-            </span>{" "}
-            {openClarifications[0].question}
-            {openClarifications.some((entry) => entry.scope === "PROJECT")
-              ? " – bis dahin arbeitet niemand weiter."
-              : " – die betroffenen Tickets liegen so lange."}
-          </span>
-        </Link>
-      )}
-
-      {sprint && (
-        <Link
-          href={`/projects/${project.id}/office`}
-          className="card-interactive mb-8 block px-5 py-4"
-        >
-          <p className="text-xs text-ink-3">
-            Sprint {sprint.number} · {SPRINT_STATUS_LABEL[sprint.status]}
-          </p>
-          <p className="mt-1 text-sm font-medium text-ink">{sprint.goal}</p>
-          <p className="mt-1 text-xs text-ink-3">
-            {sprint.tickets.filter((ticket) => ticket.status === "DONE").length} von {sprint.tickets.length}{" "}
-            Tickets fertig – im Team-Büro live mitverfolgen
-          </p>
-        </Link>
-      )}
-
-      <section className="mb-9 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {stats.map((stat) => (
-          <div key={stat.label} className="card p-4">
-            <p
-              className={`text-3xl font-semibold ${
-                stat.tone === "critical"
-                  ? "text-critical"
-                  : stat.tone === "warning"
-                    ? "text-warning"
-                    : "text-ink"
-              }`}
-            >
-              {stat.value}
-            </p>
-            <p className="mt-1.5 flex items-center gap-1.5 text-xs text-ink-3">
-              {stat.tone && (
-                <span
-                  aria-hidden
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    stat.tone === "critical" ? "bg-critical" : "bg-warning"
-                  }`}
-                />
-              )}
-              {stat.label}
-            </p>
-          </div>
-        ))}
-      </section>
-
-      <Section
-        title="Agenten-Team"
-        action={
-          <Link href={`/projects/${project.id}/team`} className="quiet-link text-xs font-medium">
-            Konfigurieren →
+        <PanelStrip>
+          <Link
+            href={`/projects/${project.id}/office`}
+            className="flex items-start gap-2.5 rounded-xl border border-critical/35 bg-critical/10 px-4 py-2.5 text-sm text-ink transition-colors hover:border-critical/60"
+          >
+            <WarningIcon className="mt-0.5 h-4 w-4 shrink-0 text-critical" />
+            <span className="min-w-0">
+              <span className="font-medium">
+                {openClarifications.length === 1
+                  ? "Das Team braucht eine Entscheidung"
+                  : `Das Team braucht ${openClarifications.length} Entscheidungen`}
+                :
+              </span>{" "}
+              {openClarifications[0].question}
+              {openClarifications.some((entry) => entry.scope === "PROJECT")
+                ? " – bis dahin arbeitet niemand weiter."
+                : " – die betroffenen Tickets liegen so lange."}
+            </span>
           </Link>
-        }
-      >
-        {project.agents.length === 0 ? (
-          <EmptyHint>
-            Noch kein Agenten-Team –{" "}
-            <Link href={`/projects/${project.id}/team`} className="text-accent underline underline-offset-2">
-              jetzt einrichten
-            </Link>
-            .
-          </EmptyHint>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {project.agents.map(({ agent, connector }) => (
-              <div key={agent.id} className="card flex items-center gap-2 px-3 py-2">
-                <span className="text-sm font-medium text-ink">{agent.name}</span>
-                <span className="pill pill-neutral">{AGENT_ROLE_LABEL[agent.role]}</span>
-                <span className={`${AGENT_STATUS_PILL[agent.status]} pill-dot`}>
-                  {AGENT_STATUS_LABEL[agent.status]}
-                </span>
-                {connector && <span className="text-xs text-ink-4">via {connector.name}</span>}
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
+        </PanelStrip>
+      )}
 
-      <Section title="Scrum-Board">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {ticketsByStatus.map(({ status, tickets }) => (
-            <div key={status} className="card flex flex-col">
-              <div className="flex items-center justify-between border-b border-hairline px-4 py-2.5">
-                <h3 className="text-sm font-medium text-ink">{TICKET_STATUS_LABEL[status]}</h3>
-                <span className="text-xs tabular-nums text-ink-3">{tickets.length}</span>
-              </div>
-              <div className="space-y-2 p-2">
-                {tickets.length === 0 && (
-                  <p className="px-2 py-3 text-center text-xs text-ink-4">Keine Tickets</p>
+      <PanelStrip>
+        <div className="card grid grid-cols-2 divide-hairline sm:grid-cols-4 sm:divide-x">
+          {stats.map((stat) => (
+            <div key={stat.label} className="flex items-baseline gap-2 px-4 py-2.5">
+              <span
+                className={`text-xl font-semibold tabular-nums ${
+                  stat.tone === "critical"
+                    ? "text-critical"
+                    : stat.tone === "warning"
+                      ? "text-warning"
+                      : "text-ink"
+                }`}
+              >
+                {stat.value}
+              </span>
+              <span className="flex min-w-0 items-center gap-1.5 truncate text-xs text-ink-3">
+                {stat.tone && (
+                  <span
+                    aria-hidden
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                      stat.tone === "critical" ? "bg-critical" : "bg-warning"
+                    }`}
+                  />
                 )}
-                {tickets.map((ticket) => {
-                  const pendingReview = ticket.reviews.find((r) => r.decision === "PENDING");
-                  return (
-                    <article key={ticket.id} className="card-interactive bg-surface-2 p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-sm font-medium leading-snug text-ink">{ticket.title}</p>
-                        {ticket.isCritical && (
-                          <span
-                            title="Kritische Änderung – benötigt menschliches Review"
-                            className="shrink-0 text-warning"
-                          >
-                            <WarningIcon className="h-4 w-4" />
-                            <span className="sr-only">Kritische Änderung</span>
-                          </span>
-                        )}
-                      </div>
-                      {ticket.description && (
-                        <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-ink-3">
-                          {ticket.description}
-                        </p>
-                      )}
-                      {ticket.plan && (
-                        <p className="mt-2 rounded-lg border border-hairline bg-canvas p-2 text-[11px] leading-relaxed text-ink-2">
-                          <span className="font-medium text-ink">Plan: </span>
-                          {ticket.plan}
-                        </p>
-                      )}
-                      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                        <span className="pill pill-neutral">{TICKET_TYPE_LABEL[ticket.type]}</span>
-                        <span className={PRIORITY_PILL[ticket.priority]}>{PRIORITY_LABEL[ticket.priority]}</span>
-                        {pendingReview && <span className="pill pill-warning pill-dot">Review offen</span>}
-                        {ticket.externalRef && <span className="pill pill-neutral">{ticket.externalRef}</span>}
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
+                {stat.label}
+              </span>
             </div>
           ))}
         </div>
-      </Section>
+      </PanelStrip>
 
-      <Section title="Aktivität">
-        {activity.length === 0 ? (
-          <EmptyHint>Noch keine Aktivität.</EmptyHint>
-        ) : (
-          <ul className="card divide-y divide-hairline">
-            {activity.map((entry) => (
-              <li key={entry.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-sm">
-                <span className="shrink-0 tabular-nums text-xs text-ink-4">
-                  {entry.createdAt.toLocaleString("de-DE")}
-                </span>
-                <span className="shrink-0 font-medium text-ink">{entry.actor}</span>
-                <span className="text-ink-3">
-                  → {entry.ticket?.title ?? entry.supportRequest?.subject ?? "Projekt"}:
-                </span>
-                <span className="text-ink-2">{entry.detail ?? entry.action}</span>
-              </li>
+      <PanelGrid className="lg:grid-cols-2 lg:grid-rows-[minmax(0,1.35fr)_minmax(0,1fr)]">
+        <Panel
+          title="Scrum-Board"
+          className="lg:col-span-2"
+          scroll={false}
+          padded={false}
+          action={
+            sprint ? (
+              <Link href={`/projects/${project.id}/office`} className="quiet-link font-medium">
+                Sprint {sprint.number} · {SPRINT_STATUS_LABEL[sprint.status]} ·{" "}
+                {sprint.tickets.filter((ticket) => ticket.status === "DONE").length}/{sprint.tickets.length}{" "}
+                fertig →
+              </Link>
+            ) : (
+              <span className="text-ink-4">noch kein Sprint</span>
+            )
+          }
+        >
+          {/* Jede Statusspalte scrollt für sich: Ein volles „Erledigt" schiebt
+              damit nie das „Zu tun" aus dem Bild. */}
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-4">
+            {ticketsByStatus.map(({ status, tickets }) => (
+              <div
+                key={status}
+                className="flex min-h-0 flex-col rounded-lg border border-hairline bg-surface-2/40"
+              >
+                <div className="flex h-9 shrink-0 items-center justify-between px-3">
+                  <h3 className="text-xs font-medium text-ink-2">{TICKET_STATUS_LABEL[status]}</h3>
+                  <span className="text-[11px] tabular-nums text-ink-4">{tickets.length}</span>
+                </div>
+                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
+                  {tickets.length === 0 && (
+                    <p className="px-2 py-3 text-center text-xs text-ink-4">Keine Tickets</p>
+                  )}
+                  {tickets.map((ticket) => {
+                    const pendingReview = ticket.reviews.find((r) => r.decision === "PENDING");
+                    return (
+                      <article key={ticket.id} className="card-interactive p-2.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-xs font-medium leading-snug text-ink">{ticket.title}</p>
+                          {ticket.isCritical && (
+                            <span
+                              title="Kritische Änderung – benötigt menschliches Review"
+                              className="shrink-0 text-warning"
+                            >
+                              <WarningIcon className="h-3.5 w-3.5" />
+                              <span className="sr-only">Kritische Änderung</span>
+                            </span>
+                          )}
+                        </div>
+                        {ticket.description && (
+                          <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-ink-3">
+                            {ticket.description}
+                          </p>
+                        )}
+                        <div className="mt-2 flex flex-wrap items-center gap-1">
+                          <span className="pill pill-neutral">{TICKET_TYPE_LABEL[ticket.type]}</span>
+                          <span className={PRIORITY_PILL[ticket.priority]}>
+                            {PRIORITY_LABEL[ticket.priority]}
+                          </span>
+                          {pendingReview && <span className="pill pill-warning pill-dot">Review offen</span>}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
             ))}
-          </ul>
-        )}
-      </Section>
+          </div>
+        </Panel>
 
-      <Section title="Projekt-Einstellungen" className="mb-0">
-        <div className="card p-5">
-          <ActionForm action={updateProject} className="grid gap-4 sm:grid-cols-2">
-            <input type="hidden" name="id" value={project.id} />
-            <div>
-              <label className={labelClass}>Name</label>
-              <input name="name" defaultValue={project.name} required className={inputClass} />
-            </div>
-            <div>
-              <label className={labelClass}>Status</label>
-              <select name="status" defaultValue={project.status} className={inputClass}>
-                <option value="DISCOVERY">{PROJECT_STATUS_LABEL.DISCOVERY}</option>
-                <option value="CONCEPT">{PROJECT_STATUS_LABEL.CONCEPT}</option>
-                <option value="ACTIVE">{PROJECT_STATUS_LABEL.ACTIVE}</option>
-                <option value="PAUSED">{PROJECT_STATUS_LABEL.PAUSED}</option>
-                <option value="ARCHIVED">{PROJECT_STATUS_LABEL.ARCHIVED}</option>
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>Repository-URL</label>
-              <input name="repoUrl" defaultValue={project.repoUrl ?? ""} className={inputClass} />
-            </div>
-            <div>
-              <label className={labelClass}>Beschreibung</label>
-              <input name="description" defaultValue={project.description ?? ""} className={inputClass} />
-            </div>
-            <div className="sm:col-span-2">
-              <button type="submit" className={buttonPrimaryClass}>
-                Speichern
-              </button>
-            </div>
-          </ActionForm>
-          <ActionForm action={deleteProject} className="mt-5 border-t border-hairline pt-5">
-            <input type="hidden" name="id" value={project.id} />
-            <ConfirmButton
-              confirmText={
-                `Projekt "${project.name}" inkl. aller Tickets und Agenten-Einsätze wirklich löschen?` +
-                (project.workspacePath
-                  ? " Das Repository mit der gebauten Software wird dabei unwiderruflich mitgelöscht."
-                  : "")
-              }
-              className={buttonDangerClass}
-            >
-              Projekt löschen
-            </ConfirmButton>
-          </ActionForm>
-        </div>
-      </Section>
-    </main>
+        <Panel
+          title="Agenten-Team"
+          count={project.agents.length}
+          padded={false}
+          action={
+            <Link href={`/projects/${project.id}/team`} className="quiet-link font-medium">
+              Konfigurieren →
+            </Link>
+          }
+        >
+          {project.agents.length === 0 ? (
+            <PanelEmpty>
+              Noch kein Agenten-Team –{" "}
+              <Link href={`/projects/${project.id}/team`} className="text-accent underline underline-offset-2">
+                jetzt einrichten
+              </Link>
+              .
+            </PanelEmpty>
+          ) : (
+            <ul className="divide-y divide-hairline">
+              {project.agents.map(({ agent, connector }) => (
+                <li key={agent.id} className="flex items-center gap-3 px-4 py-2.5">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-ink">{agent.name}</span>
+                    <span className="block truncate text-xs text-ink-3">
+                      {AGENT_ROLE_LABEL[agent.role]}
+                      {connector ? ` · via ${connector.name}` : ""}
+                    </span>
+                  </span>
+                  <span className={`${AGENT_STATUS_PILL[agent.status]} pill-dot shrink-0`}>
+                    {AGENT_STATUS_LABEL[agent.status]}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+
+        <Panel
+          title="Aktivität"
+          padded={false}
+          action={
+            <Link href={`/projects/${project.id}/records`} className="quiet-link font-medium">
+              Nachweise →
+            </Link>
+          }
+        >
+          {activity.length === 0 ? (
+            <PanelEmpty>Noch keine Aktivität.</PanelEmpty>
+          ) : (
+            <ul className="divide-y divide-hairline">
+              {activity.map((entry) => (
+                <li key={entry.id} className="flex gap-3 px-4 py-2 text-sm">
+                  <span className="w-24 shrink-0 tabular-nums text-xs text-ink-4">
+                    {formatTime(entry.createdAt)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="text-ink-2">
+                      <span className="text-ink">{entry.actor}</span> ·{" "}
+                      {entry.ticket?.title ?? entry.supportRequest?.subject ?? "Projekt"}
+                    </span>
+                    <span className="block truncate text-xs text-ink-3">
+                      {entry.detail ?? entry.action}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      </PanelGrid>
+    </>
   );
+}
+
+function formatTime(date: Date): string {
+  return date.toLocaleString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

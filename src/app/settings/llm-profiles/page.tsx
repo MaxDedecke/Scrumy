@@ -5,9 +5,9 @@ import { ConfirmButton } from "@/components/ConfirmButton";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyHint } from "@/components/Section";
 import { Disclosure, formGridClass } from "@/components/Disclosure";
-import { ChevronRightIcon } from "@/components/icons";
+import { ChevronRightIcon, TrashIcon } from "@/components/icons";
 import { createLlmProfile, deleteLlmProfile, updateLlmProfile } from "@/lib/actions/llm-profiles";
-import { buttonDangerClass, buttonPrimaryClass, inputClass, labelClass, pageClass } from "@/lib/ui";
+import { buttonPrimaryClass, iconButtonDangerClass, inputClass, labelClass, pageClass } from "@/lib/ui";
 import type { LlmProvider } from "@/generated/prisma/client";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
@@ -101,13 +101,17 @@ export default async function LlmProfilesSettingsPage() {
                   </button>
                 </div>
               </ActionForm>
-              <ActionForm action={deleteLlmProfile} className="mt-5 border-t border-hairline pt-5">
+              {/* Löschen als Papierkorb am rechten Rand: dieselbe Geste wie in
+                  allen anderen Listen der App – die Sicherheitsabfrage nennt
+                  weiter die Folgen im Klartext. */}
+              <ActionForm action={deleteLlmProfile} className="mt-4 flex justify-end border-t border-hairline pt-3">
                 <input type="hidden" name="id" value={profile.id} />
                 <ConfirmButton
                   confirmText={`Profil "${profile.name}" löschen? ${profile._count.agents} Agent(en) verlieren dadurch die Zuweisung.`}
-                  className={buttonDangerClass}
+                  title={`Profil „${profile.name}" löschen`}
+                  className={iconButtonDangerClass}
                 >
-                  Profil löschen
+                  <TrashIcon className="h-4 w-4" />
                 </ConfirmButton>
               </ActionForm>
             </div>

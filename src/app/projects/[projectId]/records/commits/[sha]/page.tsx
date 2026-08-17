@@ -1,9 +1,8 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { gitShow } from "@/lib/workspace";
-import { PageHeader } from "@/components/PageHeader";
-import { Section } from "@/components/Section";
-import { pageClass } from "@/lib/ui";
+import { Panel, PanelGrid } from "@/components/Panel";
 
 // Ein Commit im Wortlaut: Commit-Message des Agenten plus vollständiger Diff.
 // Zusammen mit dem zugehörigen Agentenlauf (Prompt/Antwort) ergibt das die
@@ -12,14 +11,12 @@ export const dynamic = "force-dynamic";
 
 export default async function CommitPage({
   params,
-}: {
-  params: Promise<{ projectId: string; sha: string }>;
-}) {
+}: PageProps<"/projects/[projectId]/records/commits/[sha]">) {
   const { projectId, sha } = await params;
 
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    include: { organization: true },
+    select: { workspacePath: true },
   });
   if (!project?.workspacePath) notFound();
 
@@ -31,18 +28,18 @@ export default async function CommitPage({
   }
 
   return (
-    <main className={pageClass}>
-      <PageHeader
-        backHref={`/projects/${projectId}/records`}
-        backLabel="Nachweise"
-        context={project.organization.name}
+    <PanelGrid className="lg:grid-cols-1">
+      <Panel
         title={`Commit ${sha.slice(0, 8)}`}
-        description={`Im Repository ${project.workspacePath}`}
-      />
-
-      <Section title="Änderung" className="mb-0">
-        <pre className="card overflow-x-auto p-5 font-mono text-xs leading-relaxed text-ink-2">{diff}</pre>
-      </Section>
-    </main>
+        padded={false}
+        action={
+          <Link href={`/projects/${projectId}/records`} className="quiet-link font-medium">
+            ← Nachweise
+          </Link>
+        }
+      >
+        <pre className="overflow-x-auto p-4 font-mono text-xs leading-relaxed text-ink-2">{diff}</pre>
+      </Panel>
+    </PanelGrid>
   );
 }

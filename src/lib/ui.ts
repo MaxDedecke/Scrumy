@@ -6,6 +6,14 @@
 // Textzeile auf jeder Seite exakt an derselben Stelle.
 export const pageClass = "mx-auto w-full max-w-6xl flex-1 px-8 py-9";
 
+// Projektseiten: derselbe Container, aber ab lg exakt fensterhoch. Die Seite
+// selbst wächst dann nicht mehr mit dem Inhalt – gescrollt wird innerhalb der
+// Panels (siehe src/components/Panel.tsx). Unter lg bleibt es beim normalen
+// Untereinander mit Seiten-Scroll, weil auf einem schmalen Schirm nebeneinander
+// nichts zu gewinnen ist.
+export const pageFixedClass =
+  "mx-auto flex w-full max-w-6xl flex-1 flex-col px-8 py-7 lg:h-full lg:min-h-0";
+
 export const inputClass =
   "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-sm text-ink transition-colors placeholder:text-ink-4 focus:border-accent-border focus:outline-none";
 
@@ -23,5 +31,25 @@ export const buttonDangerClass = `${buttonBaseClass} border border-critical/35 t
 // Textbutton für destruktive Aktionen innerhalb einer Zeile (kein Rahmen).
 export const buttonDangerQuietClass =
   "text-xs font-medium text-critical transition-colors hover:text-ink";
+
+// Icon-Buttons: quadratisch, ohne Beschriftung, Bedeutung über Tooltip und
+// Screenreader-Text (siehe <IconSubmit>). Nur für Aktionen, die sich in einem
+// Bild eindeutig sagen lassen – alles Erklärungsbedürftige bleibt ein
+// beschrifteter Button.
+const iconButtonBaseClass =
+  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors";
+
+export const iconButtonClass = `${iconButtonBaseClass} text-ink-3 hover:bg-surface-3 hover:text-ink`;
+
+/// Eingeschalteter Zustand (Autopilot an) – Farbe UND gefülltes Icon.
+export const iconButtonOnClass = `${iconButtonBaseClass} bg-accent-soft text-accent hover:bg-accent-soft`;
+
+/// Löschen/Entfernen in Listenzeilen: bleibt unauffällig, bis die Zeile
+/// überfahren wird (`group-hover` in der Zeile), und wird erst dann rot.
+export const iconButtonDangerClass = `${iconButtonBaseClass} text-ink-4 hover:bg-critical/10 hover:text-critical`;
+
+/// Kleinere Variante für dichte Listenzeilen.
+export const iconButtonSmallDangerClass =
+  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-4 opacity-0 transition-all group-hover:opacity-100 hover:bg-critical/10 hover:text-critical focus-visible:opacity-100";
 
 export const cardClass = "card";

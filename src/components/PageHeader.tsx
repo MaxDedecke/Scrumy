@@ -16,6 +16,7 @@ export function PageHeader({
   status,
   actions,
   description,
+  className = "mb-7",
 }: {
   backHref?: string;
   backLabel?: string;
@@ -27,9 +28,11 @@ export function PageHeader({
   /** Sekundäre Links/Buttons am rechten Rand der Titelzeile. */
   actions?: ReactNode;
   description?: string;
+  /** Nur der Außenabstand – auf den fensterhohen Projektseiten enger. */
+  className?: string;
 }) {
   return (
-    <header className="mb-7">
+    <header className={`shrink-0 ${className}`}>
       <div className="flex h-5 items-center gap-2 text-xs">
         {backHref && (
           <Link
@@ -53,7 +56,7 @@ export function PageHeader({
           <h1 className="truncate text-2xl font-semibold text-ink">{title}</h1>
           {status}
         </div>
-        {actions && <div className="flex shrink-0 items-center gap-4 text-sm">{actions}</div>}
+        {actions && <div className="flex shrink-0 items-center gap-3 text-sm">{actions}</div>}
       </div>
 
       {description && (

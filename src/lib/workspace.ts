@@ -96,7 +96,10 @@ export async function removeWorkspace(projectId: string, storedPath?: string | n
 /// Aufraeumen verwaister Repos (siehe worker/reconcile.ts).
 export async function listWorkspaceProjectIds(): Promise<string[]> {
   try {
-    const entries = await readdir(workspaceRoot(), { withFileTypes: true });
+    // `turbopackIgnore` wie in `workspacePathFor`: Der Build analysiert
+    // Dateizugriffe statisch und wuerde sonst den gesamten Quellbaum in die
+    // Server-Ausgabe kopieren. Gelesen wird zur Laufzeit nur das Volume.
+    const entries = await readdir(/* turbopackIgnore: true */ workspaceRoot(), { withFileTypes: true });
     return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch {
     // Volume noch nicht angelegt: dann gibt es auch nichts aufzuraeumen.

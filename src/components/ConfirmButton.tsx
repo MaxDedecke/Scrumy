@@ -8,6 +8,7 @@ export function ConfirmButton({
   className,
   name,
   value,
+  title,
 }: {
   /** `null` = ohne Rückfrage absenden (z.B. wenn nichts überschrieben wird). */
   confirmText: string | null;
@@ -16,6 +17,9 @@ export function ConfirmButton({
   /** Für Formulare mit mehreren Submit-Buttons (z.B. Vorlagenauswahl). */
   name?: string;
   value?: string;
+  /** Klartext für Icon-Buttons ohne Beschriftung: Tooltip, Screenreader-Name
+   *  und sichtbarer Ersatztext – dieselben drei Kanäle wie in <IconSubmit>. */
+  title?: string;
 }) {
   const showToast = useToast();
 
@@ -25,6 +29,8 @@ export function ConfirmButton({
       className={className}
       name={name}
       value={value}
+      title={title}
+      aria-label={title}
       onClick={(e) => {
         if (confirmText && !window.confirm(confirmText)) {
           e.preventDefault();
@@ -36,6 +42,7 @@ export function ConfirmButton({
       }}
     >
       {children}
+      {title && <span className="sr-only">{title}</span>}
     </button>
   );
 }
