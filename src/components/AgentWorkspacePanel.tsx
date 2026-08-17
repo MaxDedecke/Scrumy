@@ -33,12 +33,19 @@ export function AgentWorkspacePanel({
 }) {
   const [mode, setMode] = useState<ViewMode>("list");
 
+  // Eingeklappt reicht die Namenszeile: einmal auf den Blick lesbar, wer
+  // gerade zum Team gehört, ohne Status und Aufgaben mitzuschleppen.
+  // `line-clamp-2` kappt bei mehr Namen als Platz automatisch mit „…".
+  const namesLine = agents.length === 0 ? "Niemand zugeordnet." : agents.map((agent) => agent.name).join(", ");
+
   return (
     <Panel
       title="Wer gerade woran arbeitet"
       count={agents.length}
       padded={false}
       footer={footer}
+      collapsible
+      collapsedView={<p className="line-clamp-2 px-4 py-3 text-sm text-ink-2">{namesLine}</p>}
       action={
         <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
           <button

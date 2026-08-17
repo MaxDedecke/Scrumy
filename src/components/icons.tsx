@@ -198,6 +198,17 @@ export function StopIcon({ className }: { className?: string }) {
 }
 
 /// „Vorschau neu laden" – zwei Pfeile im Kreis.
+/// „Anhalten"/„Nachbessern" als Mini-Aktion in eingeklappten Karten – ein Kreis
+/// mit Diagonale, wie ein Verbotsschild.
+export function BanIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className={className} aria-hidden>
+      <circle cx="12" cy="12" r="8.25" />
+      <path strokeLinecap="round" d="M6.34 6.34l11.32 11.32" />
+    </svg>
+  );
+}
+
 export function RefreshIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className={className} aria-hidden>
