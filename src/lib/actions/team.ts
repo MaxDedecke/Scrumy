@@ -6,22 +6,16 @@
 // Die Actions selbst arbeiten NICHT – sie reihen Jobs ein (siehe
 // worker/queue.ts). Ein Klick soll sofort zurückkommen, auch wenn das Team
 // danach eine halbe Stunde beschäftigt ist.
-import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { fail, note, ok, type ActionResult } from "@/lib/actions/result";
 import { agentForRole, ensureProjectTeam } from "@/lib/team";
+import { scheduleNextStep } from "@/lib/nextStep";
+import { revalidateProject } from "@/lib/actions/revalidate";
 import { enqueueAgentJob } from "../../../worker/queue";
 
 function str(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
   return value.length > 0 ? value : null;
-}
-
-function revalidateProject(projectId: string) {
-  revalidatePath(`/projects/${projectId}`);
-  revalidatePath(`/projects/${projectId}/office`);
-  revalidatePath(`/projects/${projectId}/records`);
-  revalidatePath(`/projects/${projectId}/discovery`);
 }
 
 /// Team-Start: Mannschaft aufstellen, Projekt auf Aktiv, ersten Arbeitstag
@@ -157,69 +151,6 @@ export async function nudgeTeam(formData: FormData): Promise<ActionResult> {
   const message = await scheduleNextStep(projectId);
   revalidateProject(projectId);
   return ok(message);
-}
-
-/// Bestimmt aus dem Projektstand, was als Naechstes ansteht, und reiht es ein.
-/// Dieselbe Logik nutzen „Fortsetzen" und „Nächsten Schritt anstoßen".
-async function scheduleNextStep(projectId: string): Promise<string> {
-  const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
-
-  const sprint = await prisma.sprint.findFirst({
-    where: { projectId },
-    orderBy: { number: "desc" },
-    include: { tickets: true },
-  });
-
-  // Noch kein Arbeitsplatz/Sprint: erster Arbeitstag.
-  if (!project.workspacePath || !sprint) {
-    const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
-    if (!productOwner) return "Es ist kein Team zugeordnet.";
-    await enqueueAgentJob("teamKickoff", {
-      agentId: productOwner.id,
-      projectId,
-      reason: "Arbeit aufgenommen",
-    });
-    return `${productOwner.name} richtet das Repository ein und liest den Auftrag.`;
-  }
-
-  if (sprint.status === "DONE") {
-    const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
-    if (!productOwner) return "Es ist kein Product Owner zugeordnet.";
-    await enqueueAgentJob("sprintPlanning", {
-      agentId: productOwner.id,
-      projectId,
-      reason: "nächster Sprint angestoßen",
-    });
-    return `${productOwner.name} plant Sprint ${sprint.number + 1}.`;
-  }
-
-  const openTicket = sprint.tickets
-    .filter((ticket) => ticket.status === "BACKLOG" || ticket.status === "IN_PROGRESS")
-    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0];
-
-  if (openTicket) {
-    const assignee = openTicket.assigneeId
-      ? await prisma.agent.findUnique({ where: { id: openTicket.assigneeId } })
-      : await agentForRole(projectId, "BACKEND");
-    if (!assignee) return "Für das nächste Ticket ist niemand zuständig.";
-    await enqueueAgentJob("ticketWork", {
-      agentId: assignee.id,
-      projectId,
-      ticketId: openTicket.id,
-      reason: "von Hand angestoßen",
-    });
-    return `${assignee.name} übernimmt „${openTicket.title}".`;
-  }
-
-  const scrumMaster = await agentForRole(projectId, "SCRUM_MASTER");
-  if (!scrumMaster) return "Es ist kein Scrum Master zugeordnet.";
-  await enqueueAgentJob("sprintReview", {
-    agentId: scrumMaster.id,
-    projectId,
-    sprintId: sprint.id,
-    reason: "von Hand angestoßen",
-  });
-  return `${scrumMaster.name} schließt Sprint ${sprint.number} ab.`;
 }
 
 /// Rueckfrage ans Team – die Antwort schreibt der Scrum-Master-Agent, sobald

@@ -12,18 +12,23 @@ import { agentForRole } from "@/lib/team";
 import type { AgentRole, Project } from "@/generated/prisma/client";
 import { enqueueAgentJob } from "./queue";
 import { logActivity } from "./agentRun";
+import { blockedTicketIds, openClarification, projectBlocker, sprintBlocker } from "./clarification";
 
-/// Obergrenze fuer den Autopiloten. Ohne sie wuerde das Team unbegrenzt
-/// weiterbauen (und Modellkosten erzeugen); mit ihr haelt es an und wartet auf
-/// den Menschen, so wie ein Team am Ende eines Quartals.
+/// Vorgabe fuer das Sprint-Budget eines Projekts (`Project.sprintBudget`).
+/// Ohne Obergrenze wuerde das Team unbegrenzt weiterbauen und Modellkosten
+/// erzeugen; mit ihr beruft es eine Klaerung ein und laesst den Auftraggeber
+/// entscheiden, so wie ein Team am Ende eines Quartals.
 export const MAX_SPRINTS = 12;
 
 /// Nur ein aktives Projekt arbeitet. Steht es auf Pausiert/Archiviert, bricht
-/// der Task ohne Fehler ab – das ist der Not-Aus des Menschen.
+/// der Task ohne Fehler ab – das ist der Not-Aus des Menschen. Dasselbe gilt
+/// fuer eine offene Klaerung, die das ganze Projekt betrifft: Solange die
+/// Grundsatzfrage nicht entschieden ist, arbeitet niemand weiter.
 export async function loadWorkingProject(projectId: string): Promise<Project | null> {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) return null;
   if (project.status !== "ACTIVE") return null;
+  if (await projectBlocker(projectId)) return null;
   return project;
 }
 
@@ -36,11 +41,27 @@ export async function handOverTo<TIdentifier extends keyof GraphileWorker.Tasks>
 ): Promise<boolean> {
   const agent = await agentForRole(projectId, role);
   if (!agent) {
-    await logActivity({
+    // Frueher endete die Kette hier stillschweigend im Protokoll. Jetzt ist es
+    // eine Frage an den Menschen: Es fehlt schlicht jemand fuer die Rolle.
+    await openClarification({
       projectId,
-      actor: "Scrumy",
-      action: "team_blocked",
-      detail: `Kein Agent für die Rolle ${role} im Projekt – Arbeit angehalten.`,
+      scope: "PROJECT",
+      trigger: "no_agent",
+      question: `Für die Rolle ${role} ist niemand im Projekt – wer soll das übernehmen?`,
+      context:
+        `Der nächste Schritt (${taskIdentifier}) braucht die Rolle ${role}. ` +
+        `Unter „Team & Connectoren" lässt sich jemand zuordnen; danach kann das Team weiterarbeiten.`,
+      options: [
+        {
+          key: "resume",
+          label: "Ist zugeordnet – weitermachen",
+          detail: "Scrumy nimmt den nächsten fälligen Schritt wieder auf.",
+          effect: "resume",
+        },
+        { key: "stop", label: "Team anhalten", effect: "stop" },
+      ],
+      // Ohne Team kann auch der Scrum Master keine Agenda schreiben.
+      prepare: false,
     });
     return false;
   }
@@ -55,10 +76,16 @@ export async function handOverTo<TIdentifier extends keyof GraphileWorker.Tasks>
 
 /// Naechstes offenes Ticket des aktiven Sprints – die Reihenfolge ist die
 /// Backlog-Reihenfolge (Prioritaet, dann Erstellung), wie beim Ziehen vom
-/// Board.
+/// Board. Tickets mit offener Klaerung bleiben liegen: Sie warten auf einen
+/// Beschluss, das Team zieht solange das naechste.
 export async function nextOpenTicket(sprintId: string) {
+  const blocked = await blockedTicketIds(sprintId);
   return prisma.ticket.findFirst({
-    where: { sprintId, status: { in: ["BACKLOG", "IN_PROGRESS"] } },
+    where: {
+      sprintId,
+      status: { in: ["BACKLOG", "IN_PROGRESS"] },
+      ...(blocked.length > 0 ? { id: { notIn: blocked } } : {}),
+    },
     orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
   });
 }
@@ -66,6 +93,18 @@ export async function nextOpenTicket(sprintId: string) {
 /// Nach jedem Ticket: entweder das naechste ziehen oder den Sprint zum Review
 /// geben.
 export async function continueSprint(projectId: string, sprintId: string): Promise<void> {
+  // Eine Klaerung zum Sprint selbst (z.B. „passt das Sprintziel ueberhaupt
+  // noch?") haelt den ganzen Sprint an, nicht nur ein Ticket.
+  if (await sprintBlocker(sprintId)) {
+    await logActivity({
+      projectId,
+      actor: "Scrumy",
+      action: "team_waiting",
+      detail: "Der Sprint wartet auf einen Beschluss – kein weiteres Ticket wird gezogen.",
+    });
+    return;
+  }
+
   const ticket = await nextOpenTicket(sprintId);
 
   if (ticket) {
@@ -84,6 +123,28 @@ export async function continueSprint(projectId: string, sprintId: string): Promi
       await handOverTo("BACKEND", "ticketWork", projectId, { ticketId: ticket.id, reason });
     }
     return;
+  }
+
+  // Bleiben nur noch Tickets mit offener Klaerung uebrig, ist der Sprint nicht
+  // fertig, sondern blockiert. Ihn jetzt zum Review zu geben, wuerde offene
+  // Arbeit als erledigt ausweisen – das Team wartet stattdessen auf die
+  // Beschluesse und macht danach genau hier weiter.
+  const blocked = await blockedTicketIds(sprintId);
+  if (blocked.length > 0) {
+    // Alles ausser DONE zaehlt als wartend: Ein Ticket, dessen Umsetzer
+    // einberufen hat, steht auf „In Review" und ist trotzdem nicht fertig.
+    const waiting = await prisma.ticket.count({
+      where: { sprintId, id: { in: blocked }, status: { not: "DONE" } },
+    });
+    if (waiting > 0) {
+      await logActivity({
+        projectId,
+        actor: "Scrumy",
+        action: "team_waiting",
+        detail: `${waiting} Ticket(s) warten auf einen Beschluss – der Sprint bleibt so lange offen.`,
+      });
+      return;
+    }
   }
 
   await handOverTo("SCRUM_MASTER", "sprintReview", projectId, {

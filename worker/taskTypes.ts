@@ -44,6 +44,14 @@ export interface TeamInquiryPayload {
   reason: string;
 }
 
+/** Agenda für eine einberufene Klärung ausarbeiten (Optionen mit Für und Wider). */
+export interface ClarificationPrepPayload {
+  agentId: string;
+  projectId: string;
+  clarificationId: string;
+  reason: string;
+}
+
 declare global {
   // Von graphile-worker vorgegebener Mechanismus fuer typisierte Task-Payloads
   // (Declaration Merging), kein selbst gewaehltes Namespace-Pattern.
@@ -55,6 +63,7 @@ declare global {
       ticketWork: TicketWorkPayload;
       sprintReview: SprintReviewPayload;
       teamInquiry: TeamInquiryPayload;
+      clarificationPrep: ClarificationPrepPayload;
     }
   }
 }

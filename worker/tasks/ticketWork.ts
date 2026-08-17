@@ -26,6 +26,7 @@ import { PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { continueSprint, loadWorkingProject } from "../orchestration";
+import { openClarification } from "../clarification";
 import { enqueueAgentJob } from "../queue";
 import { parseImplementation } from "../fileBlocks";
 import type { TicketWorkPayload } from "../taskTypes";
@@ -90,11 +91,22 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
     return;
   }
   if (!project.workspacePath) {
-    await logActivity({
+    await openClarification({
       projectId,
-      actor: "Scrumy",
-      action: "team_blocked",
-      detail: "Kein Arbeitsverzeichnis – der Kickoff ist nicht durchgelaufen.",
+      scope: "PROJECT",
+      trigger: "no_workspace",
+      question: "Das Team hat kein Arbeitsverzeichnis – der erste Arbeitstag ist nie durchgelaufen. Neu anfangen?",
+      context: `Ticket „${ticketId}" sollte umgesetzt werden, aber es gibt kein Repository. Ohne Kickoff (Repo anlegen, Auftragsunterlagen ablegen) kann niemand committen.`,
+      options: [
+        {
+          key: "resume",
+          label: "Kickoff nachholen",
+          detail: "Scrumy stößt den nächsten fälligen Schritt an – das ist dann der erste Arbeitstag.",
+          effect: "resume",
+        },
+        { key: "stop", label: "Team anhalten", effect: "stop" },
+      ],
+      prepare: false,
     });
     return;
   }
@@ -189,11 +201,14 @@ Die Auftragsunterlagen (docs/konzept.md, docs/anforderungen.md, docs/verstaendni
 
 Setze das Ticket um. Gib jede Datei, die du anlegst oder änderst, VOLLSTÄNDIG zurück (kein Diff, keine Auslassungen wie "..."). Dateien, die du nicht anfasst, lässt du weg. Schreibe lauffähigen, in sich stimmigen Code und passe bestehende Dateien an, statt sie zu duplizieren.
 
+Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wesentliches offen lassen, das du nicht selbst entscheiden darfst (Fachlogik, Datenhaltung, Kosten, Rechte): Erfinde nichts. Setze um, was zweifelsfrei ist, und stelle die Frage im Feld KLÄRUNG – der Auftraggeber entscheidet, und das Team arbeitet danach mit dem Beschluss weiter.
+
 Antworte genau in diesem Format – der Dateiinhalt steht wörtlich zwischen den Markierungen, ohne Code-Fence und ohne Escaping:
 
 COMMIT: Betreffzeile im Imperativ, max. 72 Zeichen
 ZUSAMMENFASSUNG: 2-4 Sätze für den Auftraggeber: was jetzt anders ist und warum
 OFFEN: offene Punkte oder Annahmen (weglassen, wenn es keine gibt)
+KLÄRUNG: eine einzelne Frage an den Auftraggeber (nur wenn du wirklich nicht entscheiden darfst, sonst weglassen)
 --- DATEI: relativer/pfad.ts ---
 vollständiger Dateiinhalt
 --- DATEI: naechste/datei.md ---
@@ -212,6 +227,10 @@ vollständiger Dateiinhalt
   ];
   const summary = result.summary || "Ohne Zusammenfassung.";
   const notes = result.notes;
+  // Eine Frage an den Auftraggeber muss eine Frage sein. Ein Rest aus einem
+  // Formatfehler des Modells darf kein Ticket blockieren, bis ihn jemand
+  // wegklickt – deshalb die Mindestlaenge.
+  const raisedQuestion = result.clarification.length >= 15 ? result.clarification : "";
 
   if (rejected.length > 0) {
     await logActivity({
@@ -225,9 +244,12 @@ vollständiger Dateiinhalt
   }
 
   if (files.length === 0) {
+    // Nichts geliefert heisst: Es gibt nichts freizugeben. Frueher landete das
+    // trotzdem als Freigabe-Anfrage beim Menschen – eine Freigabe fuer eine
+    // leere Aenderung. Jetzt ist es die Frage, die es tatsaechlich ist.
     await prisma.ticket.update({
       where: { id: ticketId },
-      data: { status: "IN_REVIEW", result: `${summary}\n\n(Keine Dateiänderungen geliefert.)` },
+      data: { status: "IN_PROGRESS", result: `${summary}\n\n(Keine Dateiänderungen geliefert.)` },
     });
     await logActivity({
       projectId,
@@ -235,9 +257,25 @@ vollständiger Dateiinhalt
       actor: implementer.name,
       agentId: implementer.id,
       action: "ticket_without_changes",
-      detail: `„${ticket.title}": keine Dateiänderungen geliefert – wartet auf den Menschen`,
+      detail: `„${ticket.title}": keine Dateiänderungen geliefert – wartet auf einen Beschluss`,
     });
-    await requestHumanReview(projectId, ticketId, ticket.title, "Der Agent hat keine Änderungen geliefert.");
+    await openClarification({
+      projectId,
+      scope: "TICKET",
+      trigger: "no_changes",
+      ticketId,
+      sprintId: ticket.sprintId,
+      raisedById: implementer.id,
+      question: `„${ticket.title}": ${implementer.name} hat keine Änderung geliefert. Wie sollen wir mit dem Ticket umgehen?`,
+      context:
+        `Was ${implementer.name} dazu sagt:\n${summary}` +
+        (notes ? `\n\nOffene Punkte: ${notes}` : "") +
+        (raisedQuestion ? `\n\nRückfrage des Agenten: ${raisedQuestion}` : "") +
+        (rejected.length > 0
+          ? `\n\nNicht übernommene Dateien: ${rejected.map((file) => `${file.path} (${file.reason})`).join("; ")}`
+          : ""),
+      resume: { task: "ticketWork", payload: { ...payload, attempt: attempt + 1 } },
+    });
     if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
     return;
   }
@@ -266,6 +304,35 @@ vollständiger Dateiinhalt
       ? `${commit.shortSha} · ${subject} (${written.length} Dateien)`
       : `${subject} – inhaltlich keine Änderung im Repository`,
   });
+
+  // Der Umsetzer hat selbst einberufen: Was er zweifelsfrei umsetzen konnte,
+  // ist committet – ueber den Rest entscheidet der Auftraggeber. Ein QA-Review
+  // waere hier vergebliche Modellzeit: Geprueft wird, wenn der Beschluss steht.
+  if (raisedQuestion) {
+    await logActivity({
+      projectId,
+      ticketId,
+      actor: implementer.name,
+      agentId: implementer.id,
+      action: "clarification_raised",
+      detail: `„${ticket.title}": ${raisedQuestion.slice(0, 300)}`,
+    });
+    await openClarification({
+      projectId,
+      scope: "TICKET",
+      trigger: "agent_blocker",
+      ticketId,
+      sprintId: ticket.sprintId,
+      raisedById: implementer.id,
+      question: `„${ticket.title}": ${raisedQuestion}`,
+      context:
+        `${implementer.name} hat den unstrittigen Teil umgesetzt und committet (${commit?.shortSha ?? "kein Commit"}).\n\n` +
+        `Zusammenfassung: ${summary}${notes ? `\n\nOffene Punkte: ${notes}` : ""}`,
+      resume: { task: "ticketWork", payload: { ...payload, attempt: attempt + 1 } },
+    });
+    if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+    return;
+  }
 
   // --- 3. Review durch QA ---------------------------------------------------
   const reviewer = (await agentForRole(projectId, "QA")) ?? implementer;
@@ -297,12 +364,13 @@ Prüfe: Erfüllt die Änderung das Ticket? Ist der Code in sich stimmig und pass
 
 Antworte nur mit diesem JSON-Objekt:
 {
-  "verdict": "approve" | "rework",
+  "verdict": "approve" | "rework" | "needs_decision",
   "comment": "Begründung in 2-5 Sätzen, konkret auf Dateien bezogen",
   "risk": "low" | "medium" | "high"
 }
 
-"rework" nur bei echten Mängeln, nicht für Geschmacksfragen.`,
+"rework" nur bei echten Mängeln, nicht für Geschmacksfragen.
+"needs_decision", wenn das Team die Frage gar nicht selbst beantworten kann – wenn Auftrag und Anforderungen sich widersprechen oder etwas Fachliches offen lassen. Schreibe dann in "comment" die Frage, die der Auftraggeber entscheiden muss. Nacharbeit hilft in dem Fall nicht: Ein zweiter Anlauf würde dieselbe Lücke nur anders raten.`,
   });
 
   const { verdict, comment, risk } = readVerdict(review.text);
@@ -312,9 +380,35 @@ Antworte nur mit diesem JSON-Objekt:
     ticketId,
     actor: reviewer.name,
     agentId: reviewer.id,
-    action: verdict === "approve" ? "review_approved" : "review_rework",
-    detail: `„${ticket.title}": ${verdict === "approve" ? "freigegeben" : "Nacharbeit nötig"} (Risiko ${risk || "unbekannt"}) – ${comment.slice(0, 300)}`,
+    action:
+      verdict === "approve" ? "review_approved" : verdict === "rework" ? "review_rework" : "clarification_raised",
+    detail: `„${ticket.title}": ${VERDICT_WORD[verdict]} (Risiko ${risk || "unbekannt"}) – ${comment.slice(0, 300)}`,
   });
+
+  // QA sieht eine Frage, keine Mangelliste: Dann ist Nacharbeit die falsche
+  // Antwort – ein zweiter Anlauf wuerde dieselbe Luecke nur anders raten.
+  if (verdict === "needs_decision") {
+    await prisma.ticket.update({
+      where: { id: ticketId },
+      data: { result: `${summary}\n\nQA (${reviewer.name}): ${comment}` },
+    });
+    await openClarification({
+      projectId,
+      scope: "TICKET",
+      trigger: "qa_needs_decision",
+      ticketId,
+      sprintId: ticket.sprintId,
+      raisedById: reviewer.id,
+      question: `„${ticket.title}": ${comment}`,
+      context:
+        `${reviewer.name} (QA) hat die Umsetzung von ${implementer.name} geprüft und kommt zu einer Frage, ` +
+        `die das Team nicht selbst entscheiden kann.\n\nStand: ${commit?.shortSha ?? "kein Commit"} – ${summary}` +
+        (notes ? `\n\nOffene Punkte: ${notes}` : ""),
+      resume: { task: "ticketWork", payload: { ...payload, attempt: attempt + 1 } },
+    });
+    if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+    return;
+  }
 
   if (verdict === "rework" && attempt < MAX_ATTEMPTS) {
     await prisma.ticket.update({
@@ -366,21 +460,35 @@ Antworte nur mit diesem JSON-Objekt:
   if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
 };
 
+type Verdict = "approve" | "rework" | "needs_decision";
+
+const VERDICT_WORD: Record<Verdict, string> = {
+  approve: "freigegeben",
+  rework: "Nacharbeit nötig",
+  needs_decision: "Frage an den Auftraggeber",
+};
+
 /// Liest das QA-Urteil. Faellt das JSON aus dem Rahmen, wird die Antwort im
 /// Klartext ausgewertet statt den ganzen Ticket-Lauf scheitern zu lassen: Der
 /// Code ist an dieser Stelle schon committet, und ein unlesbares Urteil ist
 /// kein Grund, die Arbeit zu verwerfen. Im Zweifel gilt Nacharbeit – lieber
 /// ein zweiter Blick als eine Freigabe, die niemand gegeben hat.
-function readVerdict(text: string): { verdict: "approve" | "rework"; comment: string; risk: string } {
+function readVerdict(text: string): { verdict: Verdict; comment: string; risk: string } {
   try {
     const data = extractJsonObject(text);
+    const raw = String(data.verdict ?? "").toLowerCase();
+    const verdict: Verdict =
+      raw.includes("needs") || raw.includes("decision") ? "needs_decision" : raw === "rework" ? "rework" : "approve";
     return {
-      verdict: String(data.verdict ?? "").toLowerCase() === "rework" ? "rework" : "approve",
+      verdict,
       comment: String(data.comment ?? "").trim() || "(ohne Kommentar)",
       risk: String(data.risk ?? "").toLowerCase(),
     };
   } catch {
     const lower = text.toLowerCase();
+    if (lower.includes("needs_decision")) {
+      return { verdict: "needs_decision", comment: text.trim().slice(0, 2000), risk: "unbekannt" };
+    }
     const approved = lower.includes("approve") && !lower.includes("rework");
     return {
       verdict: approved ? "approve" : "rework",

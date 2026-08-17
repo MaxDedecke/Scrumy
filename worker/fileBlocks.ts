@@ -12,6 +12,8 @@
 //   COMMIT: Betreffzeile
 //   ZUSAMMENFASSUNG: Was jetzt anders ist
 //   OFFEN: offene Punkte (optional)
+//   KLÄRUNG: Frage an den Auftraggeber, die der Agent selbst nicht entscheiden
+//            darf (optional – siehe worker/clarification.ts)
 //   --- DATEI: src/beispiel.ts ---
 //   <vollständiger Dateiinhalt>
 //   --- DATEI: docs/weiteres.md ---
@@ -22,12 +24,16 @@ export interface ParsedImplementation {
   commitMessage: string;
   summary: string;
   notes: string;
+  /** Frage, die der Agent nicht selbst entscheiden will (leer = keine). */
+  clarification: string;
   files: { path: string; content: string }[];
 }
 
 const FILE_MARKER = /^\s*-{2,}\s*DATEI:\s*(.+?)\s*-{2,}\s*$/i;
 const END_MARKER = /^\s*-{2,}\s*ENDE\s*-{2,}\s*$/i;
-const FIELD = /^\s*(COMMIT|ZUSAMMENFASSUNG|OFFEN)\s*:\s*(.*)$/i;
+// KLAERUNG ohne Umlaut wird mitgelesen: Modelle schreiben Feldnamen gern
+// transliteriert, und daran soll eine Frage ans Team nicht scheitern.
+const FIELD = /^\s*(COMMIT|ZUSAMMENFASSUNG|OFFEN|KLÄRUNG|KLAERUNG)\s*:\s*(.*)$/i;
 
 /// Entfernt einen Code-Fence, den ein Modell um den Dateiinhalt gelegt hat.
 /// Der Fence gehört nie zur Datei – bliebe er stehen, wäre die Datei kaputt.
@@ -40,6 +46,20 @@ function stripCodeFence(lines: string[]): string[] {
   if (last <= start || !lines[last].trim().startsWith("```")) return lines;
 
   return lines.slice(start + 1, last);
+}
+
+/// Der Wert eines Kopffeldes, ohne Markierungen.
+///
+/// Modelle setzen den Endemarker gern direkt hinter das letzte Feld
+/// („KLÄRUNG: --- ENDE ---"). Bliebe das stehen, würde daraus eine Frage an den
+/// Auftraggeber, die niemand gestellt hat – und ein Ticket, das auf eine
+/// Antwort auf Nichts wartet.
+function fieldValue(lines: string[] | undefined, separator = "\n"): string {
+  if (!lines) return "";
+  return lines
+    .map((line) => (END_MARKER.test(line) || FILE_MARKER.test(line) ? "" : line))
+    .join(separator)
+    .trim();
 }
 
 export function parseImplementation(text: string): ParsedImplementation {
@@ -84,9 +104,10 @@ export function parseImplementation(text: string): ParsedImplementation {
   }
 
   return {
-    commitMessage: (header.COMMIT?.join(" ") ?? "").trim(),
-    summary: (header.ZUSAMMENFASSUNG?.join("\n") ?? "").trim(),
-    notes: (header.OFFEN?.join("\n") ?? "").trim(),
+    commitMessage: fieldValue(header.COMMIT, " "),
+    summary: fieldValue(header.ZUSAMMENFASSUNG),
+    notes: fieldValue(header.OFFEN),
+    clarification: fieldValue(header["KLÄRUNG"] ?? header.KLAERUNG),
     files: files
       .filter((file) => file.path.length > 0)
       .map((file) => ({ path: file.path, content: stripCodeFence(file.content).join("\n").trim() }))

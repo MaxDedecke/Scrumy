@@ -13,12 +13,17 @@ import { PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
 import type { Priority, TicketType } from "@/generated/prisma/client";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
-import { continueSprint, loadWorkingProject, MAX_SPRINTS } from "../orchestration";
+import { continueSprint, loadWorkingProject } from "../orchestration";
+import { openClarification } from "../clarification";
 import type { SprintPlanningPayload } from "../taskTypes";
 
 /// Wie viele Tickets ein Sprint hoechstens bekommt. Kleine Sprints halten die
 /// Rueckmeldeschleife zum Menschen kurz – er sieht frueher, wohin es laeuft.
 const MAX_TICKETS_PER_SPRINT = 5;
+
+/// Um wie viele Sprints der Auftraggeber das Budget aufstockt, wenn er nach
+/// dem Aufbrauchen weiterarbeiten laesst.
+export const SPRINT_BUDGET_STEP = 6;
 
 interface PlannedTicket {
   title?: unknown;
@@ -60,15 +65,41 @@ const sprintPlanning: Task<"sprintPlanning"> = async (payload: SprintPlanningPay
   });
   const nextNumber = (previousSprints.at(-1)?.number ?? 0) + 1;
 
-  if (nextNumber > MAX_SPRINTS) {
+  if (nextNumber > project.sprintBudget) {
     await logActivity({
       projectId,
       actor: agent.name,
       agentId: agent.id,
       action: "team_halted",
-      detail: `Obergrenze von ${MAX_SPRINTS} Sprints erreicht – das Team wartet auf eine Entscheidung.`,
+      detail: `Sprint-Budget von ${project.sprintBudget} Sprints aufgebraucht – das Team wartet auf eine Entscheidung.`,
     });
     await prisma.project.update({ where: { id: projectId }, data: { autopilot: false } });
+    await openClarification({
+      projectId,
+      scope: "PROJECT",
+      trigger: "sprint_budget",
+      raisedById: agent.id,
+      question: `Das Sprint-Budget (${project.sprintBudget} Sprints) ist aufgebraucht. Soll das Team weiterarbeiten?`,
+      context:
+        `${agent.name} (Product Owner) wollte Sprint ${nextNumber} planen. Das Budget begrenzt, wie lange das Team ` +
+        `ohne neue Entscheidung des Auftraggebers weiterbaut – und damit auch die Modellkosten.`,
+      options: [
+        {
+          key: "budget",
+          label: `Weiterarbeiten (${SPRINT_BUDGET_STEP} Sprints mehr)`,
+          detail: `Das Budget steigt auf ${project.sprintBudget + SPRINT_BUDGET_STEP} Sprints, ${agent.name} plant Sprint ${nextNumber}.`,
+          effect: "budget",
+        },
+        {
+          key: "stop",
+          label: "Hier ist Schluss",
+          detail: "Das Team hält an; du kannst später jederzeit den nächsten Schritt anstoßen.",
+          effect: "stop",
+        },
+      ],
+      resume: { task: "sprintPlanning", payload },
+      prepare: false,
+    });
     return;
   }
 
@@ -134,6 +165,37 @@ Antworte nur mit diesem JSON-Objekt:
       action: "backlog_empty",
       detail: `Kein weiterer Sprint geplant: ${detail}`,
     });
+
+    // „Wir sind fertig" ist eine Behauptung des Teams, keine Tatsache. Sie
+    // gehoert dem Auftraggeber vorgelegt – widerspricht er, steht sein
+    // Beschluss im Beschlussregister und damit in jedem weiteren Prompt, sodass
+    // die naechste Planung nicht wieder bei „nichts mehr offen" landet.
+    await openClarification({
+      projectId,
+      scope: "PROJECT",
+      trigger: "backlog_empty",
+      raisedById: agent.id,
+      question: `${agent.name} sieht aus Konzept und Anforderungen nichts Wesentliches mehr offen. Ist der Auftrag damit erfüllt?`,
+      context: detail,
+      options: [
+        {
+          key: "stop",
+          label: "Ja, der Auftrag ist erfüllt",
+          detail: "Das Team hält an. Neue Arbeit kommt über Anforderungen oder Kundenanfragen.",
+          effect: "stop",
+        },
+        {
+          key: "resume",
+          label: "Nein, es fehlt noch etwas",
+          detail:
+            "Schreib unten dazu, was fehlt – das Team plant dann einen weiteren Sprint und hat deinen Beschluss im Auftrag.",
+          effect: "resume",
+        },
+      ],
+      resume: { task: "sprintPlanning", payload },
+      prepare: false,
+    });
+
     helpers.logger.info(`Projekt ${projectId}: Backlog leer, Team hält an.`);
     return;
   }

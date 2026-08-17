@@ -1,0 +1,89 @@
+// Was steht als Nächstes an? – die eine Antwort für alle Wege zurück in die
+// Arbeit: „Fortsetzen", „Nächsten Schritt anstoßen" und der Beschluss einer
+// Klärung.
+//
+// Bewusst aus dem Projektstand abgeleitet und nicht mitgeführt: Nach einer
+// Pause, einem Absturz oder einem Beschluss weiß niemand mehr zuverlässig, wo
+// die Kette abgerissen ist – das Board weiß es.
+//
+// Kein "use server": Die Datei enthält Hilfslogik, keine Server-Action.
+import { prisma } from "@/lib/prisma";
+import { agentForRole } from "@/lib/team";
+import { enqueueAgentJob } from "../../worker/queue";
+
+export async function scheduleNextStep(projectId: string): Promise<string> {
+  const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+
+  const sprint = await prisma.sprint.findFirst({
+    where: { projectId },
+    orderBy: { number: "desc" },
+    include: { tickets: true },
+  });
+
+  // Noch kein Arbeitsplatz/Sprint: erster Arbeitstag.
+  if (!project.workspacePath || !sprint) {
+    const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
+    if (!productOwner) return "Es ist kein Team zugeordnet.";
+    await enqueueAgentJob("teamKickoff", {
+      agentId: productOwner.id,
+      projectId,
+      reason: "Arbeit aufgenommen",
+    });
+    return `${productOwner.name} richtet das Repository ein und liest den Auftrag.`;
+  }
+
+  if (sprint.status === "DONE") {
+    const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
+    if (!productOwner) return "Es ist kein Product Owner zugeordnet.";
+    await enqueueAgentJob("sprintPlanning", {
+      agentId: productOwner.id,
+      projectId,
+      reason: "nächster Sprint angestoßen",
+    });
+    return `${productOwner.name} plant Sprint ${sprint.number + 1}.`;
+  }
+
+  // Tickets mit offener Klärung bleiben liegen – sonst schickt „weitermachen"
+  // das Team genau in die Frage zurück, die noch niemand beantwortet hat.
+  const blocked = await prisma.clarification.findMany({
+    where: { projectId, status: "OPEN", ticketId: { not: null } },
+    select: { ticketId: true },
+  });
+  const blockedIds = new Set(blocked.map((entry) => entry.ticketId));
+
+  const openTicket = sprint.tickets
+    .filter((ticket) => ticket.status === "BACKLOG" || ticket.status === "IN_PROGRESS")
+    .filter((ticket) => !blockedIds.has(ticket.id))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0];
+
+  if (openTicket) {
+    const assignee = openTicket.assigneeId
+      ? await prisma.agent.findUnique({ where: { id: openTicket.assigneeId } })
+      : await agentForRole(projectId, "BACKEND");
+    if (!assignee) return "Für das nächste Ticket ist niemand zuständig.";
+    await enqueueAgentJob("ticketWork", {
+      agentId: assignee.id,
+      projectId,
+      ticketId: openTicket.id,
+      reason: "von Hand angestoßen",
+    });
+    return `${assignee.name} übernimmt „${openTicket.title}".`;
+  }
+
+  const stillBlocked = sprint.tickets.some(
+    (ticket) => blockedIds.has(ticket.id) && ticket.status !== "DONE",
+  );
+  if (stillBlocked) {
+    return "Die übrigen Tickets des Sprints warten auf einen Beschluss – der Sprint bleibt so lange offen.";
+  }
+
+  const scrumMaster = await agentForRole(projectId, "SCRUM_MASTER");
+  if (!scrumMaster) return "Es ist kein Scrum Master zugeordnet.";
+  await enqueueAgentJob("sprintReview", {
+    agentId: scrumMaster.id,
+    projectId,
+    sprintId: sprint.id,
+    reason: "von Hand angestoßen",
+  });
+  return `${scrumMaster.name} schließt Sprint ${sprint.number} ab.`;
+}

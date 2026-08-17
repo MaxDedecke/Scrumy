@@ -16,6 +16,8 @@ Grundregeln:
 - Antworte immer auf Deutsch, sachlich und knapp, wie ein Kollege im Team.
 - Erfinde keine Tatsachen über den Projektstand. Was du nicht weißt, sagst du.
 - Halte dich an das freigegebene Konzept und die freigegebenen Anforderungen; sie sind der Auftrag.
+- Beschlüsse des Auftraggebers stehen über deiner eigenen Einschätzung und gelten weiter, auch wenn sie Wochen alt sind.
+- Wo der Auftrag widersprüchlich oder lückenhaft ist, rate nicht: Sag es und lass entscheiden.
 - Was du tust, muss für den Auftraggeber nachvollziehbar sein: begründe Entscheidungen kurz.`;
 
 /// Kappt lange Texte fuer den Prompt, statt ein ganzes Lastenheft mitzuschicken.
@@ -53,6 +55,23 @@ export async function buildProjectContext(
       clip(releasedConcept?.content ?? project.concept?.content ?? "(kein Konzept hinterlegt)", 12000),
   );
 
+  // Das Beschlussregister: Was der Auftraggeber in Klaerungen entschieden hat,
+  // gehoert in JEDEN Prompt. Ohne das laeuft das Team in vier Wochen in
+  // dieselbe Frage – und entscheidet sie dann womoeglich anders als er.
+  const [decisions, openClarifications] = await Promise.all([
+    prisma.clarification.findMany({
+      where: { projectId, status: "DECIDED" },
+      orderBy: { decidedAt: "desc" },
+      take: 20,
+      include: { ticket: { select: { title: true } } },
+    }),
+    prisma.clarification.findMany({
+      where: { projectId, status: "OPEN" },
+      orderBy: { createdAt: "asc" },
+      include: { ticket: { select: { title: true } } },
+    }),
+  ]);
+
   const requirements = project.requirements
     .map((requirement, index) => {
       const head = `${index + 1}. [${PRIORITY_LABEL[requirement.priority]}] ${requirement.title}`;
@@ -62,6 +81,29 @@ export async function buildProjectContext(
     })
     .join("\n");
   parts.push(`# Freigegebene Anforderungen\n${requirements || "(keine erfasst)"}`);
+
+  if (decisions.length > 0) {
+    const register = decisions
+      .reverse()
+      .map((entry) => {
+        const when = (entry.decidedAt ?? entry.createdAt).toLocaleDateString("de-DE");
+        const subject = entry.ticket ? ` (Ticket „${entry.ticket.title}")` : "";
+        return `- ${when}${subject}\n  Frage: ${clip(entry.question, 400)}\n  Beschluss: ${clip(entry.decision ?? "", 800)}`;
+      })
+      .join("\n");
+    parts.push(
+      `# Beschlüsse des Auftraggebers\nDiese Entscheidungen sind getroffen und gelten. Halte dich daran, auch wenn du es anders lösen würdest.\n${register}`,
+    );
+  }
+
+  if (openClarifications.length > 0) {
+    const pending = openClarifications
+      .map((entry) => `- ${entry.ticket ? `„${entry.ticket.title}": ` : ""}${clip(entry.question, 400)}`)
+      .join("\n");
+    parts.push(
+      `# Offene Klärungen\nDarauf wartet das Team noch. Triff diese Entscheidungen nicht selbst und arbeite nicht an den betroffenen Punkten weiter.\n${pending}`,
+    );
+  }
 
   if (includeBoard) {
     const [sprint, tickets] = await Promise.all([

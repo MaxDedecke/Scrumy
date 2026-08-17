@@ -53,6 +53,11 @@ export default async function ProjectBoardPage({
     include: { tickets: true },
   });
 
+  const openClarifications = await prisma.clarification.findMany({
+    where: { projectId, status: "OPEN" },
+    orderBy: { createdAt: "asc" },
+  });
+
   const activity = await prisma.activityLogEntry.findMany({
     where: { OR: [{ projectId }, { ticket: { projectId } }] },
     orderBy: { createdAt: "desc" },
@@ -138,6 +143,27 @@ export default async function ProjectBoardPage({
           </Link>
           , um das Team zu starten.
         </p>
+      )}
+
+      {openClarifications.length > 0 && (
+        <Link
+          href={`/projects/${project.id}/office`}
+          className="mb-8 flex items-start gap-2.5 rounded-xl border border-critical/35 bg-critical/10 px-4 py-3 text-sm text-ink transition-colors hover:border-critical/60"
+        >
+          <WarningIcon className="mt-0.5 h-4 w-4 shrink-0 text-critical" />
+          <span>
+            <span className="font-medium">
+              {openClarifications.length === 1
+                ? "Das Team braucht eine Entscheidung"
+                : `Das Team braucht ${openClarifications.length} Entscheidungen`}
+              :
+            </span>{" "}
+            {openClarifications[0].question}
+            {openClarifications.some((entry) => entry.scope === "PROJECT")
+              ? " – bis dahin arbeitet niemand weiter."
+              : " – die betroffenen Tickets liegen so lange."}
+          </span>
+        </Link>
       )}
 
       {sprint && (

@@ -6,6 +6,9 @@ import {
   AGENT_ROLE_LABEL,
   AGENT_STATUS_LABEL,
   AGENT_STATUS_PILL,
+  CLARIFICATION_SCOPE_LABEL,
+  CLARIFICATION_SCOPE_PILL,
+  CLARIFICATION_TRIGGER_LABEL,
   INQUIRY_STATUS_LABEL,
   PRIORITY_LABEL,
   PROJECT_STATUS_LABEL,
@@ -22,6 +25,12 @@ import { PageHeader } from "@/components/PageHeader";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { EmptyHint, Section } from "@/components/Section";
 import { askTeam, decideReview, nudgeTeam, pauseTeam, resumeTeam, setAutopilot } from "@/lib/actions/team";
+import {
+  decideClarification,
+  forwardClarification,
+  withdrawClarification,
+} from "@/lib/actions/clarifications";
+import { readOptions } from "@/lib/clarificationOptions";
 import {
   buttonDangerClass,
   buttonPrimaryClass,
@@ -51,37 +60,55 @@ export default async function TeamOfficePage({
   });
   if (!project) notFound();
 
-  const [sprint, runningRuns, lastRuns, activity, pendingReviews, inquiries] = await Promise.all([
-    prisma.sprint.findFirst({
-      where: { projectId },
-      orderBy: { number: "desc" },
-      include: { tickets: { include: { assignee: true }, orderBy: { createdAt: "asc" } } },
-    }),
-    prisma.agentRun.findMany({ where: { projectId, status: "RUNNING" }, include: { agent: true } }),
-    prisma.agentRun.findMany({ where: { projectId }, orderBy: { startedAt: "desc" }, take: 40 }),
-    prisma.activityLogEntry.findMany({
-      where: { OR: [{ projectId }, { ticket: { projectId } }] },
-      orderBy: { createdAt: "desc" },
-      take: 30,
-    }),
-    prisma.reviewApproval.findMany({
-      where: { decision: "PENDING", ticket: { projectId } },
-      include: { ticket: true },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.teamInquiry.findMany({
-      where: { projectId },
-      orderBy: { createdAt: "desc" },
-      take: 10,
-      include: { answeredBy: true },
-    }),
-  ]);
+  const [sprint, runningRuns, lastRuns, activity, pendingReviews, inquiries, clarifications, decisions] =
+    await Promise.all([
+      prisma.sprint.findFirst({
+        where: { projectId },
+        orderBy: { number: "desc" },
+        include: { tickets: { include: { assignee: true }, orderBy: { createdAt: "asc" } } },
+      }),
+      prisma.agentRun.findMany({ where: { projectId, status: "RUNNING" }, include: { agent: true } }),
+      prisma.agentRun.findMany({ where: { projectId }, orderBy: { startedAt: "desc" }, take: 40 }),
+      prisma.activityLogEntry.findMany({
+        where: { OR: [{ projectId }, { ticket: { projectId } }] },
+        orderBy: { createdAt: "desc" },
+        take: 30,
+      }),
+      prisma.reviewApproval.findMany({
+        where: { decision: "PENDING", ticket: { projectId } },
+        include: { ticket: true },
+        orderBy: { createdAt: "asc" },
+      }),
+      prisma.teamInquiry.findMany({
+        where: { projectId },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: { answeredBy: true },
+      }),
+      // Offene Klärungen zuerst und ungekürzt: Sie sind der Grund, warum das
+      // Team wartet – alles andere auf dieser Seite ist Beobachtung.
+      prisma.clarification.findMany({
+        where: { projectId, status: "OPEN" },
+        orderBy: { createdAt: "asc" },
+        include: { ticket: true, raisedBy: true, forwardedRequest: true },
+      }),
+      prisma.clarification.findMany({
+        where: { projectId, status: { in: ["DECIDED", "WITHDRAWN"] } },
+        orderBy: { decidedAt: "desc" },
+        take: 20,
+        include: { ticket: true },
+      }),
+    ]);
 
   const runningByAgent = new Map(runningRuns.map((run) => [run.agentId ?? "", run]));
   const lastRunByAgent = new Map<string, (typeof lastRuns)[number]>();
   for (const run of lastRuns) {
     if (run.agentId && !lastRunByAgent.has(run.agentId)) lastRunByAgent.set(run.agentId, run);
   }
+
+  // Nur eine projektweite Klärung hält die ganze Mannschaft an; ein blockiertes
+  // Ticket lässt den Sprint weiterlaufen.
+  const blockingClarification = clarifications.find((entry) => entry.scope === "PROJECT");
 
   const started = project.status === "ACTIVE" || project.status === "PAUSED";
   const doneTickets = sprint?.tickets.filter((ticket) => ticket.status === "DONE").length ?? 0;
@@ -118,6 +145,139 @@ export default async function TeamOfficePage({
         </p>
       ) : (
         <>
+          {clarifications.length > 0 && (
+            <Section title="Das Team braucht eine Entscheidung">
+              <ul className="space-y-3">
+                {clarifications.map((clarification) => {
+                  const options = readOptions(clarification.options);
+                  return (
+                    <li key={clarification.id} className="card border-accent-border p-5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`${CLARIFICATION_SCOPE_PILL[clarification.scope]} pill-dot`}>
+                          {CLARIFICATION_SCOPE_LABEL[clarification.scope]}
+                        </span>
+                        <span className="pill pill-neutral">
+                          {CLARIFICATION_TRIGGER_LABEL[clarification.trigger] ?? clarification.trigger}
+                        </span>
+                        <span className="text-xs text-ink-4">
+                          {clarification.raisedBy ? `${clarification.raisedBy.name} · ` : ""}
+                          {formatTime(clarification.createdAt)}
+                        </span>
+                      </div>
+
+                      <p className="mt-3 text-sm font-medium text-ink">{clarification.question}</p>
+
+                      {clarification.agenda ? (
+                        <pre className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ink-2">
+                          {clarification.agenda}
+                        </pre>
+                      ) : (
+                        <p className="mt-2 text-sm text-ink-3">
+                          Der Scrum Master arbeitet noch an einer Entscheidungsvorlage – entscheiden lässt es
+                          sich schon jetzt.
+                        </p>
+                      )}
+
+                      {clarification.context && (
+                        <details className="mt-3">
+                          <summary className="cursor-pointer text-sm text-accent">Was passiert ist</summary>
+                          <pre className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ink-2">
+                            {clarification.context}
+                          </pre>
+                        </details>
+                      )}
+
+                      {clarification.forwardedRequest && (
+                        <p className="mt-3 text-xs text-ink-3">
+                          Am {formatTime(clarification.forwardedAt ?? clarification.createdAt)} an den Kunden
+                          weitergeleitet –{" "}
+                          <Link
+                            href={`/organizations/${project.organizationId}/inbox`}
+                            className="quiet-link font-medium"
+                          >
+                            im Support-Postfach
+                          </Link>
+                          .
+                        </p>
+                      )}
+
+                      <ActionForm action={decideClarification} className="mt-4 flex flex-col gap-3">
+                        <input type="hidden" name="clarificationId" value={clarification.id} />
+
+                        {options.length > 0 && (
+                          <div className="grid gap-2">
+                            {options.map((option, index) => (
+                              <label
+                                key={option.key}
+                                className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-hairline bg-surface-2 px-3 py-2.5 transition-colors hover:border-hairline-strong has-checked:border-accent-border"
+                              >
+                                <input
+                                  type="radio"
+                                  name="option"
+                                  value={option.key}
+                                  defaultChecked={index === 0}
+                                  className="mt-0.5 accent-[var(--color-accent-solid)]"
+                                />
+                                <span className="min-w-0">
+                                  <span className="block text-sm text-ink">{option.label}</span>
+                                  {option.detail && (
+                                    <span className="mt-0.5 block text-xs text-ink-3">{option.detail}</span>
+                                  )}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+
+                        <textarea
+                          name="comment"
+                          rows={2}
+                          placeholder="Beschluss in eigenen Worten – das Team bekommt ihn ab jetzt in jedem Arbeitsschritt mit."
+                          className={inputClass}
+                        />
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button type="submit" className={buttonPrimaryClass}>
+                            Beschluss festhalten
+                          </button>
+                        </div>
+                      </ActionForm>
+
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {!clarification.forwardedRequest && (
+                          <ActionForm
+                            action={forwardClarification}
+                            className="flex flex-wrap items-center gap-2"
+                          >
+                            <input type="hidden" name="clarificationId" value={clarification.id} />
+                            <input
+                              type="text"
+                              name="contact"
+                              placeholder="Ansprechpartner beim Kunden (optional)"
+                              className={`${inputClass} w-64`}
+                            />
+                            <button type="submit" className={buttonSecondaryClass}>
+                              An den Kunden weiterleiten
+                            </button>
+                          </ActionForm>
+                        )}
+                        <ActionForm action={withdrawClarification} className="ml-auto">
+                          <input type="hidden" name="clarificationId" value={clarification.id} />
+                          <ConfirmButton
+                            confirmText="Klärung zurückziehen? Das Team arbeitet an der Stelle ohne Beschluss weiter."
+                            className={buttonDangerClass}
+                          >
+                            Erledigt sich
+                          </ConfirmButton>
+                        </ActionForm>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </Section>
+          )}
+
           <Section title="Steuerung">
             <div className="card flex flex-wrap items-center gap-3 p-5">
               <p className="mr-auto text-sm text-ink-2">
@@ -125,6 +285,16 @@ export default async function TeamOfficePage({
                   <>
                     <span className="font-medium text-ink">Das Team arbeitet gerade.</span>{" "}
                     {runningRuns.length} laufende{runningRuns.length === 1 ? "r Schritt" : " Schritte"}.
+                  </>
+                ) : blockingClarification ? (
+                  <>
+                    <span className="font-medium text-ink">Das Team wartet auf deine Entscheidung.</span>{" "}
+                    Solange die Grundsatzfrage oben offen ist, nimmt niemand einen neuen Schritt an.
+                  </>
+                ) : clarifications.length > 0 ? (
+                  <>
+                    {clarifications.length} Klärung{clarifications.length === 1 ? "" : "en"} offen – die
+                    betroffenen Tickets liegen, der Rest läuft weiter.
                   </>
                 ) : project.status === "PAUSED" ? (
                   "Die Arbeit ruht – niemand im Team nimmt gerade etwas Neues an."
@@ -338,6 +508,33 @@ export default async function TeamOfficePage({
               )}
             </div>
           </Section>
+
+          {decisions.length > 0 && (
+            <Section title="Beschlussregister">
+              <ul className="card divide-y divide-hairline">
+                {decisions.map((entry) => (
+                  <li key={entry.id} className="px-5 py-3 text-sm">
+                    <p className="text-ink-2">{entry.question}</p>
+                    <p className="mt-1 text-ink">
+                      {entry.status === "WITHDRAWN" ? (
+                        <span className="text-ink-3">Zurückgezogen – hat sich erledigt.</span>
+                      ) : (
+                        entry.decision
+                      )}
+                    </p>
+                    <p className="mt-1 text-xs text-ink-4">
+                      {entry.decidedBy ?? "Mensch"} · {formatTime(entry.decidedAt ?? entry.createdAt)}
+                      {entry.ticket ? ` · Ticket „${entry.ticket.title}"` : ""}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-ink-4">
+                Diese Beschlüsse bekommt jeder Agent in jedem Arbeitsschritt mit – dieselbe Frage soll das Team
+                nicht in vier Wochen erneut stellen.
+              </p>
+            </Section>
+          )}
 
           <Section
             title="Protokoll"

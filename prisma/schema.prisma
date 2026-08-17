@@ -65,16 +65,22 @@ model Project {
   /// Laeuft das Team selbststaendig weiter (naechster Sprint direkt nach dem
   /// Review) oder haelt es nach jedem Sprint an und wartet auf den Menschen?
   autopilot              Boolean       @default(true)
+  /// Wie viele Sprints das Team ohne neue Entscheidung des Auftraggebers
+  /// arbeiten darf. Ist das Budget aufgebraucht, beruft das Team eine Klaerung
+  /// ein (siehe `Clarification`) statt einfach stehenzubleiben; der Mensch kann
+  /// dort aufstocken.
+  sprintBudget           Int           @default(12)
 
-  requirements Requirement[]
-  concept      Concept?
-  tickets      Ticket[]
-  sprints      Sprint[]
-  agents       AgentAssignment[]
-  connectors   Connector[]
-  activity     ActivityLogEntry[]
-  agentRuns    AgentRun[]
-  inquiries    TeamInquiry[]
+  requirements   Requirement[]
+  concept        Concept?
+  tickets        Ticket[]
+  sprints        Sprint[]
+  agents         AgentAssignment[]
+  connectors     Connector[]
+  activity       ActivityLogEntry[]
+  agentRuns      AgentRun[]
+  inquiries      TeamInquiry[]
+  clarifications Clarification[]
 
   @@map("projects")
 }
@@ -175,12 +181,13 @@ model Agent {
   status       AgentStatus @default(IDLE)
   createdAt    DateTime    @default(now())
 
-  assignments       AgentAssignment[]
-  ticketEvents      ActivityLogEntry[]
-  supportRequests   SupportRequest[]
-  runs              AgentRun[]
-  assignedTickets   Ticket[]           @relation("TicketAssignee")
-  answeredInquiries TeamInquiry[]
+  assignments          AgentAssignment[]
+  ticketEvents         ActivityLogEntry[]
+  supportRequests      SupportRequest[]
+  runs                 AgentRun[]
+  assignedTickets      Ticket[]           @relation("TicketAssignee")
+  answeredInquiries    TeamInquiry[]
+  raisedClarifications Clarification[]
 
   @@map("agents")
 }
@@ -312,8 +319,9 @@ model SupportRequest {
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
-  tickets  Ticket[]
-  activity ActivityLogEntry[]
+  tickets       Ticket[]
+  activity      ActivityLogEntry[]
+  clarification Clarification?
 
   @@map("support_requests")
 }
@@ -366,9 +374,10 @@ model Ticket {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
-  reviews  ReviewApproval[]
-  activity ActivityLogEntry[]
-  runs     AgentRun[]
+  reviews        ReviewApproval[]
+  activity       ActivityLogEntry[]
+  runs           AgentRun[]
+  clarifications Clarification[]
 
   @@map("tickets")
 }
@@ -390,8 +399,9 @@ model Sprint {
   startedAt DateTime     @default(now())
   endedAt   DateTime?
 
-  tickets Ticket[]
-  runs    AgentRun[]
+  tickets        Ticket[]
+  runs           AgentRun[]
+  clarifications Clarification[]
 
   @@unique([projectId, number])
   @@map("sprints")
@@ -469,6 +479,83 @@ enum InquiryStatus {
   PENDING
   ANSWERED
   FAILED
+}
+
+/// Eine Klaerung: das Team kommt an einer Stelle allein nicht weiter und
+/// beruft den Auftraggeber ein – die Gegenrichtung zu `TeamInquiry`.
+///
+/// Der Grund fuer dieses Modell: Frueher endete jede Sackgasse (abgestuerzter
+/// Modellaufruf, widerspruechliche Anforderung, leerer Backlog) in einem
+/// Protokolleintrag, und die Arbeit stand still, ohne dass es jemandem auffiel.
+/// Eine Klaerung macht daraus einen sichtbaren Vorgang mit Frage, Optionen und
+/// Beschluss – und traegt in `resumeTask`/`resumePayload` den eingefrorenen
+/// Arbeitsschritt mit sich, der nach dem Beschluss genau dort weiterlaeuft, wo
+/// das Team stehengeblieben ist.
+///
+/// `scope` entscheidet, wie weit die Blockade reicht: TICKET legt eine Story
+/// still (das Team zieht die naechste), SPRINT den laufenden Sprint, PROJECT
+/// die ganze Mannschaft.
+model Clarification {
+  id         String  @id @default(cuid())
+  projectId  String
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ticketId   String?
+  ticket     Ticket? @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  sprintId   String?
+  sprint     Sprint? @relation(fields: [sprintId], references: [id], onDelete: SetNull)
+  /// Welcher Agent die Klaerung einberufen hat (null = Scrumy selbst, z.B. bei
+  /// einem abgestuerzten Schritt).
+  raisedById String?
+  raisedBy   Agent?  @relation(fields: [raisedById], references: [id], onDelete: SetNull)
+
+  scope   ClarificationScope @default(TICKET)
+  /// Maschinenlesbarer Anlass: step_failed, step_abandoned, no_changes,
+  /// qa_needs_decision, agent_blocker, no_agent, no_workspace, backlog_empty,
+  /// sprint_budget. Dient auch der Entdopplung offener Klaerungen.
+  trigger String
+  /// Was entschieden werden muss – in einem Satz, aus Sicht des Auftraggebers.
+  question String
+  /// Beleglage: Fehlermeldung, QA-Kommentar, Zusammenfassung des Agenten.
+  context  String?
+  /// Vorschlaege des Teams: [{ key, label, detail, effect }]. `effect` steuert,
+  /// was der Beschluss ausloest (resume | skip | stop | budget).
+  options  Json?
+  /// Einordnung und Empfehlung des Scrum Masters (siehe clarificationPrep).
+  agenda   String?
+
+  status    ClarificationStatus @default(OPEN)
+  decision  String?
+  decidedBy String?
+  decidedAt DateTime?
+
+  /// Der eingefrorene Arbeitsschritt, der nach dem Beschluss wieder eingereiht
+  /// wird (Task-Name + Payload aus der Job-Queue). Ohne ihn bestimmt Scrumy den
+  /// naechsten Schritt aus dem Projektstand.
+  resumeTask    String?
+  resumePayload Json?
+
+  /// An den Kunden weitergereicht: Die Frage laeuft dann als Vorgang im
+  /// Support-Postfach, die Antwort kommt ueber denselben Vorgang zurueck.
+  forwardedAt        DateTime?
+  forwardedRequestId String?         @unique
+  forwardedRequest   SupportRequest? @relation(fields: [forwardedRequestId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId, status])
+  @@map("clarifications")
+}
+
+enum ClarificationScope {
+  TICKET
+  SPRINT
+  PROJECT
+}
+
+enum ClarificationStatus {
+  OPEN
+  DECIDED
+  WITHDRAWN
 }
 
 enum TicketType {

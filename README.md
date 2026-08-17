@@ -33,6 +33,17 @@ einer Firma:
 Kritische Tickets und Fälle, in denen QA nach zwei Anläufen nicht zufrieden ist,
 gehen als `ReviewApproval` an den Menschen, statt still fertig zu werden.
 
+**Wenn das Team nicht weiterkommt, beruft es ein.** Jede Sackgasse – ein
+endgültig gescheiterter Arbeitsschritt, eine widersprüchliche Anforderung, ein
+leerer Backlog, eine unbesetzte Rolle – wird zu einer `Clarification`: eine Frage
+mit Entscheidungsvorlage im Team-Büro, die den unterbrochenen Job eingefroren
+mit sich trägt. Der Beschluss setzt genau diesen Job wieder in Gang und landet
+im Beschlussregister, das jeder Agent ab dann in jedem Prompt mitbekommt. Ein
+blockiertes Ticket hält nur sich selbst auf (das Team zieht das nächste), nur
+eine projektweite Klärung hält die ganze Mannschaft an. Auch die Agenten selbst
+dürfen einberufen: QA über das Urteil `needs_decision`, der Umsetzer über das
+Feld `KLÄRUNG` – lieber gefragt als geraten und committet.
+
 **Pipeline (laufender Betrieb):** Kundenkorrespondenz (per Connector, z.B. Jira,
 oder manuell) → **Support-Agent** triagiert → **Product-Owner-Agent** übersetzt
 sie in Tickets, packt sie in den Backlog und priorisiert → **Planning-Agent**
@@ -72,6 +83,11 @@ deployt werden.
 - **TeamInquiry** – Rückfrage des Menschen ans Team („Wie ist der Stand?",
   „Warum habt ihr X so gebaut?") und die Antwort des Scrum-Master-Agenten, der
   dafür Sprints, Tickets, Commits und Protokoll heranzieht.
+- **Clarification** – die Gegenrichtung: das Team beruft den Auftraggeber ein.
+  Mit Frage, Optionen (Agenda vom Scrum Master), Reichweite (Ticket/Sprint/
+  Projekt) und dem eingefrorenen Arbeitsschritt (`resumeTask`/`resumePayload`),
+  der nach dem Beschluss weiterläuft. Kann über einen Connector als
+  `SupportRequest` an den Kunden weitergereicht werden.
 - **ActivityLogEntry** – Audit-Trail (an Ticket und/oder SupportRequest), macht
   die Arbeit der Agenten für den Kunden nachvollziehbar.
 
@@ -83,8 +99,9 @@ Das Datenmodell liegt in [`prisma/schema.prisma`](./prisma/schema.prisma).
 - `/projects/[id]` – Projekt-Übersicht: Stat-Kacheln, Agenten-Team, Scrum-Board,
   Aktivität.
 - `/projects/[id]/office` – **Team-Büro**: Live-Ansicht, wer gerade woran
-  arbeitet, aktueller Sprint mit Fortschritt, offene Freigaben, Rückfragen ans
-  Team und das Protokoll. Aktualisiert sich selbst (`LiveRefresh`), Steuerung:
+  arbeitet, offene Klärungen mit Entscheidungsvorlage, aktueller Sprint mit
+  Fortschritt, offene Freigaben, Rückfragen ans Team, Beschlussregister und das
+  Protokoll. Aktualisiert sich selbst (`LiveRefresh`), Steuerung:
   Autopilot an/aus, „Nächsten Schritt anstoßen", Anhalten/Fortsetzen.
 - `/projects/[id]/records` – **Nachweise**: alle Agentenläufe (bis hin zu Prompt
   und Antwort im Wortlaut) und alle Commits (mit vollständigem Diff), dazu die

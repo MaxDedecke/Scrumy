@@ -1,6 +1,8 @@
 import type {
   AgentRole,
   AgentStatus,
+  ClarificationScope,
+  ClarificationStatus,
   InquiryStatus,
   RunStatus,
   SprintStatus,
@@ -203,6 +205,39 @@ export const RUN_KIND_LABEL: Record<string, string> = {
   review: "QA-Review",
   sprint_review: "Sprint-Review",
   inquiry: "Rückfrage beantwortet",
+  clarification_prep: "Klärung vorbereitet",
+};
+
+// Wie weit eine offene Klaerung die Arbeit anhaelt.
+export const CLARIFICATION_SCOPE_LABEL: Record<ClarificationScope, string> = {
+  TICKET: "Ticket blockiert",
+  SPRINT: "Sprint blockiert",
+  PROJECT: "Team steht",
+};
+
+export const CLARIFICATION_SCOPE_PILL: Record<ClarificationScope, string> = {
+  TICKET: "pill pill-warning",
+  SPRINT: "pill pill-warning",
+  PROJECT: "pill pill-critical",
+};
+
+export const CLARIFICATION_STATUS_LABEL: Record<ClarificationStatus, string> = {
+  OPEN: "Offen",
+  DECIDED: "Entschieden",
+  WITHDRAWN: "Zurückgezogen",
+};
+
+// Woran das Team haengengeblieben ist – im Klartext ueber der Frage.
+export const CLARIFICATION_TRIGGER_LABEL: Record<string, string> = {
+  step_failed: "Arbeitsschritt abgebrochen",
+  step_abandoned: "Schritt durch Neustart verloren",
+  no_changes: "Keine Änderung geliefert",
+  qa_needs_decision: "QA braucht eine Entscheidung",
+  agent_blocker: "Rückfrage aus der Umsetzung",
+  no_agent: "Rolle nicht besetzt",
+  no_workspace: "Kein Arbeitsverzeichnis",
+  backlog_empty: "Nichts mehr offen?",
+  sprint_budget: "Sprint-Budget aufgebraucht",
 };
 
 export const INQUIRY_STATUS_LABEL: Record<InquiryStatus, string> = {
@@ -240,6 +275,14 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   human_approved: "Vom Menschen freigegeben",
   human_rejected: "Vom Menschen zurückgewiesen",
   inquiry_answered: "Rückfrage beantwortet",
+  clarification_opened: "Klärung einberufen",
+  clarification_raised: "Agent bittet um Entscheidung",
+  clarification_prepared: "Entscheidungsvorlage erstellt",
+  clarification_prep_failed: "Entscheidungsvorlage fehlgeschlagen",
+  clarification_decided: "Beschluss gefasst",
+  clarification_withdrawn: "Klärung zurückgezogen",
+  clarification_forwarded: "An den Kunden weitergeleitet",
+  ticket_deferred: "Ticket zurückgestellt",
   step_failed: "Schritt fehlgeschlagen",
   files_rejected: "Dateien abgelehnt",
   step_abandoned: "Abgebrochener Schritt aufgeräumt",
