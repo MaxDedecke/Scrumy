@@ -191,22 +191,35 @@ export async function chat({
         throw new LlmError(`Profil „${profile.name}" braucht eine Base-URL (z.B. https://openrouter.ai/api/v1).`);
       }
 
-      const data = (await postJson(
-        `${base}/chat/completions`,
-        { authorization: `Bearer ${requireApiKey(profile)}` },
-        {
-          model: profile.model,
-          max_tokens: maxTokens,
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: prompt },
-          ],
-        },
-        timeoutMs,
-      )) as {
+      const headers = { authorization: `Bearer ${requireApiKey(profile)}` };
+      const messages = [
+        { role: "system", content: system },
+        { role: "user", content: prompt },
+      ];
+      const url = `${base}/chat/completions`;
+
+      let data: {
         choices?: { message?: { content?: string }; finish_reason?: string }[];
         error?: { message?: string };
       };
+      try {
+        data = (await postJson(url, headers, { model: profile.model, max_tokens: maxTokens, messages }, timeoutMs)) as typeof data;
+      } catch (error) {
+        // Neuere Modelle (u.a. die o1-/gpt-5-Reihe) lehnen `max_tokens` ab und
+        // verlangen `max_completion_tokens` – einmalig mit dem anderen
+        // Feldnamen erneut versuchen, statt den Nutzer mit dem Rohfehler
+        // allein zu lassen.
+        if (error instanceof LlmError && error.message.includes("max_completion_tokens")) {
+          data = (await postJson(
+            url,
+            headers,
+            { model: profile.model, max_completion_tokens: maxTokens, messages },
+            timeoutMs,
+          )) as typeof data;
+        } else {
+          throw error;
+        }
+      }
 
       if (data.error?.message) throw new LlmError(data.error.message);
 
