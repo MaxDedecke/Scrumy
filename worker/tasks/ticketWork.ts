@@ -61,6 +61,27 @@ function isProtected(path: string): boolean {
   return PROTECTED_PATHS.some((pattern) => pattern.test(normalized));
 }
 
+/// Markiert im Ticket-Ergebnis die Liste abgelehnter Dateien, damit ein
+/// erneuter Anlauf sie wiederfindet (siehe rejectedPathsFromResult).
+const REJECTED_FILES_MARKER = "Abgelehnte Änderungen:";
+
+function formatRejectedFiles(rejected: { path: string; reason: string }[]): string {
+  return `${REJECTED_FILES_MARKER}\n${rejected.map((file) => `- ${file.path}: ${file.reason}`).join("\n")}`;
+}
+
+/// Welche Dateien beim letzten Anlauf an einem SEARCH/REPLACE gescheitert
+/// sind. Ohne das wiederholt ein zweiter Anlauf denselben Fehler blind: Der
+/// Coding-Agent bekommt denselben Plan und denselben Bestandscode zu sehen
+/// und schreibt mit hoher Wahrscheinlichkeit wieder einen SEARCH-Ausschnitt,
+/// der nicht exakt passt. Diese Pfade dürfen deshalb ausnahmsweise komplett
+/// (DATEI statt EDIT) ersetzt werden.
+function rejectedPathsFromResult(result: string | null): Set<string> {
+  if (!result || !result.includes(REJECTED_FILES_MARKER)) return new Set();
+  const section = result.slice(result.indexOf(REJECTED_FILES_MARKER) + REJECTED_FILES_MARKER.length);
+  const paths = [...section.matchAll(/^-\s*(\S+):/gm)].map((match) => match[1]);
+  return new Set(paths);
+}
+
 interface MaterializedChanges {
   files: FileChange[];
   rejected: { path: string; reason: string }[];
@@ -206,6 +227,9 @@ Antworte nur so:
 async function materializeChanges(
   dir: string,
   result: ReturnType<typeof parseImplementation>,
+  /** Pfade, deren EDIT-Block im vorigen Anlauf abgelehnt wurde – für sie ist
+   *  ein DATEI-Block ausnahmsweise auch für eine bestehende Datei erlaubt. */
+  retryFullFileFor: Set<string> = new Set(),
 ): Promise<MaterializedChanges> {
   const changed = new Map<string, string>();
   const rejected: MaterializedChanges["rejected"] = [];
@@ -237,7 +261,8 @@ async function materializeChanges(
   for (const file of result.files) {
     try {
       safeRepoPath(dir, file.path);
-      if (await readRepoFile(dir, file.path) !== null || changed.has(file.path)) {
+      const exists = await readRepoFile(dir, file.path) !== null;
+      if ((exists || changed.has(file.path)) && !retryFullFileFor.has(file.path)) {
         rejected.push({ path: file.path, reason: "Datei existiert bereits – für bestehende Dateien EDIT verwenden" });
         continue;
       }
@@ -288,6 +313,11 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
   }
 
   const implementer = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } });
+  // Dateien, deren EDIT-Block beim letzten Anlauf abgelehnt wurde. Ohne diese
+  // Erinnerung sieht ein erneuter Anlauf denselben Plan und denselben
+  // Bestandscode und schreibt mit hoher Wahrscheinlichkeit wieder einen
+  // SEARCH-Ausschnitt, der nicht exakt passt.
+  const previouslyRejectedPaths = attempt > 1 ? rejectedPathsFromResult(ticket.result) : new Set<string>();
   const ticketHead =
     `## Ticket\n${ticket.title}\nTyp: ${TICKET_TYPE_LABEL[ticket.type]} · Priorität: ${PRIORITY_LABEL[ticket.priority]}` +
     `${ticket.isCritical ? " · kritisch (braucht menschliche Freigabe)" : ""}\n\n${clipForPrompt(ticket.description ?? "", 6000)}`;
@@ -374,10 +404,12 @@ ${planForPrompt}
 
 ## Bestehender Code
 ${await readRelevantSourceContext(dir, sourceQuery)}
-
+${previouslyRejectedPaths.size > 0
+  ? `\n## Vorheriger Anlauf ist gescheitert\nBei folgenden Dateien passte der SEARCH-Ausschnitt nicht exakt (oder mehrfach) auf den heutigen Stand: ${[...previouslyRejectedPaths].join(", ")}. Kopiere den SEARCH-Text diesmal Zeichen für Zeichen aus „Bestehender Code" oben, inklusive Einrückung – oder, falls die Änderung ohnehin den Großteil der Datei betrifft, gib genau diese Dateien ausnahmsweise vollständig in einem DATEI-Block zurück (nur für die hier genannten Pfade erlaubt).\n`
+  : ""}
 Die Auftragsunterlagen (docs/konzept.md, docs/anforderungen.md, docs/verstaendnis.md und docs/sprints/…) sind der eingefrorene Auftrag – die änderst du nicht. Eigene Dokumentation legst du woanders ab, z.B. unter docs/technik/.
 
-Setze ausschließlich dieses kleine Ticket um. Ändere bestehende Dateien mit exakten SEARCH/REPLACE-Blöcken; kopiere in SEARCH genug unveränderten Kontext, damit der Ausschnitt genau einmal vorkommt. Gib bestehende Dateien niemals vollständig zurück. Nur NEUE Dateien kommen vollständig in einen DATEI-Block. Dateien, die du nicht anfasst, lässt du weg.
+Setze ausschließlich dieses kleine Ticket um. Ändere bestehende Dateien mit exakten SEARCH/REPLACE-Blöcken; kopiere in SEARCH genug unveränderten Kontext, damit der Ausschnitt genau einmal vorkommt. Gib bestehende Dateien niemals vollständig zurück – Ausnahme ist ein oben unter „Vorheriger Anlauf ist gescheitert" ausdrücklich genannter Pfad. Nur NEUE Dateien (und diese Ausnahme) kommen vollständig in einen DATEI-Block. Dateien, die du nicht anfasst, lässt du weg.
 
 Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wesentliches offen lassen, das du nicht selbst entscheiden darfst (Fachlogik, Datenhaltung, Kosten, Rechte): Erfinde nichts. Setze um, was zweifelsfrei ist, und stelle die Frage im Feld KLÄRUNG – der Auftraggeber entscheidet, und das Team arbeitet danach mit dem Beschluss weiter.
 
@@ -414,7 +446,7 @@ vollständiger Inhalt der neuen Datei
   }
 
   const result = parseImplementation(implementation.text);
-  const materialized = await materializeChanges(dir, result);
+  const materialized = await materializeChanges(dir, result, previouslyRejectedPaths);
   const { accepted: safeFiles, rejected: unsafe } = partitionSafeChanges(dir, materialized.files);
   const files = safeFiles.filter((file) => !isProtected(file.path));
   const rejected = [
@@ -452,7 +484,11 @@ vollständiger Inhalt der neuen Datei
     // leere Aenderung. Jetzt ist es die Frage, die es tatsaechlich ist.
     await prisma.ticket.update({
       where: { id: ticketId },
-      data: { status: "IN_PROGRESS", result: `${summary}\n\n(Keine Dateiänderungen geliefert.)` },
+      data: {
+        status: "IN_PROGRESS",
+        result: `${summary}\n\n(Keine Dateiänderungen geliefert.)` +
+          (rejected.length > 0 ? `\n\n${formatRejectedFiles(rejected)}` : ""),
+      },
     });
     await logActivity({
       projectId,
