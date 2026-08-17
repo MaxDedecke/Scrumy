@@ -15,16 +15,18 @@ import { extractJsonObject } from "@/lib/llm";
 import {
   commitAll,
   gitShow,
-  listTrackedFiles,
   partitionSafeChanges,
   readRepoFile,
+  readRelevantSourceContext,
   repoOverview,
+  safeRepoPath,
   writeFiles,
+  type FileChange,
 } from "@/lib/workspace";
-import { agentForRole } from "@/lib/team";
+import { agentForRole, roleForTicket } from "@/lib/team";
 import { PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
 import { optionsFromAgent, type ClarificationOption } from "@/lib/clarificationOptions";
-import { logActivity, runAgent } from "../agentRun";
+import { AgentRunError, logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { continueSprint, loadWorkingProject } from "../orchestration";
 import { openClarification } from "../clarification";
@@ -37,9 +39,10 @@ import type { TicketWorkPayload } from "../taskTypes";
 /// Versuch fragt statt weiter zu probieren.
 const MAX_ATTEMPTS = 2;
 
-/// Zeichen-Budget für den Quellcode im Prompt. Lieber weniger Dateien mit
-/// vollem Inhalt als alles angeschnitten.
-const SOURCE_BUDGET = 60_000;
+function clipForPrompt(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n… (${text.length - maxChars} Zeichen für diesen Arbeitsschritt ausgeblendet)`;
+}
 
 /// Der Auftrag und was das Team dazu festgehalten hat, gehört nicht den
 /// Umsetzern: Konzept, Anforderungen, Projektverständnis und Sprint-Dokumente
@@ -58,28 +61,193 @@ function isProtected(path: string): boolean {
   return PROTECTED_PATHS.some((pattern) => pattern.test(normalized));
 }
 
-/// Der bestehende Code als Arbeitsgrundlage. Die Auftragsunterlagen unter
-/// `docs/` bleiben draußen – die stehen schon im Projektkontext.
-async function readSourceContext(dir: string): Promise<string> {
-  const files = (await listTrackedFiles(dir)).filter((file) => !file.startsWith("docs/"));
+interface MaterializedChanges {
+  files: FileChange[];
+  rejected: { path: string; reason: string }[];
+}
 
-  const chunks: string[] = [];
-  let used = 0;
-  for (const file of files) {
-    const content = await readRepoFile(dir, file);
-    if (content === null) continue;
-    if (used + content.length > SOURCE_BUDGET) {
-      // Der Agent soll wissen, dass es die Datei gibt – sie aber nicht aus dem
-      // Gedaechtnis neu schreiben. Eine vollstaendig zurueckgegebene Datei
-      // ueberschreibt die echte, das waere Datenverlust.
-      chunks.push(`--- ${file} (Inhalt nicht mitgeschickt – diese Datei NICHT ändern) ---`);
-      continue;
-    }
-    used += content.length;
-    chunks.push(`--- ${file} ---\n${content}`);
+interface SplitTicket {
+  title?: unknown;
+  description?: unknown;
+  acceptanceCriteria?: unknown;
+  likelyFiles?: unknown;
+  role?: unknown;
+}
+
+function splitStringList(value: unknown, limit: number): string[] {
+  return Array.isArray(value)
+    ? value.map((entry) => String(entry).trim()).filter(Boolean).slice(0, limit)
+    : [];
+}
+
+async function splitTicketAfterTokenLimit({
+  projectId,
+  ticket,
+  plan,
+  failedAgentId,
+}: {
+  projectId: string;
+  ticket: {
+    id: string;
+    sprintId: string | null;
+    title: string;
+    description: string | null;
+    type: "FEATURE" | "BUG" | "INTEGRATION" | "CHORE";
+    priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+    isCritical: boolean;
+  };
+  plan: string;
+  failedAgentId: string;
+}): Promise<boolean> {
+  if (!ticket.sprintId) return false;
+  const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
+  if (!productOwner) return false;
+
+  const context = await buildProjectContext(projectId, {
+    includeRepo: false,
+    includeBoard: false,
+    compact: true,
+    focus: `${ticket.title}\n${ticket.description ?? ""}`,
+  });
+  const split = await runAgent({
+    agent: productOwner,
+    projectId,
+    ticketId: ticket.id,
+    sprintId: ticket.sprintId,
+    kind: "ticket_split",
+    headline: `Zerlegt Ticket „${ticket.title}" nach Token-Limit`,
+    maxTokens: 5000,
+    system: `${TEAM_GRUNDREGELN}\n\nDu bist ${productOwner.name}, Product Owner. Du zerlegst einen technisch zu großen Arbeitsschritt. Du antwortest ausschließlich mit einem JSON-Objekt.`,
+    prompt: `${context}
+
+## Zu großes Ticket
+${ticket.title}
+${clipForPrompt(ticket.description ?? "", 6000)}
+
+## Bisheriger Umsetzungsplan
+${clipForPrompt(plan, 8000)}
+
+Die Umsetzung hat trotz begrenztem, relevantem Quellcodekontext das Ausgabelimit erreicht. Zerlege das Ticket in 2–5 aufeinanderfolgende, eigenständig umsetzbare Teiltickets. Jedes Teilticket hat genau ein Ergebnis, 1–4 Akzeptanzkriterien, voraussichtlich höchstens 4 geänderte oder neue Dateien und eine Schätzung von 1–3. Kein Teilticket darf nur „Rest umsetzen" heißen.
+
+Antworte nur so:
+{
+  "tickets": [{
+    "title": "kleines Ergebnis",
+    "description": "konkreter Umfang",
+    "acceptanceCriteria": ["prüfbares Kriterium"],
+    "likelyFiles": ["relativer/pfad.ts"],
+    "role": "BACKEND | FRONTEND | QA | DEVOPS"
+  }]
+}`,
+  });
+
+  const parsed = extractJsonObject(split.text);
+  const parts = Array.isArray(parsed.tickets) ? (parsed.tickets as SplitTicket[]).slice(0, 5) : [];
+  const valid = parts.filter((part) => {
+    const title = String(part.title ?? "").trim();
+    const criteria = splitStringList(part.acceptanceCriteria, 5);
+    const files = splitStringList(part.likelyFiles, 5);
+    return title.length > 0 && criteria.length >= 1 && criteria.length <= 4 && files.length >= 1 && files.length <= 4;
+  });
+  if (valid.length < 2) return false;
+
+  const prepared = [];
+  for (const part of valid) {
+    const role = roleForTicket(typeof part.role === "string" ? part.role : null);
+    const assignee = await agentForRole(projectId, role);
+    const criteria = splitStringList(part.acceptanceCriteria, 4);
+    const files = splitStringList(part.likelyFiles, 4);
+    prepared.push({
+      title: String(part.title).trim(),
+      description: [
+        String(part.description ?? "").trim(),
+        `## Akzeptanzkriterien\n${criteria.map((entry) => `- ${entry}`).join("\n")}`,
+        `## Voraussichtliche Dateien\n${files.map((entry) => `- ${entry}`).join("\n")}`,
+        `## Herkunft\nAutomatisch zerlegt aus „${ticket.title}", nachdem dessen Modellausgabe das Token-Limit erreicht hat.`,
+      ].filter(Boolean).join("\n\n"),
+      assigneeId: assignee?.id ?? failedAgentId,
+    });
   }
 
-  return chunks.join("\n\n") || "(noch keine Quelldateien)";
+  const [first, ...rest] = prepared;
+  await prisma.$transaction([
+    prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { title: first.title, description: first.description, estimate: 2, assigneeId: first.assigneeId, plan: null, result: null, status: "BACKLOG" },
+    }),
+    ...rest.map((part) => prisma.ticket.create({
+      data: {
+        projectId,
+        sprintId: ticket.sprintId,
+        title: part.title,
+        description: part.description,
+        type: ticket.type,
+        priority: ticket.priority,
+        estimate: 2,
+        isCritical: ticket.isCritical,
+        assigneeId: part.assigneeId,
+      },
+    })),
+    prisma.agent.update({ where: { id: failedAgentId }, data: { status: "IDLE" } }),
+  ]);
+  await logActivity({
+    projectId,
+    ticketId: ticket.id,
+    actor: productOwner.name,
+    agentId: productOwner.id,
+    action: "ticket_split",
+    detail: `„${ticket.title}" nach Token-Limit automatisch in ${prepared.length} kleine Tickets zerlegt.`,
+  });
+  await continueSprint(projectId, ticket.sprintId);
+  return true;
+}
+
+/** Wendet die kompakten, exakten Such-/Ersetzungsblöcke erst im Speicher an. */
+async function materializeChanges(
+  dir: string,
+  result: ReturnType<typeof parseImplementation>,
+): Promise<MaterializedChanges> {
+  const changed = new Map<string, string>();
+  const rejected: MaterializedChanges["rejected"] = [];
+
+  for (const edit of result.edits) {
+    try {
+      safeRepoPath(dir, edit.path);
+      const current = changed.get(edit.path) ?? await readRepoFile(dir, edit.path);
+      if (current === null) {
+        rejected.push({ path: edit.path, reason: "Datei existiert nicht – für neue Dateien DATEI verwenden" });
+        continue;
+      }
+      const occurrences = current.split(edit.search).length - 1;
+      if (occurrences !== 1) {
+        rejected.push({
+          path: edit.path,
+          reason: occurrences === 0
+            ? "SEARCH-Ausschnitt wurde nicht gefunden"
+            : `SEARCH-Ausschnitt ist nicht eindeutig (${occurrences} Treffer)`,
+        });
+        continue;
+      }
+      changed.set(edit.path, current.replace(edit.search, edit.replace));
+    } catch (error) {
+      rejected.push({ path: edit.path, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  for (const file of result.files) {
+    try {
+      safeRepoPath(dir, file.path);
+      if (await readRepoFile(dir, file.path) !== null || changed.has(file.path)) {
+        rejected.push({ path: file.path, reason: "Datei existiert bereits – für bestehende Dateien EDIT verwenden" });
+        continue;
+      }
+      changed.set(file.path, file.content);
+    } catch (error) {
+      rejected.push({ path: file.path, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return { files: [...changed].map(([path, content]) => ({ path, content })), rejected };
 }
 
 const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helpers) => {
@@ -122,7 +290,7 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
   const implementer = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } });
   const ticketHead =
     `## Ticket\n${ticket.title}\nTyp: ${TICKET_TYPE_LABEL[ticket.type]} · Priorität: ${PRIORITY_LABEL[ticket.priority]}` +
-    `${ticket.isCritical ? " · kritisch (braucht menschliche Freigabe)" : ""}\n\n${ticket.description ?? ""}`;
+    `${ticket.isCritical ? " · kritisch (braucht menschliche Freigabe)" : ""}\n\n${clipForPrompt(ticket.description ?? "", 6000)}`;
 
   await prisma.ticket.update({ where: { id: ticketId }, data: { status: "IN_PROGRESS" } });
   await logActivity({
@@ -134,7 +302,13 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
     detail: attempt === 1 ? `„${ticket.title}" übernommen` : `„${ticket.title}" – Nacharbeit nach QA-Review (Anlauf ${attempt})`,
   });
 
-  const context = await buildProjectContext(projectId);
+  const focus = `${ticket.title}\n${ticket.description ?? ""}`;
+  const context = await buildProjectContext(projectId, {
+    includeRepo: false,
+    includeBoard: false,
+    compact: true,
+    focus,
+  });
 
   // --- 1. Planung -----------------------------------------------------------
   let plan = ticket.plan;
@@ -155,8 +329,8 @@ Du bist ${planner.name} und planst die Umsetzung eines Tickets für ${implemente
 
 ${ticketHead}
 
-## Bestehender Code
-${await repoOverview(dir)}
+## Relevanter Repository-Überblick
+${await repoOverview(dir, 160, focus)}
 
 Schreibe einen knappen Umsetzungsplan als Markdown-Liste: welche Dateien angelegt oder geändert werden, in welcher Reihenfolge, und woran man erkennt, dass das Ticket erfüllt ist. Keine Codeblöcke, keine Zeitschätzung.`,
     });
@@ -174,39 +348,42 @@ Schreibe einen knappen Umsetzungsplan als Markdown-Liste: welche Dateien angeleg
   }
 
   // --- 2. Umsetzung ---------------------------------------------------------
-  const implementation = await runAgent({
-    agent: implementer,
-    projectId,
-    ticketId,
-    sprintId: ticket.sprintId ?? undefined,
-    kind: "implementation",
-    headline: `Setzt Ticket „${ticket.title}" um`,
-    maxTokens: 16000,
-    // Umsetzung heisst mehrere vollstaendige Dateien in einer Antwort – das
-    // dauert je nach Modell viele Minuten.
-    timeoutMs: 900_000,
-    system: `${TEAM_GRUNDREGELN}
+  const planForPrompt = clipForPrompt(plan, 8000);
+  const sourceQuery = `${focus}\n${planForPrompt}`;
+  let implementation;
+  try {
+    implementation = await runAgent({
+      agent: implementer,
+      projectId,
+      ticketId,
+      sprintId: ticket.sprintId ?? undefined,
+      kind: "implementation",
+      headline: `Setzt Ticket „${ticket.title}" um`,
+      maxTokens: 16000,
+      // Auch kompakte Edits koennen bei langsamen lokalen Modellen dauern.
+      timeoutMs: 900_000,
+      system: `${TEAM_GRUNDREGELN}
 
 Du bist ${implementer.name} und setzt das Ticket im Repository um. Du antwortest ausschließlich im vorgegebenen Blockformat, ohne Vorrede.`,
-    prompt: `${context}
+      prompt: `${context}
 
 ${ticketHead}
 
 ## Umsetzungsplan
-${plan}
+${planForPrompt}
 
 ## Bestehender Code
-${await readSourceContext(dir)}
+${await readRelevantSourceContext(dir, sourceQuery)}
 
 Die Auftragsunterlagen (docs/konzept.md, docs/anforderungen.md, docs/verstaendnis.md und docs/sprints/…) sind der eingefrorene Auftrag – die änderst du nicht. Eigene Dokumentation legst du woanders ab, z.B. unter docs/technik/.
 
-Setze das Ticket um. Gib jede Datei, die du anlegst oder änderst, VOLLSTÄNDIG zurück (kein Diff, keine Auslassungen wie "..."). Dateien, die du nicht anfasst, lässt du weg. Schreibe lauffähigen, in sich stimmigen Code und passe bestehende Dateien an, statt sie zu duplizieren.
+Setze ausschließlich dieses kleine Ticket um. Ändere bestehende Dateien mit exakten SEARCH/REPLACE-Blöcken; kopiere in SEARCH genug unveränderten Kontext, damit der Ausschnitt genau einmal vorkommt. Gib bestehende Dateien niemals vollständig zurück. Nur NEUE Dateien kommen vollständig in einen DATEI-Block. Dateien, die du nicht anfasst, lässt du weg.
 
 Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wesentliches offen lassen, das du nicht selbst entscheiden darfst (Fachlogik, Datenhaltung, Kosten, Rechte): Erfinde nichts. Setze um, was zweifelsfrei ist, und stelle die Frage im Feld KLÄRUNG – der Auftraggeber entscheidet, und das Team arbeitet danach mit dem Beschluss weiter.
 
 Zu jeder Klärung gehören die Wege, zwischen denen entschieden wird: Schreibe sie ins Feld WEGE, zwei bis vier Stück, jeden in einer eigenen Zeile als „Kurzer Titel: was das konkret bedeutet, mit Für und Wider in einem Satz". Es sind die fachlichen Möglichkeiten, die DU siehst (welcher Server, welches Datenmodell, welche Bibliothek) – nicht „nochmal versuchen" oder „abbrechen", die kennt Scrumy selbst.
 
-Antworte genau in diesem Format – der Dateiinhalt steht wörtlich zwischen den Markierungen, ohne Code-Fence und ohne Escaping:
+Antworte genau in diesem Format, ohne Code-Fences und ohne Escaping. Wiederhole EDIT-Blöcke, wenn eine Datei mehrere getrennte Stellen ändert:
 
 COMMIT: Betreffzeile im Imperativ, max. 72 Zeichen
 ZUSAMMENFASSUNG: 2-4 Sätze für den Auftraggeber: was jetzt anders ist und warum
@@ -214,17 +391,34 @@ OFFEN: offene Punkte oder Annahmen (weglassen, wenn es keine gibt)
 KLÄRUNG: eine einzelne Frage an den Auftraggeber (nur wenn du wirklich nicht entscheiden darfst, sonst weglassen)
 WEGE: erster Weg: was das heißt
 - zweiter Weg: was das heißt
---- DATEI: relativer/pfad.ts ---
-vollständiger Dateiinhalt
---- DATEI: naechste/datei.md ---
-vollständiger Dateiinhalt
+--- EDIT: bestehender/pfad.ts ---
+<<< SEARCH
+exakt vorhandener, eindeutig vorkommender Ausschnitt
+=== REPLACE
+neuer Ausschnitt
+>>> END EDIT
+--- DATEI: nur/neue/datei.ts ---
+vollständiger Inhalt der neuen Datei
 --- ENDE ---`,
-  });
+    });
+  } catch (error) {
+    if (
+      error instanceof AgentRunError &&
+      error.code === "TOKEN_LIMIT" &&
+      await splitTicketAfterTokenLimit({ projectId, ticket, plan, failedAgentId: implementer.id })
+    ) {
+      helpers.logger.info(`Ticket ${ticket.title} war zu groß und wurde automatisch zerlegt.`);
+      return;
+    }
+    throw error;
+  }
 
   const result = parseImplementation(implementation.text);
-  const { accepted: safeFiles, rejected: unsafe } = partitionSafeChanges(dir, result.files);
+  const materialized = await materializeChanges(dir, result);
+  const { accepted: safeFiles, rejected: unsafe } = partitionSafeChanges(dir, materialized.files);
   const files = safeFiles.filter((file) => !isProtected(file.path));
   const rejected = [
+    ...materialized.rejected,
     ...unsafe,
     ...safeFiles
       .filter((file) => isProtected(file.path))

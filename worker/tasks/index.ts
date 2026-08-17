@@ -14,6 +14,7 @@
 import type { Task, TaskList } from "graphile-worker";
 import { prisma } from "@/lib/prisma";
 import "../taskTypes";
+import { AgentRunError } from "../agentRun";
 import { openClarification } from "../clarification";
 import teamKickoff from "./teamKickoff";
 import sprintPlanning from "./sprintPlanning";
@@ -89,6 +90,7 @@ async function raiseClarification(
 ): Promise<void> {
   const chain = (payload ?? {}) as ChainPayload;
   const message = error instanceof Error ? error.message : String(error);
+  const tokenLimit = error instanceof AgentRunError && error.code === "TOKEN_LIMIT";
   const ticket = chain.ticketId
     ? await prisma.ticket.findUnique({ where: { id: chain.ticketId }, select: { title: true } })
     : null;
@@ -104,10 +106,26 @@ async function raiseClarification(
     sprintId: chain.sprintId ?? null,
     raisedById: chain.agentId ?? null,
     question: ticket
-      ? `„${ticket.title}": Die Umsetzung ist auch im letzten Anlauf abgebrochen. Wie sollen wir weitermachen?`
+      ? tokenLimit
+        ? `„${ticket.title}": Der Arbeitsschritt ist trotz automatischer Verkleinerung am Token-Limit gescheitert.`
+        : `„${ticket.title}": Die Umsetzung ist auch im letzten Anlauf abgebrochen. Wie sollen wir weitermachen?`
       : `Der Schritt „${step}" ist auch im letzten Anlauf abgebrochen. Wie sollen wir weitermachen?`,
     context: `Schritt: ${step}\nAbbruchgrund: ${message}`,
+    options: tokenLimit
+      ? [
+          {
+            key: "resume",
+            label: "Erneut technisch zerlegen",
+            detail: "Scrumy versucht den Schritt nochmals mit dem kompakten Kontext- und Zerlegungsweg.",
+            effect: "resume",
+          },
+          { key: "stop", label: "Team anhalten", effect: "stop" },
+        ]
+      : undefined,
     resume: { task: identifier, payload },
+    // Zu einem technischen Limit soll der Scrum Master keine vermeintlich
+    // fachlichen Wege oder nicht konfigurierte Modellwechsel erfinden.
+    prepare: !tokenLimit,
   });
 }
 

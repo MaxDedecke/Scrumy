@@ -9,7 +9,10 @@ import type { LlmProfile, LlmProvider } from "@/generated/prisma/client";
 // ohne zusätzliche Dependency.
 
 export class LlmError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code?: "TOKEN_LIMIT",
+  ) {
     super(message);
     this.name = "LlmError";
   }
@@ -144,12 +147,15 @@ export async function chat({
         .filter((block) => block.type === "text")
         .map((block) => block.text ?? "")
         .join("");
+      if (data.stop_reason === "max_tokens") {
+        throw new LlmError(
+          "Die Modellantwort wurde am Token-Limit abgeschnitten. Das Ergebnis wird aus Sicherheitsgründen nicht angewendet.",
+          "TOKEN_LIMIT",
+        );
+      }
       if (!text.trim()) {
         throw new LlmError(
-          `Das Modell hat keinen Text zurückgegeben${data.stop_reason ? ` (Abbruchgrund: ${data.stop_reason})` : ""}.` +
-            (data.stop_reason === "max_tokens"
-              ? " Das Token-Budget war vor der eigentlichen Antwort aufgebraucht."
-              : ""),
+          `Das Modell hat keinen Text zurückgegeben${data.stop_reason ? ` (Abbruchgrund: ${data.stop_reason})` : ""}.`,
         );
       }
       return text;
@@ -206,6 +212,12 @@ export async function chat({
 
       const choice = data.choices?.[0];
       const text = pickString(choice?.message?.content);
+      if (choice?.finish_reason === "length") {
+        throw new LlmError(
+          "Die Modellantwort wurde am Token-Limit abgeschnitten. Das Ergebnis wird aus Sicherheitsgründen nicht angewendet.",
+          "TOKEN_LIMIT",
+        );
+      }
       if (!text) {
         // Leere Antwort ohne Grund ist für den Nutzer nicht zu deuten. Der
         // häufigste Fall bei Reasoning-Modellen: Das Token-Budget ging beim
@@ -213,10 +225,7 @@ export async function chat({
         // (`finish_reason: "length"`).
         const reason = choice?.finish_reason;
         throw new LlmError(
-          `Der Anbieter hat keinen Text zurückgegeben${reason ? ` (Abbruchgrund: ${reason})` : ""}.` +
-            (reason === "length"
-              ? " Das Token-Budget war vor der eigentlichen Antwort aufgebraucht – ein Modell mit größerem Ausgabefenster wählen."
-              : ""),
+          `Der Anbieter hat keinen Text zurückgegeben${reason ? ` (Abbruchgrund: ${reason})` : ""}.`,
         );
       }
       return text;

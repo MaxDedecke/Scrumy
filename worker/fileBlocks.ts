@@ -16,8 +16,14 @@
 //            darf (optional – siehe worker/clarification.ts)
 //   WEGE: die Antwortmöglichkeiten zu dieser Frage, eine je Zeile
 //         (optional, nur zusammen mit KLÄRUNG)
-//   --- DATEI: src/beispiel.ts ---
-//   <vollständiger Dateiinhalt>
+//   --- EDIT: src/beispiel.ts ---
+//   <<< SEARCH
+//   <vorhandener, eindeutig vorkommender Ausschnitt>
+//   === REPLACE
+//   <neuer Ausschnitt>
+//   >>> END EDIT
+//   --- DATEI: src/neu.ts ---
+//   <vollständiger Inhalt einer NEUEN Datei>
 //   --- DATEI: docs/weiteres.md ---
 //   <vollständiger Dateiinhalt>
 //   --- ENDE ---
@@ -34,11 +40,18 @@ export interface ParsedImplementation {
    * allgemeinen Standardwege angeboten (siehe optionsFromAgent).
    */
   clarificationOptions: string;
+  /** Kompakte Änderungen an bestehenden Dateien. */
+  edits: { path: string; search: string; replace: string }[];
+  /** Neue Dateien; vollständige Inhalte sind nur hier nötig. */
   files: { path: string; content: string }[];
 }
 
 const FILE_MARKER = /^\s*-{2,}\s*DATEI:\s*(.+?)\s*-{2,}\s*$/i;
+const EDIT_MARKER = /^\s*-{2,}\s*EDIT:\s*(.+?)\s*-{2,}\s*$/i;
 const END_MARKER = /^\s*-{2,}\s*ENDE\s*-{2,}\s*$/i;
+const SEARCH_MARKER = /^\s*<{3}\s*SEARCH\s*$/i;
+const REPLACE_MARKER = /^\s*={3}\s*REPLACE\s*$/i;
+const END_EDIT_MARKER = /^\s*>{3}\s*END\s+EDIT\s*$/i;
 // KLAERUNG ohne Umlaut wird mitgelesen: Modelle schreiben Feldnamen gern
 // transliteriert, und daran soll eine Frage ans Team nicht scheitern.
 const FIELD = /^\s*(COMMIT|ZUSAMMENFASSUNG|OFFEN|KLÄRUNG|KLAERUNG|WEGE)\s*:\s*(.*)$/i;
@@ -75,14 +88,35 @@ export function parseImplementation(text: string): ParsedImplementation {
 
   const header: Record<string, string[]> = {};
   const files: { path: string; content: string[] }[] = [];
+  const edits: { path: string; search: string[]; replace: string[] }[] = [];
 
   let currentField: string | null = null;
   let currentFile: { path: string; content: string[] } | null = null;
+  let currentEdit: { path: string; search: string[]; replace: string[] } | null = null;
+  let editPart: "search" | "replace" | null = null;
 
   for (const line of lines) {
+    if (END_EDIT_MARKER.test(line)) {
+      currentEdit = null;
+      editPart = null;
+      continue;
+    }
+
     if (END_MARKER.test(line)) {
       currentFile = null;
+      currentEdit = null;
+      editPart = null;
       currentField = null;
+      continue;
+    }
+
+    const editMatch = line.match(EDIT_MARKER);
+    if (editMatch) {
+      currentEdit = { path: editMatch[1].trim(), search: [], replace: [] };
+      edits.push(currentEdit);
+      currentFile = null;
+      currentField = null;
+      editPart = null;
       continue;
     }
 
@@ -90,7 +124,20 @@ export function parseImplementation(text: string): ParsedImplementation {
     if (fileMatch) {
       currentFile = { path: fileMatch[1].trim(), content: [] };
       files.push(currentFile);
+      currentEdit = null;
+      editPart = null;
       currentField = null;
+      continue;
+    }
+
+    if (currentEdit) {
+      if (SEARCH_MARKER.test(line)) {
+        editPart = "search";
+      } else if (REPLACE_MARKER.test(line)) {
+        editPart = "replace";
+      } else if (editPart) {
+        currentEdit[editPart].push(line);
+      }
       continue;
     }
 
@@ -117,6 +164,14 @@ export function parseImplementation(text: string): ParsedImplementation {
     notes: fieldValue(header.OFFEN),
     clarification: fieldValue(header["KLÄRUNG"] ?? header.KLAERUNG),
     clarificationOptions: fieldValue(header.WEGE),
+    edits: edits
+      .map((edit) => ({
+        path: edit.path,
+        search: stripCodeFence(edit.search).join("\n"),
+        replace: stripCodeFence(edit.replace).join("\n"),
+      }))
+      // Leeres REPLACE ist erlaubt (gezieltes Entfernen), leeres SEARCH nicht.
+      .filter((edit) => edit.path.length > 0 && edit.search.length > 0),
     files: files
       .filter((file) => file.path.length > 0)
       .map((file) => ({ path: file.path, content: stripCodeFence(file.content).join("\n").trim() }))

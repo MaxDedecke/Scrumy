@@ -19,6 +19,7 @@ export class AgentRunError extends Error {
   constructor(
     message: string,
     readonly runId: string,
+    readonly code?: "TOKEN_LIMIT",
   ) {
     super(message);
     this.name = "AgentRunError";
@@ -123,7 +124,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       action: "step_failed",
       detail: `${headline} – abgebrochen: ${message.slice(0, 300)}`,
     });
-    throw new AgentRunError(message, run.id);
+    throw new AgentRunError(message, run.id, error instanceof LlmError ? error.code : undefined);
   }
 }
 

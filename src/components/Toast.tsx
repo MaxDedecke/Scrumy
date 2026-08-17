@@ -18,7 +18,7 @@ export type ToastOptions = {
   duration?: number;
   /**
    * Meldungen mit gleichem Schlüssel ersetzen einander, statt sich zu stapeln –
-   * für Schalter, die man schnell mehrfach drückt (z.B. Sidebar ein/aus).
+   * für Aktionen, die man schnell mehrfach auslösen kann.
    */
   key?: string;
 };

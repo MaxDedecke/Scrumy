@@ -283,6 +283,7 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   clarification_withdrawn: "Klärung zurückgezogen",
   clarification_forwarded: "An den Kunden weitergeleitet",
   ticket_deferred: "Ticket zurückgestellt",
+  ticket_split: "Ticket automatisch zerlegt",
   step_failed: "Schritt fehlgeschlagen",
   files_rejected: "Dateien abgelehnt",
   step_abandoned: "Abgebrochener Schritt aufgeräumt",

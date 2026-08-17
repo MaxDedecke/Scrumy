@@ -28,9 +28,9 @@ function clip(text: string, maxChars: number): string {
 
 export async function buildProjectContext(
   projectId: string,
-  options: { includeRepo?: boolean; includeBoard?: boolean } = {},
+  options: { includeRepo?: boolean; includeBoard?: boolean; compact?: boolean; focus?: string } = {},
 ): Promise<string> {
-  const { includeRepo = true, includeBoard = true } = options;
+  const { includeRepo = true, includeBoard = true, compact = false, focus = "" } = options;
 
   const project = await prisma.project.findUniqueOrThrow({
     where: { id: projectId },
@@ -52,7 +52,7 @@ export async function buildProjectContext(
   const releasedConcept = project.concept?.versions[0];
   parts.push(
     `# Freigegebenes Konzept${releasedConcept ? ` (Version ${releasedConcept.version})` : ""}\n` +
-      clip(releasedConcept?.content ?? project.concept?.content ?? "(kein Konzept hinterlegt)", 12000),
+      clip(releasedConcept?.content ?? project.concept?.content ?? "(kein Konzept hinterlegt)", compact ? 5000 : 12000),
   );
 
   // Das Beschlussregister: Was der Auftraggeber in Klaerungen entschieden hat,
@@ -62,22 +62,41 @@ export async function buildProjectContext(
     prisma.clarification.findMany({
       where: { projectId, status: "DECIDED" },
       orderBy: { decidedAt: "desc" },
-      take: 20,
+      take: compact ? 8 : 20,
       include: { ticket: { select: { title: true } } },
     }),
     prisma.clarification.findMany({
       where: { projectId, status: "OPEN" },
       orderBy: { createdAt: "asc" },
+      ...(compact ? { take: 10 } : {}),
       include: { ticket: { select: { title: true } } },
     }),
   ]);
 
-  const requirements = project.requirements
+  const focusTerms = focus.toLowerCase().split(/[^a-z0-9äöüß]+/).filter((term) => term.length >= 4);
+  const orderedRequirements = compact && focusTerms.length > 0
+    ? [...project.requirements].sort((a, b) => {
+        const score = (value: typeof a) => {
+          const text = `${value.title} ${value.description ?? ""}`.toLowerCase();
+          return focusTerms.reduce((sum, term) => sum + (text.includes(term) ? 1 : 0), 0);
+        };
+        return score(b) - score(a);
+      })
+    : project.requirements;
+
+  let requirementChars = 0;
+  const requirementBudget = compact ? 6000 : Number.POSITIVE_INFINITY;
+  const requirements = orderedRequirements
     .map((requirement, index) => {
       const head = `${index + 1}. [${PRIORITY_LABEL[requirement.priority]}] ${requirement.title}`;
-      const detail = requirement.description ? `\n   ${clip(requirement.description, 800)}` : "";
+      const detail = requirement.description ? `\n   ${clip(requirement.description, compact ? 500 : 800)}` : "";
       const file = requirement.fileName ? `\n   (Anhang: ${requirement.fileName})` : "";
       return head + detail + file;
+    })
+    .filter((entry) => {
+      if (requirementChars + entry.length > requirementBudget) return false;
+      requirementChars += entry.length;
+      return true;
     })
     .join("\n");
   parts.push(`# Freigegebene Anforderungen\n${requirements || "(keine erfasst)"}`);

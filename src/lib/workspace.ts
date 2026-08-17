@@ -298,16 +298,122 @@ export async function readRepoFile(dir: string, relativePath: string): Promise<s
   }
 }
 
+const SOURCE_EXTENSIONS = new Set([
+  ".c", ".cc", ".cpp", ".cs", ".css", ".go", ".graphql", ".html", ".java", ".js", ".json",
+  ".jsx", ".kt", ".md", ".php", ".prisma", ".py", ".rb", ".rs", ".scss", ".sh", ".sql", ".svelte",
+  ".swift", ".toml", ".ts", ".tsx", ".vue", ".xml", ".yaml", ".yml",
+]);
+
+const QUERY_STOP_WORDS = new Set([
+  "aber", "auch", "dass", "eine", "einem", "einen", "einer", "eines", "fuer", "implementieren", "mit",
+  "oder", "soll", "ticket", "umsetzen", "und", "von", "werden", "wird", "with", "the", "this", "that",
+]);
+
+function queryTerms(query: string): string[] {
+  return [...new Set(
+    query
+      .toLowerCase()
+      .replace(/[ä]/g, "ae")
+      .replace(/[ö]/g, "oe")
+      .replace(/[ü]/g, "ue")
+      .split(/[^a-z0-9]+/)
+      .filter((term) => term.length >= 3 && !QUERY_STOP_WORDS.has(term)),
+  )].slice(0, 40);
+}
+
+function scoreRepoPath(
+  file: string,
+  terms: string[],
+  explicitlyMentioned: Set<string>,
+  contentMatches: Set<string>,
+): number {
+  const normalized = file.toLowerCase();
+  let score = explicitlyMentioned.has(normalized) ? 1000 : 0;
+  if (contentMatches.has(normalized)) score += 30;
+  for (const term of terms) {
+    if (normalized === term) score += 40;
+    else if (normalized.includes(`/${term}.`) || normalized.startsWith(`${term}.`)) score += 20;
+    else if (normalized.includes(term)) score += 6;
+  }
+  if (/(^|\/)(package\.json|pyproject\.toml|cargo\.toml|go\.mod|composer\.json|readme\.md)$/i.test(file)) score += 2;
+  if (/(^|\/)(test|tests|spec|specs)\//i.test(file) || /\.(test|spec)\./i.test(file)) score += 1;
+  return score;
+}
+
+/**
+ * Waehlt Dateien lokal nach Ticket, Plan und explizit genannten Pfaden aus.
+ * Die Groesse des Repositories beeinflusst damit nur die billige Dateinamensuche,
+ * nicht mehr die Promptgroesse.
+ */
+export async function relevantRepoFiles(dir: string, query: string, maxFiles = 18): Promise<string[]> {
+  const files = (await listTrackedFiles(dir)).filter((file) => SOURCE_EXTENSIONS.has(path.extname(file).toLowerCase()));
+  const terms = queryTerms(query);
+  const explicitlyMentioned = new Set(
+    (query.match(/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.@-]+)+/g) ?? [])
+      .map((file) => file.replace(/^\.\//, "").toLowerCase()),
+  );
+  let contentMatches = new Set<string>();
+  if (terms.length > 0) {
+    try {
+      // `git grep` durchsucht auch sehr große Repositories, ohne deren Inhalt
+      // in Node oder in den Modellprompt zu laden. Einige prägnante Begriffe
+      // genügen; der anschließende Pfad-Score bringt die Treffer in Reihenfolge.
+      const raw = await git(dir, ["grep", "-I", "-l", "-i", ...terms.slice(0, 8).flatMap((term) => ["-e", term]), "--"]);
+      contentMatches = new Set(raw.split("\n").map((file) => file.trim().toLowerCase()).filter(Boolean));
+    } catch {
+      // Keine Treffer liefert bei `git grep` Exit-Code 1 und ist kein Fehler.
+    }
+  }
+
+  return files
+    .map((file, index) => ({ file, index, score: scoreRepoPath(file, terms, explicitlyMentioned, contentMatches) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, maxFiles)
+    .map((entry) => entry.file);
+}
+
+export async function readRelevantSourceContext(
+  dir: string,
+  query: string,
+  options: { maxChars?: number; maxFiles?: number } = {},
+): Promise<string> {
+  const maxChars = options.maxChars ?? 32_000;
+  const selected = await relevantRepoFiles(dir, query, options.maxFiles ?? 18);
+  if (selected.length === 0) return "(keine anhand des Tickets relevante Quelldatei gefunden)";
+
+  const chunks: string[] = [];
+  let used = 0;
+  for (const file of selected) {
+    const content = await readRepoFile(dir, file);
+    if (content === null) continue;
+    const header = `--- ${file} ---\n`;
+    if (used + header.length + content.length > maxChars) {
+      chunks.push(`--- ${file} (nicht geladen – Kontextbudget erreicht; bei Bedarf in einem kleineren Folgeticket bearbeiten) ---`);
+      continue;
+    }
+    used += header.length + content.length;
+    chunks.push(header + content);
+  }
+  return chunks.join("\n\n");
+}
+
 /// Kurzer Repo-Ueberblick fuer Agenten-Prompts: Dateibaum plus die letzten
 /// Commit-Betreffzeilen. Bewusst knapp – der Prompt soll das Modell
 /// orientieren, nicht das ganze Repo einbetten.
-export async function repoOverview(dir: string, maxFiles = 120): Promise<string> {
+export async function repoOverview(dir: string, maxFiles = 120, query?: string): Promise<string> {
   const [files, log] = await Promise.all([listTrackedFiles(dir), gitLog(dir, 10)]);
+
+  const shownFiles = query
+    ? await relevantRepoFiles(dir, query, maxFiles)
+    : files.slice(0, maxFiles);
 
   const fileList = files.length === 0
     ? "(noch leer)"
-    : files.slice(0, maxFiles).join("\n") +
-      (files.length > maxFiles ? `\n… und ${files.length - maxFiles} weitere Dateien` : "");
+    : shownFiles.join("\n") +
+      (files.length > shownFiles.length
+        ? `\n… ${files.length - shownFiles.length} weitere Dateien sind vorhanden, aber für diesen Schritt nicht vorausgewählt`
+        : "");
 
   const history = log.length === 0
     ? "(noch keine Commits)"

@@ -33,6 +33,29 @@ interface PlannedTicket {
   estimate?: unknown;
   role?: unknown;
   critical?: unknown;
+  acceptanceCriteria?: unknown;
+  likelyFiles?: unknown;
+  dependsOn?: unknown;
+}
+
+const MAX_FILES_PER_TICKET = 4;
+const MAX_CRITERIA_PER_TICKET = 4;
+
+function stringList(value: unknown, limit: number): string[] {
+  return Array.isArray(value)
+    ? value.map((entry) => String(entry).trim()).filter(Boolean).slice(0, limit)
+    : [];
+}
+
+function atomicityIssues(ticket: PlannedTicket): string[] {
+  const issues: string[] = [];
+  const estimate = Number(ticket.estimate);
+  const files = stringList(ticket.likelyFiles, 100);
+  const criteria = stringList(ticket.acceptanceCriteria, 100);
+  if (!Number.isFinite(estimate) || estimate < 1 || estimate > 3) issues.push("Schätzung muss 1–3 sein");
+  if (files.length === 0 || files.length > MAX_FILES_PER_TICKET) issues.push("1–4 voraussichtliche Dateien nötig");
+  if (criteria.length === 0 || criteria.length > MAX_CRITERIA_PER_TICKET) issues.push("1–4 Akzeptanzkriterien nötig");
+  return issues;
 }
 
 function asTicketType(value: unknown): TicketType {
@@ -112,20 +135,21 @@ const sprintPlanning: Task<"sprintPlanning"> = async (payload: SprintPlanningPay
     .join("\n");
 
   const context = await buildProjectContext(projectId);
-  const { text } = await runAgent({
-    agent,
-    projectId,
-    kind: "sprint_planning",
-    headline: `Plant Sprint ${nextNumber}`,
-    system: `${TEAM_GRUNDREGELN}
-
-Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwortest ausschließlich mit einem JSON-Objekt.`,
-    prompt: `${context}
+  const planningPrompt = `${context}
 
 # Bisherige Sprints
 ${history || "(noch keine)"}
 
-Plane Sprint ${nextNumber}. Wähle die nächsten Arbeitspakete so, dass sie aufeinander aufbauen und der Kunde nach dem Sprint etwas Sichtbares hat. Höchstens ${MAX_TICKETS_PER_SPRINT} Tickets, jedes in einem Arbeitsschritt umsetzbar.
+Plane Sprint ${nextNumber}. Wähle die nächsten Arbeitspakete so, dass sie aufeinander aufbauen und der Kunde nach dem Sprint etwas Sichtbares hat. Höchstens ${MAX_TICKETS_PER_SPRINT} Tickets.
+
+Ein Ticket ist ein EINZELNER, in einem Modellaufruf umsetzbarer und prüfbarer Schritt – kein Epic. Harte Grenzen je Ticket:
+- genau ein technisches Ergebnis und 1–4 konkrete Akzeptanzkriterien,
+- Schätzung 1–3,
+- voraussichtlich höchstens ${MAX_FILES_PER_TICKET} neu anzulegende oder zu ändernde Dateien,
+- Frontend, Backend, Datenmodell, Migration, Integration und Tests bei größerem Umfang in abhängige Tickets trennen,
+- Titel mit mehreren großen Komponenten (z.B. „Canvas und WebSocket-Anbindung") weiter zerlegen.
+
+Eine große Anwendung ist kein Grund für große Tickets: Plane nur den nächsten kleinen Schnitt; weitere Schnitte kommen in späteren Sprints.
 
 Wenn aus Konzept und Anforderungen nichts Wesentliches mehr offen ist, setze "done" auf true und lass "tickets" leer.
 
@@ -136,23 +160,54 @@ Antworte nur mit diesem JSON-Objekt:
   "doneReason": "nur wenn done=true: warum der Auftrag erfüllt ist",
   "tickets": [
     {
-      "title": "kurzer Titel",
-      "description": "was zu tun ist und woran man sieht, dass es fertig ist",
+      "title": "ein einzelnes, kleines Ergebnis",
+      "description": "was genau zu tun ist",
+      "acceptanceCriteria": ["konkret prüfbares Kriterium"],
+      "likelyFiles": ["relativer/pfad.ts"],
+      "dependsOn": ["Titel eines vorherigen Tickets in diesem Sprint"],
       "type": "FEATURE | BUG | INTEGRATION | CHORE",
       "priority": "LOW | MEDIUM | HIGH | URGENT",
-      "estimate": 3,
+      "estimate": 1,
       "role": "BACKEND | FRONTEND | QA | DEVOPS",
       "critical": false
     }
   ]
 }
 
-"critical" bedeutet: die Änderung braucht vor dem Ausliefern eine menschliche Freigabe (z.B. Datenmigration, Zahlungen, Löschvorgänge, Zugriffsrechte).`,
+"critical" bedeutet: die Änderung braucht vor dem Ausliefern eine menschliche Freigabe (z.B. Datenmigration, Zahlungen, Löschvorgänge, Zugriffsrechte).`;
+
+  const { text } = await runAgent({
+    agent,
+    projectId,
+    kind: "sprint_planning",
+    headline: `Plant Sprint ${nextNumber}`,
+    system: `${TEAM_GRUNDREGELN}
+
+Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwortest ausschließlich mit einem JSON-Objekt.`,
+    prompt: planningPrompt,
   });
 
-  const parsed = extractJsonObject(text);
+  let parsed = extractJsonObject(text);
+  let planned = Array.isArray(parsed.tickets) ? (parsed.tickets as PlannedTicket[]) : [];
+
+  const issues = planned.flatMap((ticket, index) =>
+    atomicityIssues(ticket).map((issue) => `Ticket ${index + 1} „${String(ticket.title ?? "")}": ${issue}`),
+  );
+  if (parsed.done !== true && issues.length > 0) {
+    const refined = await runAgent({
+      agent,
+      projectId,
+      kind: "sprint_refinement",
+      headline: `Zerlegt zu große Tickets für Sprint ${nextNumber}`,
+      maxTokens: 5000,
+      system: `${TEAM_GRUNDREGELN}\n\nDu bist ${agent.name}, Product Owner. Du zerlegst zu große Tickets. Du antwortest ausschließlich mit einem JSON-Objekt.`,
+      prompt: `${planningPrompt}\n\n# Erster Entwurf\n${JSON.stringify(parsed)}\n\n# Verstöße gegen die harten Ticketgrenzen\n${issues.join("\n")}\n\nSchreibe den gesamten Sprintentwurf neu. Zerlege die genannten Tickets, statt nur Schätzung oder Dateiliste künstlich zu kürzen. Maximal ${MAX_TICKETS_PER_SPRINT} Tickets; was nicht hineinpasst, bleibt für den nächsten Sprint.`,
+    });
+    parsed = extractJsonObject(refined.text);
+    planned = Array.isArray(parsed.tickets) ? (parsed.tickets as PlannedTicket[]) : [];
+  }
+
   const goal = String(parsed.goal ?? "").trim() || `Sprint ${nextNumber}`;
-  const planned = Array.isArray(parsed.tickets) ? (parsed.tickets as PlannedTicket[]) : [];
 
   if (parsed.done === true || planned.length === 0) {
     const detail = String(parsed.doneReason ?? "").trim() ||
@@ -211,6 +266,16 @@ Antworte nur mit diesem JSON-Objekt:
 
     const role = roleForTicket(typeof item.role === "string" ? item.role : null);
     const assignee = await agentForRole(projectId, role);
+    const criteria = stringList(item.acceptanceCriteria, MAX_CRITERIA_PER_TICKET);
+    const likelyFiles = stringList(item.likelyFiles, MAX_FILES_PER_TICKET);
+    const dependencies = stringList(item.dependsOn, MAX_TICKETS_PER_SPRINT);
+    const baseDescription = typeof item.description === "string" ? item.description.trim() : "";
+    const structuredDescription = [
+      baseDescription,
+      criteria.length > 0 ? `## Akzeptanzkriterien\n${criteria.map((entry) => `- ${entry}`).join("\n")}` : "",
+      likelyFiles.length > 0 ? `## Voraussichtliche Dateien\n${likelyFiles.map((entry) => `- ${entry}`).join("\n")}` : "",
+      dependencies.length > 0 ? `## Abhängigkeiten\n${dependencies.map((entry) => `- ${entry}`).join("\n")}` : "",
+    ].filter(Boolean).join("\n\n");
 
     createdTickets.push(
       await prisma.ticket.create({
@@ -218,10 +283,10 @@ Antworte nur mit diesem JSON-Objekt:
           projectId,
           sprintId: sprint.id,
           title,
-          description: typeof item.description === "string" ? item.description : null,
+          description: structuredDescription || null,
           type: asTicketType(item.type),
           priority: asPriority(item.priority),
-          estimate: Number.isFinite(Number(item.estimate)) ? Number(item.estimate) : null,
+          estimate: Number.isFinite(Number(item.estimate)) ? Math.min(3, Math.max(1, Number(item.estimate))) : 1,
           isCritical: item.critical === true,
           assigneeId: assignee?.id ?? null,
         },
