@@ -22,6 +22,7 @@ import ticketWork from "./ticketWork";
 import sprintReview from "./sprintReview";
 import teamInquiry from "./teamInquiry";
 import clarificationPrep from "./clarificationPrep";
+import clarificationTriage from "./clarificationTriage";
 
 /// Woran der Mensch im Buero erkennt, welcher Schritt gescheitert ist.
 const STEP_LABEL: Record<string, string> = {
@@ -135,8 +136,9 @@ export const taskList: TaskList = {
   ticketWork: withClarification("ticketWork", ticketWork) as Task,
   sprintReview: withClarification("sprintReview", sprintReview) as Task,
   // Bewusst ohne Umschlag: Eine unbeantwortete Rueckfrage steht sichtbar im
-  // Buero, und eine gescheiterte Entscheidungsvorlage darf keine zweite
-  // Klaerung ausloesen.
+  // Buero, und eine gescheiterte Entscheidungsvorlage oder -pruefung darf
+  // keine zweite Klaerung ausloesen.
   teamInquiry: teamInquiry as Task,
   clarificationPrep: clarificationPrep as Task,
+  clarificationTriage: clarificationTriage as Task,
 };

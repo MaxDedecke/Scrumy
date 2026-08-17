@@ -52,6 +52,15 @@ export interface ClarificationPrepPayload {
   reason: string;
 }
 
+/** Product Owner prüft eine vorbereitete Klärung: selbst entscheiden oder dem
+ *  Auftraggeber vorlegen (siehe worker/tasks/clarificationTriage.ts). */
+export interface ClarificationTriagePayload {
+  agentId: string;
+  projectId: string;
+  clarificationId: string;
+  reason: string;
+}
+
 declare global {
   // Von graphile-worker vorgegebener Mechanismus fuer typisierte Task-Payloads
   // (Declaration Merging), kein selbst gewaehltes Namespace-Pattern.
@@ -64,6 +73,7 @@ declare global {
       sprintReview: SprintReviewPayload;
       teamInquiry: TeamInquiryPayload;
       clarificationPrep: ClarificationPrepPayload;
+      clarificationTriage: ClarificationTriagePayload;
     }
   }
 }

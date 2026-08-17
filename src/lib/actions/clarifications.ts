@@ -12,14 +12,9 @@
 import { prisma } from "@/lib/prisma";
 import { fail, note, ok, type ActionResult } from "@/lib/actions/result";
 import { revalidateProject } from "@/lib/actions/revalidate";
-import { scheduleNextStep } from "@/lib/nextStep";
+import { resolveClarification } from "@/lib/clarificationDecision";
 import { OWN_OPTION_KEY, readOptions, type ClarificationEffect } from "@/lib/clarificationOptions";
-import { enqueueAgentJob } from "../../../worker/queue";
 import type { ConnectorProvider, SupportChannel } from "@/generated/prisma/client";
-
-/// Um wie viele Sprints das Budget waechst, wenn der Auftraggeber
-/// weiterarbeiten laesst (siehe worker/tasks/sprintPlanning.ts).
-const SPRINT_BUDGET_STEP = 6;
 
 function str(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
@@ -56,145 +51,14 @@ export async function decideClarification(formData: FormData): Promise<ActionRes
   const effect: ClarificationEffect = option?.effect ?? "resume";
   const projectId = clarification.projectId;
 
-  await prisma.$transaction([
-    prisma.clarification.update({
-      where: { id: clarificationId },
-      data: {
-        status: "DECIDED",
-        decision,
-        decidedBy: "Mensch",
-        decidedAt: new Date(),
-      },
-    }),
-    prisma.activityLogEntry.create({
-      data: {
-        projectId,
-        ticketId: clarification.ticketId,
-        actor: "Mensch",
-        action: "clarification_decided",
-        detail: `Beschluss zu „${clarification.question.slice(0, 160)}": ${decision.slice(0, 300)}`,
-      },
-    }),
-  ]);
-
-  // Der Beschluss gehoert auch dorthin, wo der naechste Agent ihn garantiert
-  // liest: in den Plan des Tickets, an dem er weiterarbeitet.
-  if (clarification.ticket) {
-    await prisma.ticket.update({
-      where: { id: clarification.ticket.id },
-      data: {
-        plan:
-          `${clarification.ticket.plan ?? ""}\n\n## Beschluss des Auftraggebers\n` +
-          `Frage: ${clarification.question}\nBeschluss: ${decision}`,
-      },
-    });
-  }
-
-  // Weitergeleitete Frage: Der Vorgang im Postfach ist damit erledigt.
-  if (clarification.forwardedRequestId) {
-    await prisma.supportRequest.update({
-      where: { id: clarification.forwardedRequestId },
-      data: { status: "CLOSED" },
-    });
-  }
-
-  const outcome = await applyEffect(effect, clarification.id, projectId);
+  const outcome = await resolveClarification({
+    clarificationId: clarification.id,
+    decision,
+    effect,
+    decidedBy: "Mensch",
+  });
   revalidateProject(projectId);
   return ok(`Beschluss festgehalten. ${outcome}`);
-}
-
-/// Was ein Beschluss in der Arbeit bewirkt. Ohne diesen Schritt waere eine
-/// Klaerung nur eine Notiz – das Team stuende weiter still.
-async function applyEffect(
-  effect: ClarificationEffect,
-  clarificationId: string,
-  projectId: string,
-): Promise<string> {
-  const clarification = await prisma.clarification.findUniqueOrThrow({ where: { id: clarificationId } });
-
-  if (effect === "stop") {
-    await prisma.$transaction([
-      prisma.project.update({ where: { id: projectId }, data: { autopilot: false } }),
-      prisma.activityLogEntry.create({
-        data: {
-          projectId,
-          actor: "Mensch",
-          action: "team_waiting",
-          detail: "Das Team arbeitet auf diesen Beschluss hin nicht weiter.",
-        },
-      }),
-    ]);
-    return `Das Team bleibt stehen – über „Nächsten Schritt anstoßen" geht es weiter.`;
-  }
-
-  if (effect === "skip" && clarification.ticketId) {
-    // Zurueck in den Backlog statt im Sprint zu verhungern: Das Ticket bleibt
-    // erhalten, aber der laufende Sprint kommt ohne es zum Abschluss.
-    const ticket = await prisma.ticket.update({
-      where: { id: clarification.ticketId },
-      data: { status: "BACKLOG", sprintId: null },
-    });
-    await prisma.activityLogEntry.create({
-      data: {
-        projectId,
-        ticketId: ticket.id,
-        actor: "Mensch",
-        action: "ticket_deferred",
-        detail: `„${ticket.title}" zurück in den Backlog gestellt.`,
-      },
-    });
-    const next = await scheduleNextStep(projectId);
-    return `„${ticket.title}" liegt wieder im Backlog. ${next}`;
-  }
-
-  if (effect === "budget") {
-    const project = await prisma.project.update({
-      where: { id: projectId },
-      data: { sprintBudget: { increment: SPRINT_BUDGET_STEP }, autopilot: true },
-    });
-    const next = await resume(clarification.resumeTask, clarification.resumePayload, projectId);
-    return `Budget steht jetzt bei ${project.sprintBudget} Sprints. ${next}`;
-  }
-
-  return resume(clarification.resumeTask, clarification.resumePayload, projectId);
-}
-
-/// Nimmt den eingefrorenen Schritt wieder auf. Ist keiner hinterlegt (z.B. bei
-/// einem durch Neustart verlorenen Job), bestimmt Scrumy aus dem Board, was
-/// ansteht – das Team soll nie am fehlenden Payload scheitern.
-async function resume(
-  task: string | null,
-  payload: unknown,
-  projectId: string,
-): Promise<string> {
-  const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
-  if (project.status !== "ACTIVE") {
-    return `Das Projekt ist nicht aktiv – über „Arbeit fortsetzen" nimmt das Team sie wieder auf.`;
-  }
-
-  if (task && payload && typeof payload === "object") {
-    const agentId = (payload as { agentId?: string }).agentId;
-    if (agentId) {
-      const agent = await prisma.agent.findUnique({ where: { id: agentId } });
-      if (agent) {
-        // Der eingefrorene Payload stammt aus derselben Queue, in die er
-        // zurueckgeht – die Typen sind dieselben, nur ueber die Datenbank
-        // gereist und dadurch fuer TypeScript wieder unbekannt.
-        await enqueueAgentJob(
-          task as keyof GraphileWorker.Tasks,
-          payload as GraphileWorker.Tasks[keyof GraphileWorker.Tasks],
-        );
-        // Blockiert-Anzeige aufheben: Der Kollege hat wieder etwas zu tun.
-        await prisma.agent.updateMany({
-          where: { id: agent.id, status: "BLOCKED" },
-          data: { status: "IDLE" },
-        });
-        return `${agent.name} nimmt die Arbeit wieder auf.`;
-      }
-    }
-  }
-
-  return scheduleNextStep(projectId);
 }
 
 /// Klaerung zuruecknehmen – wenn sich die Frage von selbst erledigt hat.

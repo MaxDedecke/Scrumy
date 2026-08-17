@@ -14,8 +14,10 @@
 import type { Task } from "graphile-worker";
 import { prisma } from "@/lib/prisma";
 import { extractJsonObject } from "@/lib/llm";
+import { agentForRole } from "@/lib/team";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
+import { enqueueAgentJob } from "../queue";
 import {
   CLARIFICATION_EFFECTS,
   readOptions,
@@ -107,6 +109,20 @@ Antworte nur mit diesem JSON-Objekt:
       action: "clarification_prepared",
       detail: `Entscheidungsvorlage für „${clarification.question.slice(0, 160)}" (${options.length} Wege)`,
     });
+
+    // Bevor die Klärung dem Auftraggeber vorgelegt wird, prüft der Product
+    // Owner, ob sie nicht schon jetzt entschieden werden kann (siehe
+    // clarificationTriage). Ohne besetzte Rolle bleibt es beim bisherigen Weg:
+    // Die Agenda steht, der Mensch entscheidet.
+    const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
+    if (productOwner) {
+      await enqueueAgentJob("clarificationTriage", {
+        agentId: productOwner.id,
+        projectId,
+        clarificationId,
+        reason: "Klärung vor Vorlage geprüft",
+      });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     helpers.logger.error(`Klärung ${clarificationId} konnte nicht vorbereitet werden: ${message}`);

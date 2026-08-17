@@ -221,6 +221,7 @@ export const RUN_KIND_LABEL: Record<string, string> = {
   sprint_review: "Sprint-Review",
   inquiry: "Rückfrage beantwortet",
   clarification_prep: "Klärung vorbereitet",
+  clarification_triage: "Klärung geprüft",
 };
 
 // Wie weit eine offene Klaerung die Arbeit anhaelt.
@@ -295,6 +296,7 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   clarification_prepared: "Entscheidungsvorlage erstellt",
   clarification_prep_failed: "Entscheidungsvorlage fehlgeschlagen",
   clarification_decided: "Beschluss gefasst",
+  clarification_escalated: "Als zu heikel eingestuft",
   clarification_withdrawn: "Klärung zurückgezogen",
   clarification_forwarded: "An den Kunden weitergeleitet",
   ticket_deferred: "Ticket zurückgestellt",
