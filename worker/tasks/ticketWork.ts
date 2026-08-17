@@ -313,11 +313,13 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
   }
 
   const implementer = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } });
-  // Dateien, deren EDIT-Block beim letzten Anlauf abgelehnt wurde. Ohne diese
-  // Erinnerung sieht ein erneuter Anlauf denselben Plan und denselben
-  // Bestandscode und schreibt mit hoher Wahrscheinlichkeit wieder einen
-  // SEARCH-Ausschnitt, der nicht exakt passt.
-  const previouslyRejectedPaths = attempt > 1 ? rejectedPathsFromResult(ticket.result) : new Set<string>();
+  // Dateien, deren EDIT-Block beim letzten Anlauf abgelehnt wurde. Steht im
+  // ticket.result, sobald ein Anlauf Dateien abgelehnt hat – unabhängig vom
+  // attempt-Zähler, der bei einer menschlichen Zurückweisung wieder bei 1
+  // anfängt. Ohne diese Erinnerung sieht ein erneuter Anlauf denselben Plan
+  // und denselben Bestandscode und schreibt mit hoher Wahrscheinlichkeit
+  // wieder einen SEARCH-Ausschnitt, der nicht exakt passt.
+  const previouslyRejectedPaths = rejectedPathsFromResult(ticket.result);
   const ticketHead =
     `## Ticket\n${ticket.title}\nTyp: ${TICKET_TYPE_LABEL[ticket.type]} · Priorität: ${PRIORITY_LABEL[ticket.priority]}` +
     `${ticket.isCritical ? " · kritisch (braucht menschliche Freigabe)" : ""}\n\n${clipForPrompt(ticket.description ?? "", 6000)}`;
@@ -458,6 +460,10 @@ vollständiger Inhalt der neuen Datei
   ];
   const summary = result.summary || "Ohne Zusammenfassung.";
   const notes = result.notes;
+  // Auch wenn ein Teil der Änderungen committet wird, muss der Rest, den QA
+  // vielleicht vermisst, im Ergebnis stehen bleiben – sonst hat der nächste
+  // Anlauf keine Ahnung, welche Datei am Ende doch nicht angefasst wurde.
+  const rejectedSuffix = rejected.length > 0 ? `\n\n${formatRejectedFiles(rejected)}` : "";
   // Eine Frage an den Auftraggeber muss eine Frage sein. Ein Rest aus einem
   // Formatfehler des Modells darf kein Ticket blockieren, bis ihn jemand
   // wegklickt – deshalb die Mindestlaenge.
@@ -533,7 +539,7 @@ vollständiger Inhalt der neuen Datei
 
   await prisma.ticket.update({
     where: { id: ticketId },
-    data: { status: "IN_REVIEW", result: summary },
+    data: { status: "IN_REVIEW", result: `${summary}${rejectedSuffix}` },
   });
 
   await logActivity({
@@ -635,7 +641,7 @@ Antworte nur mit diesem JSON-Objekt:
   if (verdict === "needs_decision") {
     await prisma.ticket.update({
       where: { id: ticketId },
-      data: { result: `${summary}\n\nQA (${reviewer.name}): ${comment}` },
+      data: { result: `${summary}\n\nQA (${reviewer.name}): ${comment}${rejectedSuffix}` },
     });
     await openClarification({
       projectId,
@@ -661,7 +667,7 @@ Antworte nur mit diesem JSON-Objekt:
       where: { id: ticketId },
       data: {
         status: "IN_PROGRESS",
-        result: `${summary}\n\nQA (${reviewer.name}): ${comment}`,
+        result: `${summary}\n\nQA (${reviewer.name}): ${comment}${rejectedSuffix}`,
         plan: `${plan}\n\n## Nacharbeit nach QA-Review (${reviewer.name})\n${comment}`,
       },
     });
@@ -678,7 +684,7 @@ Antworte nur mit diesem JSON-Objekt:
   if (verdict === "rework") {
     await prisma.ticket.update({
       where: { id: ticketId },
-      data: { result: `${summary}\n\nQA (${reviewer.name}): ${comment}` },
+      data: { result: `${summary}\n\nQA (${reviewer.name}): ${comment}${rejectedSuffix}` },
     });
     await requestHumanReview(projectId, ticketId, ticket.title, `QA sieht nach ${attempt} Anläufen weiter Mängel: ${comment}`);
   } else if (ticket.isCritical || risk === "high") {
