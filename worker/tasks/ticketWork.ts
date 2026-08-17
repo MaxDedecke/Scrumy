@@ -485,9 +485,6 @@ vollständiger Inhalt der neuen Datei
   }
 
   if (files.length === 0) {
-    // Nichts geliefert heisst: Es gibt nichts freizugeben. Frueher landete das
-    // trotzdem als Freigabe-Anfrage beim Menschen – eine Freigabe fuer eine
-    // leere Aenderung. Jetzt ist es die Frage, die es tatsaechlich ist.
     await prisma.ticket.update({
       where: { id: ticketId },
       data: {
@@ -496,6 +493,37 @@ vollständiger Inhalt der neuen Datei
           (rejected.length > 0 ? `\n\n${formatRejectedFiles(rejected)}` : ""),
       },
     });
+
+    // Nichts uebernommen ist meistens ein handwerklicher Fehler (SEARCH passt
+    // nicht, DATEI-Block fuer eine bestehende Datei) – keine Entscheidung, die
+    // ein Mensch treffen muss. Solange der Agent nichts wirklich fragt, bekommt
+    // er dieselbe Chance auf einen automatischen zweiten Anlauf wie nach einem
+    // QA-Rework – mit der Erinnerung an die abgelehnten Pfade aus dem Ergebnis
+    // oben. Erst wenn das auch scheitert, lohnt sich die Frage an den Menschen.
+    if (!raisedQuestion && rejected.length > 0 && attempt < MAX_ATTEMPTS) {
+      await logActivity({
+        projectId,
+        ticketId,
+        actor: implementer.name,
+        agentId: implementer.id,
+        action: "ticket_reworked",
+        detail: `„${ticket.title}": keine Änderung übernommen (${rejected.map((file) => file.path).join(", ")}) – automatischer zweiter Anlauf`,
+      });
+      await enqueueAgentJob("ticketWork", {
+        agentId: implementer.id,
+        projectId,
+        ticketId,
+        reason: `Erneuter Anlauf, keine Datei übernommen: ${rejected.map((file) => `${file.path} (${file.reason})`).join("; ")}`.slice(0, 300),
+        attempt: attempt + 1,
+      });
+      if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+      return;
+    }
+
+    // Frueher landete das trotzdem als Freigabe-Anfrage beim Menschen – eine
+    // Freigabe fuer eine leere Aenderung. Jetzt ist es die Frage, die es
+    // tatsaechlich ist: entweder hat der Agent selbst gefragt, oder auch der
+    // automatische Anlauf hat keine brauchbare Aenderung zustande gebracht.
     await logActivity({
       projectId,
       ticketId,
