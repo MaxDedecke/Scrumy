@@ -248,6 +248,60 @@ export function ArchiveIcon({ className }: { className?: string }) {
   );
 }
 
+/// Listenansicht – drei Zeilen mit Aufzählungspunkten.
+export function ListIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8.25 6h12M8.25 12h12M8.25 18h12M3.75 6h.008v.008H3.75V6Zm0 6h.008v.008H3.75V12Zm0 6h.008v.008H3.75V18Z"
+      />
+    </svg>
+  );
+}
+
+/// Visuelle Ansicht – vier Kacheln, steht hier für „Bürogrundriss".
+export function GridIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z"
+      />
+    </svg>
+  );
+}
+
+/// Strichmännchen für die Büroansicht. `filled` macht Kopf und Rumpf massiv
+/// (arbeitet), sonst bleibt nur die grüne Kontur (passiv) – Zustand hängt
+/// nicht an der Farbe allein.
+export function PersonIcon({ className, filled = false }: { className?: string; filled?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <circle cx="12" cy="7.75" r="3.25" fill={filled ? "currentColor" : "none"} />
+      <path
+        fill={filled ? "currentColor" : "none"}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M5.25 20.25a6.75 6.75 0 0 1 13.5 0"
+      />
+    </svg>
+  );
+}
+
+/// PC-Monitor für die Büroansicht. Nur der Bildschirm trägt den Zustand
+/// (`filled`), der Fuß bleibt immer eine dünne Kontur.
+export function DesktopIcon({ className, filled = false }: { className?: string; filled?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <rect x="3.75" y="4.5" width="16.5" height="10.5" rx="1.25" fill={filled ? "currentColor" : "none"} />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 19.5h4.5M12 15v4.5" />
+    </svg>
+  );
+}
+
 export function SettingsIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>

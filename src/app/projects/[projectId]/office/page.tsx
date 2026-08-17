@@ -3,20 +3,17 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import {
   ACTIVITY_ACTION_LABEL,
-  AGENT_ROLE_LABEL,
-  AGENT_STATUS_LABEL,
-  AGENT_STATUS_PILL,
   CLARIFICATION_SCOPE_LABEL,
   CLARIFICATION_SCOPE_PILL,
   CLARIFICATION_TRIGGER_LABEL,
   INQUIRY_STATUS_LABEL,
   PRIORITY_LABEL,
-  RUN_KIND_LABEL,
   SPRINT_STATUS_LABEL,
   SPRINT_STATUS_PILL,
   TICKET_STATUS_LABEL,
 } from "@/lib/labels";
 import { ActionForm } from "@/components/ActionForm";
+import { AgentWorkspacePanel } from "@/components/AgentWorkspacePanel";
 import { ClarificationChoice } from "@/components/ClarificationChoice";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { IconSubmit } from "@/components/IconSubmit";
@@ -108,6 +105,19 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
   // Nur eine projektweite Klärung hält die ganze Mannschaft an; ein blockiertes
   // Ticket lässt den Sprint weiterlaufen.
   const blockingClarification = clarifications.find((entry) => entry.scope === "PROJECT");
+
+  const agentEntries = project.agents.map(({ agent }) => {
+    const running = runningByAgent.get(agent.id);
+    const last = lastRunByAgent.get(agent.id);
+    return {
+      id: agent.id,
+      name: agent.name,
+      role: agent.role,
+      status: agent.status,
+      running: running ? { headline: running.headline, kind: running.kind, startedAt: running.startedAt } : null,
+      last: last ? { headline: last.headline, startedAt: last.startedAt } : null,
+    };
+  });
 
   const started = project.status === "ACTIVE" || project.status === "PAUSED";
   const doneTickets = sprint?.tickets.filter((ticket) => ticket.status === "DONE").length ?? 0;
@@ -324,10 +334,8 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
           )}
         </Panel>
 
-        <Panel
-          title="Wer gerade woran arbeitet"
-          count={project.agents.length}
-          padded={false}
+        <AgentWorkspacePanel
+          agents={agentEntries}
           footer={
             <ActionForm action={askTeam} className="flex items-end gap-2">
               <input type="hidden" name="projectId" value={project.id} />
@@ -344,45 +352,6 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
             </ActionForm>
           }
         >
-          {project.agents.length === 0 ? (
-            <PanelEmpty>Diesem Projekt ist noch niemand zugeordnet.</PanelEmpty>
-          ) : (
-            <ul className="divide-y divide-hairline">
-              {project.agents.map(({ agent }) => {
-                const running = runningByAgent.get(agent.id);
-                const last = lastRunByAgent.get(agent.id);
-                return (
-                  <li key={agent.id} className="px-4 py-2.5">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="truncate text-sm font-medium text-ink">{agent.name}</span>
-                      <span className={`${AGENT_STATUS_PILL[agent.status]} pill-dot shrink-0`}>
-                        {AGENT_STATUS_LABEL[agent.status]}
-                      </span>
-                    </div>
-                    <p className="text-xs text-ink-3">{AGENT_ROLE_LABEL[agent.role]}</p>
-                    <p className="mt-1 text-sm text-ink-2">
-                      {running ? (
-                        running.headline
-                      ) : last ? (
-                        <span className="text-ink-3">
-                          zuletzt: {last.headline}{" "}
-                          <span className="text-ink-4">· {formatTime(last.startedAt)}</span>
-                        </span>
-                      ) : (
-                        <span className="text-ink-4">noch nichts getan</span>
-                      )}
-                    </p>
-                    {running && (
-                      <p className="mt-0.5 text-xs text-ink-4">
-                        {RUN_KIND_LABEL[running.kind] ?? running.kind} · seit {formatTime(running.startedAt)}
-                      </p>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-
           {inquiries.length > 0 && (
             <div className="border-t border-hairline">
               <h3 className="section-title px-4 pb-1 pt-3">Rückfragen</h3>
@@ -406,7 +375,7 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
               </ul>
             </div>
           )}
-        </Panel>
+        </AgentWorkspacePanel>
 
         <Panel
           title="Aktueller Sprint"

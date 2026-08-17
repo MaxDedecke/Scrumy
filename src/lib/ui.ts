@@ -6,13 +6,15 @@
 // Textzeile auf jeder Seite exakt an derselben Stelle.
 export const pageClass = "mx-auto w-full max-w-6xl flex-1 px-8 py-9";
 
-// Projektseiten: derselbe Container, aber ab lg exakt fensterhoch. Die Seite
-// selbst wächst dann nicht mehr mit dem Inhalt – gescrollt wird innerhalb der
-// Panels (siehe src/components/Panel.tsx). Unter lg bleibt es beim normalen
-// Untereinander mit Seiten-Scroll, weil auf einem schmalen Schirm nebeneinander
-// nichts zu gewinnen ist.
+// Projektseiten: breiter als der normale Seiten-Container, weil die Panels
+// hier nebeneinander stehen (siehe <PanelGrid>) und auf großen Schirmen sonst
+// links und rechts viel Fläche ungenutzt bliebe. Ab lg exakt fensterhoch. Die
+// Seite selbst wächst dann nicht mehr mit dem Inhalt – gescrollt wird
+// innerhalb der Panels (siehe src/components/Panel.tsx). Unter lg bleibt es
+// beim normalen Untereinander mit Seiten-Scroll, weil auf einem schmalen
+// Schirm nebeneinander nichts zu gewinnen ist.
 export const pageFixedClass =
-  "mx-auto flex w-full max-w-6xl flex-1 flex-col px-8 py-7 lg:h-full lg:min-h-0";
+  "mx-auto flex w-full max-w-[110rem] flex-1 flex-col px-8 py-7 lg:h-full lg:min-h-0";
 
 export const inputClass =
   "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-sm text-ink transition-colors placeholder:text-ink-4 focus:border-accent-border focus:outline-none";
