@@ -11,6 +11,7 @@ import { fail, note, ok, type ActionResult } from "@/lib/actions/result";
 import { agentForRole, ensureProjectTeam } from "@/lib/team";
 import { scheduleNextStep } from "@/lib/nextStep";
 import { revalidateProject } from "@/lib/actions/revalidate";
+import { resolveReview } from "@/lib/reviewDecision";
 import { enqueueAgentJob } from "../../../worker/queue";
 
 function str(formData: FormData, key: string): string | null {
@@ -193,64 +194,8 @@ export async function decideReview(formData: FormData): Promise<ActionResult> {
   if (!review) return fail("Freigabe nicht gefunden.");
   if (review.decision !== "PENDING") return note("Diese Freigabe ist bereits entschieden.");
 
-  const ticket = review.ticket;
-  const projectId = ticket.projectId;
-
-  await prisma.$transaction([
-    prisma.reviewApproval.update({
-      where: { id: reviewId },
-      data: {
-        decision,
-        comment: comment ?? review.comment,
-        decidedAt: new Date(),
-        reviewerName: "Mensch",
-      },
-    }),
-    prisma.ticket.update({
-      where: { id: ticket.id },
-      data: { status: decision === "APPROVED" ? "DONE" : "IN_PROGRESS" },
-    }),
-    prisma.activityLogEntry.create({
-      data: {
-        projectId,
-        ticketId: ticket.id,
-        actor: "Mensch",
-        action: decision === "APPROVED" ? "human_approved" : "human_rejected",
-        detail:
-          `„${ticket.title}" ${decision === "APPROVED" ? "freigegeben" : "zur Nachbesserung zurückgegeben"}` +
-          (comment ? `: ${comment}` : ""),
-      },
-    }),
-  ]);
-
-  // Zurueckgewiesen heisst: derselbe Kollege macht weiter, mit der Begruendung
-  // des Chefs als neuer Vorgabe.
-  if (decision === "REJECTED") {
-    const assignee = ticket.assigneeId
-      ? await prisma.agent.findUnique({ where: { id: ticket.assigneeId } })
-      : await agentForRole(projectId, "BACKEND");
-    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
-
-    if (assignee && project.status === "ACTIVE") {
-      await prisma.ticket.update({
-        where: { id: ticket.id },
-        data: {
-          plan: `${ticket.plan ?? ""}\n\n## Rückmeldung des Auftraggebers\n${comment ?? "(ohne Begründung)"}`,
-        },
-      });
-      await enqueueAgentJob("ticketWork", {
-        agentId: assignee.id,
-        projectId,
-        ticketId: ticket.id,
-        reason: `Nacharbeit nach Nachbesserung durch den Auftraggeber: ${(comment ?? "").slice(0, 200)}`,
-      });
-    }
-  }
-
+  const projectId = review.ticket.projectId;
+  const outcome = await resolveReview({ reviewId, decision, comment, decidedBy: "Mensch" });
   revalidateProject(projectId);
-  return ok(
-    decision === "APPROVED"
-      ? `„${ticket.title}" freigegeben.`
-      : `„${ticket.title}" zur Nachbesserung zurückgegeben – das Team arbeitet nach.`,
-  );
+  return ok(outcome);
 }

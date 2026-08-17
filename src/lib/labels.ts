@@ -222,6 +222,7 @@ export const RUN_KIND_LABEL: Record<string, string> = {
   inquiry: "Rückfrage beantwortet",
   clarification_prep: "Klärung vorbereitet",
   clarification_triage: "Klärung geprüft",
+  review_triage: "Freigabe geprüft",
 };
 
 // Wie weit eine offene Klaerung die Arbeit anhaelt.
@@ -288,8 +289,12 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   review_approved: "QA freigegeben",
   review_rework: "QA: Nacharbeit",
   human_review_requested: "Freigabe angefragt",
-  human_approved: "Vom Menschen freigegeben",
+  // Text bewusst ohne "vom Menschen": Seit der Product Owner angefragte
+  // Freigaben selbst entscheiden darf (siehe reviewTriage), steht neben dem
+  // Label immer schon der tatsächliche Entscheider (`entry.actor`).
+  human_approved: "Freigegeben",
   human_rejected: "Nachbesserung angefordert",
+  review_escalated: "Als zu heikel eingestuft",
   inquiry_answered: "Rückfrage beantwortet",
   clarification_opened: "Klärung einberufen",
   clarification_raised: "Agent bittet um Entscheidung",

@@ -714,7 +714,13 @@ Antworte nur mit diesem JSON-Objekt:
       where: { id: ticketId },
       data: { result: `${summary}\n\nQA (${reviewer.name}): ${comment}${rejectedSuffix}` },
     });
-    await requestHumanReview(projectId, ticketId, ticket.title, `QA sieht nach ${attempt} Anläufen weiter Mängel: ${comment}`);
+    await requestHumanReview(
+      projectId,
+      ticketId,
+      ticket.title,
+      `QA sieht nach ${attempt} Anläufen weiter Mängel: ${comment}`,
+      ticket.isCritical,
+    );
   } else if (ticket.isCritical || risk === "high") {
     await requestHumanReview(
       projectId,
@@ -723,6 +729,7 @@ Antworte nur mit diesem JSON-Objekt:
       ticket.isCritical
         ? `Kritisches Ticket – QA hat freigegeben: ${comment}`
         : `QA stuft das Risiko als hoch ein: ${comment}`,
+      ticket.isCritical,
     );
   } else {
     await prisma.ticket.update({ where: { id: ticketId }, data: { status: "DONE" } });
@@ -788,13 +795,26 @@ function readVerdict(text: string): {
 /// Ticket bleibt in Review und wartet auf den Menschen. Die `ReviewApproval`
 /// ist der Punkt, an dem das Team ausdruecklich abgibt – sichtbar auf dem Board
 /// und im Protokoll.
-async function requestHumanReview(projectId: string, ticketId: string, title: string, why: string) {
+///
+/// Bevor sie im Büro landet, prüft der Product Owner die Freigabe (siehe
+/// worker/tasks/reviewTriage.ts) – ausser bei als kritisch markierten Tickets:
+/// Die hat der Product Owner selbst schon bei der Sprint-Planung so
+/// eingestuft (`isCritical`, „erzwingt menschliches Review vor Deploy"), eine
+/// erneute Pruefung durch dieselbe Rolle wuerde diesen Beschluss nur
+/// unterlaufen.
+async function requestHumanReview(
+  projectId: string,
+  ticketId: string,
+  title: string,
+  why: string,
+  isCritical: boolean,
+) {
   const existing = await prisma.reviewApproval.findFirst({ where: { ticketId, decision: "PENDING" } });
-  if (!existing) {
-    await prisma.reviewApproval.create({
+  const review =
+    existing ??
+    (await prisma.reviewApproval.create({
       data: { ticketId, reviewerName: "Mensch", comment: why.slice(0, 2000) },
-    });
-  }
+    }));
   await prisma.ticket.update({ where: { id: ticketId }, data: { status: "IN_REVIEW" } });
   await logActivity({
     projectId,
@@ -803,6 +823,18 @@ async function requestHumanReview(projectId: string, ticketId: string, title: st
     action: "human_review_requested",
     detail: `„${title}" wartet auf eine menschliche Freigabe: ${why.slice(0, 300)}`,
   });
+
+  if (!existing && !isCritical) {
+    const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
+    if (productOwner) {
+      await enqueueAgentJob("reviewTriage", {
+        agentId: productOwner.id,
+        projectId,
+        reviewId: review.id,
+        reason: "Freigabe vor Vorlage geprüft",
+      });
+    }
+  }
 }
 
 export default ticketWork;

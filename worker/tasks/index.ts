@@ -23,6 +23,7 @@ import sprintReview from "./sprintReview";
 import teamInquiry from "./teamInquiry";
 import clarificationPrep from "./clarificationPrep";
 import clarificationTriage from "./clarificationTriage";
+import reviewTriage from "./reviewTriage";
 
 /// Woran der Mensch im Buero erkennt, welcher Schritt gescheitert ist.
 const STEP_LABEL: Record<string, string> = {
@@ -141,4 +142,5 @@ export const taskList: TaskList = {
   teamInquiry: teamInquiry as Task,
   clarificationPrep: clarificationPrep as Task,
   clarificationTriage: clarificationTriage as Task,
+  reviewTriage: reviewTriage as Task,
 };

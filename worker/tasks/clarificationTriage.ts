@@ -80,21 +80,10 @@ Antworte nur mit diesem JSON-Objekt:
     );
 
     if (!critical && chosen) {
+      // `resolveClarification` haelt den Beschluss bereits im Protokoll fest
+      // (Frage + gewaehlter Weg) – ein zweiter Eintrag waere nur Wiederholung.
       const decision = `${chosen.label}${reasoning ? ` – ${reasoning}` : ""}`;
-      const outcome = await resolveClarification({
-        clarificationId,
-        decision,
-        effect: chosen.effect,
-        decidedBy: role,
-      });
-      await logActivity({
-        projectId,
-        ticketId: clarification.ticketId ?? undefined,
-        agentId: agent.id,
-        actor: agent.name,
-        action: "clarification_decided",
-        detail: `Selbst entschieden – mit überschaubarem Aufwand wieder umzubauen: ${decision.slice(0, 240)}. ${outcome}`,
-      });
+      await resolveClarification({ clarificationId, decision, effect: chosen.effect, decidedBy: role });
       return;
     }
 

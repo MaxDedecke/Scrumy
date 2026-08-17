@@ -61,6 +61,16 @@ export interface ClarificationTriagePayload {
   reason: string;
 }
 
+/** Product Owner prüft eine angefragte Freigabe: selbst freigeben/zur
+ *  Nachbesserung zurückschicken oder dem Auftraggeber vorlegen (siehe
+ *  worker/tasks/reviewTriage.ts). */
+export interface ReviewTriagePayload {
+  agentId: string;
+  projectId: string;
+  reviewId: string;
+  reason: string;
+}
+
 declare global {
   // Von graphile-worker vorgegebener Mechanismus fuer typisierte Task-Payloads
   // (Declaration Merging), kein selbst gewaehltes Namespace-Pattern.
@@ -74,6 +84,7 @@ declare global {
       teamInquiry: TeamInquiryPayload;
       clarificationPrep: ClarificationPrepPayload;
       clarificationTriage: ClarificationTriagePayload;
+      reviewTriage: ReviewTriagePayload;
     }
   }
 }
