@@ -320,6 +320,7 @@ export async function startLiveStack(projectId: string, trigger: LiveTrigger = "
 /// Loeschen eines Projekts (kein DB-Update noetig, die Zeile ist gleich weg).
 export async function stopLiveStack(projectId: string, persist = true): Promise<ActionResult> {
   await removeStackByLabel(liveProjectName(projectId));
+  removeLiveLog(projectId);
 
   if (persist) {
     await prisma.project.update({
@@ -335,6 +336,18 @@ export async function stopLiveStack(projectId: string, persist = true): Promise<
 /// DB-Schreibvorgang (analog killPreviewIfRunning).
 export async function killLiveStackIfRunning(projectId: string): Promise<void> {
   await removeStackByLabel(liveProjectName(projectId)).catch(() => {});
+  removeLiveLog(projectId);
+}
+
+/// Kein Relikt zurücklassen: die Log-Datei diente nur der Anzeige während
+/// des Starts (siehe readLiveLog) – nach dem Beenden hat sie keinen Zweck
+/// mehr. Best effort, wie der Rest der Log-Handhabung hier.
+function removeLiveLog(projectId: string): void {
+  try {
+    unlinkSync(liveLogPath(projectId));
+  } catch {
+    // Keine Datei da – nichts zu tun.
+  }
 }
 
 /// Sicherheitsnetz gegen verwaiste Live-Stacks – Gegenstueck zu
