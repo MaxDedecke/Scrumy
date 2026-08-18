@@ -14,6 +14,7 @@ import type {
   PreviewStatus,
   ProjectStatus,
   RequirementSource,
+  ReviewDecision,
   SupportChannel,
   SupportRequestStatus,
   TicketStatus,
@@ -54,6 +55,18 @@ export const PRIORITY_PILL: Record<Priority, string> = {
   MEDIUM: "pill pill-info",
   HIGH: "pill pill-warning",
   URGENT: "pill pill-critical",
+};
+
+export const REVIEW_DECISION_LABEL: Record<ReviewDecision, string> = {
+  PENDING: "Ausstehend",
+  APPROVED: "Freigegeben",
+  REJECTED: "Nachbesserung",
+};
+
+export const REVIEW_DECISION_PILL: Record<ReviewDecision, string> = {
+  PENDING: "pill pill-warning pill-dot",
+  APPROVED: "pill pill-good",
+  REJECTED: "pill pill-critical",
 };
 
 export const AGENT_STATUS_LABEL: Record<AgentStatus, string> = {

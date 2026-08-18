@@ -5,15 +5,12 @@ import {
   AGENT_ROLE_LABEL,
   AGENT_STATUS_LABEL,
   AGENT_STATUS_PILL,
-  PRIORITY_LABEL,
-  PRIORITY_PILL,
   SPRINT_STATUS_LABEL,
-  TICKET_STATUS_LABEL,
   TICKET_STATUS_ORDER,
-  TICKET_TYPE_LABEL,
 } from "@/lib/labels";
 import { Panel, PanelEmpty, PanelGrid, PanelStrip } from "@/components/Panel";
 import { WarningIcon } from "@/components/icons";
+import { TicketBoardPanel } from "@/components/TicketBoardPanel";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
 export const dynamic = "force-dynamic";
@@ -26,7 +23,10 @@ export default async function ProjectBoardPage({
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
-      tickets: { orderBy: { updatedAt: "desc" }, include: { reviews: true } },
+      tickets: {
+        orderBy: { updatedAt: "desc" },
+        include: { reviews: true, assignee: { select: { id: true, name: true } }, sprint: { select: { number: true } } },
+      },
       agents: { include: { agent: true, connector: true } },
     },
   });
@@ -139,11 +139,8 @@ export default async function ProjectBoardPage({
       </PanelStrip>
 
       <PanelGrid className="lg:grid-cols-2 lg:grid-rows-[minmax(0,1.35fr)_minmax(0,1fr)]">
-        <Panel
-          title="Scrum-Board"
-          className="lg:col-span-2"
-          scroll={false}
-          padded={false}
+        <TicketBoardPanel
+          ticketsByStatus={ticketsByStatus}
           action={
             sprint ? (
               <Link href={`/projects/${project.id}/office`} className="quiet-link font-medium">
@@ -155,59 +152,7 @@ export default async function ProjectBoardPage({
               <span className="text-ink-4">noch kein Sprint</span>
             )
           }
-        >
-          {/* Jede Statusspalte scrollt für sich: Ein volles „Erledigt" schiebt
-              damit nie das „Zu tun" aus dem Bild. */}
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-4">
-            {ticketsByStatus.map(({ status, tickets }) => (
-              <div
-                key={status}
-                className="flex min-h-0 flex-col rounded-lg border border-hairline bg-surface-2/40"
-              >
-                <div className="flex h-9 shrink-0 items-center justify-between px-3">
-                  <h3 className="text-xs font-medium text-ink-2">{TICKET_STATUS_LABEL[status]}</h3>
-                  <span className="text-[11px] tabular-nums text-ink-4">{tickets.length}</span>
-                </div>
-                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
-                  {tickets.length === 0 && (
-                    <p className="px-2 py-3 text-center text-xs text-ink-4">Keine Tickets</p>
-                  )}
-                  {tickets.map((ticket) => {
-                    const pendingReview = ticket.reviews.find((r) => r.decision === "PENDING");
-                    return (
-                      <article key={ticket.id} className="card-interactive p-2.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="text-xs font-medium leading-snug text-ink">{ticket.title}</p>
-                          {ticket.isCritical && (
-                            <span
-                              title="Kritische Änderung – benötigt menschliches Review"
-                              className="shrink-0 text-warning"
-                            >
-                              <WarningIcon className="h-3.5 w-3.5" />
-                              <span className="sr-only">Kritische Änderung</span>
-                            </span>
-                          )}
-                        </div>
-                        {ticket.description && (
-                          <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-ink-3">
-                            {ticket.description}
-                          </p>
-                        )}
-                        <div className="mt-2 flex flex-wrap items-center gap-1">
-                          <span className="pill pill-neutral">{TICKET_TYPE_LABEL[ticket.type]}</span>
-                          <span className={PRIORITY_PILL[ticket.priority]}>
-                            {PRIORITY_LABEL[ticket.priority]}
-                          </span>
-                          {pendingReview && <span className="pill pill-warning pill-dot">Review offen</span>}
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Panel>
+        />
 
         <Panel
           title="Agenten-Team"
