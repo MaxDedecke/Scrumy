@@ -84,7 +84,8 @@ export function ConceptTemplateMenu({
           >
             <p className="mb-3 text-xs leading-relaxed text-ink-3">
               Jede Vorlage füllt das Konzeptfeld mit einem Entwurf für die Ablösung des jeweiligen Produkts:
-              Ausgangslage, Ziel, Kernmodule, bewusste Abgrenzung und offene Punkte.
+              Ausgangslage, Ziel, Kernmodule, bewusste Abgrenzung, was auf Zulieferung durch den Kunden wartet
+              und offene Punkte.
               {hasConceptContent && " Ein vorhandener Entwurf wird dabei überschrieben."}
             </p>
             <ActionForm

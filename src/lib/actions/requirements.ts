@@ -123,7 +123,8 @@ const GENERATE_SYSTEM_PROMPT = [
   "Antworte ausschließlich mit einem JSON-Array, ohne Fließtext davor oder danach.",
   "Jedes Element hat die Felder: title (kurz, umsetzbar, deutsch), description (1–3 Sätze, was fachlich passieren muss),",
   'priority (genau einer der Werte "LOW", "MEDIUM", "HIGH", "URGENT").',
-  "Schneide jede Anforderung so zu, dass ein Entwicklungsteam sie in wenigen Tagen umsetzen kann.",
+  "Schneide jede Anforderung so zu, dass ein Entwicklungsteam sie ohne fremde Hilfe in wenigen Tagen umsetzen und mit Testdaten prüfen kann.",
+  'Enthält das Konzept einen Abschnitt „Blockiert auf Zulieferung durch den Kunden" (oder ähnlich betitelt, z.B. Migration, Zugangsdaten, Provider-Auswahl), leite daraus KEINE Anforderung ab – das sind Voraussetzungen, die erst der Kunde liefern muss, keine Arbeit für das Team.',
   "Erfinde nichts, was nicht im Konzept steht oder sich zwingend daraus ergibt.",
 ].join(" ");
 
