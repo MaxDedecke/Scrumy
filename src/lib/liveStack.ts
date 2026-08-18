@@ -31,8 +31,9 @@
 // Contexts sind unproblematisch (das CLI liest sie lokal und laedt sie hoch).
 // TEAM_GRUNDREGELN weist die Agenten deshalb an, Code beim Build zu kopieren.
 import { execFile, spawn } from "node:child_process";
-import { appendFileSync, closeSync, openSync, readFileSync, unlinkSync } from "node:fs";
+import { appendFileSync, closeSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
 import { prisma } from "@/lib/prisma";
@@ -108,6 +109,53 @@ function openLiveLog(projectId: string): number | null {
       console.error(`Live-Log fuer Projekt ${projectId} konnte nicht angelegt werden, starte ohne Log:`, error);
       return null;
     }
+  }
+}
+
+/// Ersetzt vor jedem Start ALLE festen Host-Ports der Kunden-Compose-Datei
+/// durch freie, von Docker selbst vergebene (siehe TEAM_GRUNDREGELN in
+/// worker/projectContext.ts – Agenten SOLLEN das schon selbst vermeiden, aber
+/// verlassen sollte sich Scrumy darauf nicht: ein LLM haelt Prompt-Regeln
+/// nicht zuverlaessig ein, und Scrumys Host laeuft mehrere Projekte
+/// gleichzeitig, deren jeweils generierte Ports beliebig kollidieren
+/// koennen – siehe genau dieser Fehler bei "OnwPhoto" gegen ein anderes,
+/// unabhaengiges Projekt). "docker compose ... config --format json" loest
+/// die Datei vollstaendig auf (Build-Kontexte werden dabei zu absoluten
+/// Pfaden, funktioniert also unabhaengig vom Arbeitsverzeichnis) – daraus
+/// wird nur das "published" jedes Ports entfernt, der Rest bleibt
+/// unveraendert. Das Ergebnis-JSON ist selbst gueltiges Compose (YAML ist
+/// eine JSON-Obermenge) und ersetzt komplett, statt es per zusaetzlichem
+/// "-f" draufzulegen: Compose HAENGT Listen wie "ports" beim Zusammenfuehren
+/// mehrerer Dateien an, statt sie zu ersetzen – ein Overlay koennte den
+/// festen Port also nicht wieder entfernen.
+/// Bei jedem Fehler (z.B. eine Compose-Datei, die "config" selbst nicht
+/// versteht) faellt diese Funktion auf die unveraenderte Originaldatei
+/// zurueck – "up" scheitert dann zwar am selben Problem wie vorher, aber
+/// wenigstens nicht an einem NEUEN, das erst diese Funktion einführt.
+async function preparePortSafeComposeFile(composeFile: string, name: string): Promise<string> {
+  let resolved: { services?: Record<string, { ports?: Array<{ published?: unknown }> }> };
+  try {
+    const raw = await dockerCompose(["-f", composeFile, "-p", name, "config", "--format", "json"]);
+    resolved = JSON.parse(raw);
+  } catch (error) {
+    console.error(`Live-Start: "docker compose config" für ${composeFile} fehlgeschlagen, nutze Datei unverändert:`, error);
+    return composeFile;
+  }
+
+  for (const service of Object.values(resolved.services ?? {})) {
+    for (const port of service.ports ?? []) delete port.published;
+  }
+
+  // Eigener, pro Lauf einmaliger Name (nicht der feste Log-Pfad-Name) – bloss
+  // keine Wiederverwendung eines Pfads, der von einem frueheren Lauf mit
+  // anderen Rechten uebrig geblieben sein könnte (siehe openLiveLog oben).
+  const outPath = `/tmp/${name}-${randomUUID()}.compose.json`;
+  try {
+    writeFileSync(outPath, JSON.stringify(resolved));
+    return outPath;
+  } catch (error) {
+    console.error(`Live-Start: portsichere Compose-Datei konnte nicht geschrieben werden, nutze Original:`, error);
+    return composeFile;
   }
 }
 
@@ -204,16 +252,28 @@ export async function startLiveStack(projectId: string, trigger: LiveTrigger = "
   // Ueberbleibsel eines vorherigen (abgestuerzten) Laufs raeumen, wie preview.ts es mit "docker rm -f" tut.
   await removeStackByLabel(name).catch(() => {});
 
+  // Nie die festen Host-Ports der Kunden-Datei selbst anfassen – siehe
+  // preparePortSafeComposeFile für den Grund. "portSafeFile" ist entweder ein
+  // frisches Temp-File (Regelfall) oder, bei Fehlern dort, composeFile selbst.
+  const portSafeFile = await preparePortSafeComposeFile(composeFile, name);
+
   const logPath = liveLogPath(projectId);
   const fd = openLiveLog(projectId);
 
   try {
     const child = spawn(
       "docker",
-      ["compose", "-f", composeFile, "-p", name, "up", "-d", "--build", "--remove-orphans"],
+      ["compose", "-f", portSafeFile, "-p", name, "up", "-d", "--build", "--remove-orphans"],
       { stdio: ["ignore", fd ?? "ignore", fd ?? "ignore"], detached: true },
     );
     child.on("close", (code) => {
+      if (portSafeFile !== composeFile) {
+        try {
+          unlinkSync(portSafeFile);
+        } catch {
+          // Temp-Datei nicht mehr da – egal, sie liegt ohnehin in /tmp.
+        }
+      }
       if (fd === null) return;
       try {
         appendFileSync(logPath, `\n${START_MARKER} exit=${code}\n`);
@@ -226,6 +286,13 @@ export async function startLiveStack(projectId: string, trigger: LiveTrigger = "
     child.unref();
   } catch (error) {
     if (fd !== null) closeSync(fd);
+    if (portSafeFile !== composeFile) {
+      try {
+        unlinkSync(portSafeFile);
+      } catch {
+        // Temp-Datei nicht mehr da – egal.
+      }
+    }
     const message = error instanceof Error ? error.message : String(error);
     await prisma.project.update({
       where: { id: projectId },
