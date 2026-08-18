@@ -22,11 +22,11 @@ ENV NODE_ENV=production
 # git gehoert zur Laufzeit dazu: Die Agenten arbeiten in echten lokalen
 # Repositories (siehe src/lib/workspace.ts), Commits sind ihr Arbeitsnachweis.
 #
-# docker-cli + su-exec sind nur fuer den "app"-Dienst da (siehe
-# docker/app-entrypoint.sh, src/lib/preview.ts): jede Frontend-Vorschau laeuft
-# als eigener Sibling-Container statt als Kindprozess in diesem Container.
-# "worker" bekommt dieselben Pakete mit (ein Image fuer beide Dienste), nutzt
-# sie aber nicht – vernachlaessigbare Groesse.
+# docker-cli + su-exec braucht sowohl "app" (siehe docker/app-entrypoint.sh,
+# src/lib/preview.ts: jede Frontend-Vorschau laeuft als eigener Sibling-
+# Container statt als Kindprozess in diesem Container) als auch "worker"
+# (src/lib/testRun.ts: QAs automatische Pruefungen laufen genauso als
+# Sibling-Container) – ein Image fuer beide Dienste.
 RUN apk add --no-cache git docker-cli su-exec
 
 RUN addgroup --system --gid 1001 nodejs \

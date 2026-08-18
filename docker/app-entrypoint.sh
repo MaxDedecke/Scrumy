@@ -1,10 +1,10 @@
 #!/bin/sh
-# Nur fuer den "app"-Dienst (siehe docker-compose.yml: dort ueberschreibt er
-# ENTRYPOINT und startet zunaechst als root statt als "nextjs" aus dem
-# Dockerfile). Grund: die Frontend-Vorschau (src/lib/preview.ts) startet jede
-# laufende Vorschau als eigenen, ressourcenbegrenzten Sibling-Container ueber
-# den gemounteten Docker-Socket – dafuer braucht der Prozess Zugriff auf
-# /var/run/docker.sock.
+# Fuer "app" UND "worker" (siehe docker-compose.yml: beide ueberschreiben dort
+# ENTRYPOINT und starten zunaechst als root statt als "nextjs" aus dem
+# Dockerfile). Grund: beide starten Sibling-Container ueber den gemounteten
+# Docker-Socket – "app" fuer die Frontend-Vorschau (src/lib/preview.ts),
+# "worker" fuer die automatischen Pruefungen von QA (src/lib/testRun.ts).
+# Beides braucht Zugriff auf /var/run/docker.sock.
 #
 # Der Socket gehoert auf dem Host einer Gruppe mit host-spezifischer GID.
 # Diese GID wird hier zur Laufzeit als Gruppe angelegt und "nextjs" beitritt

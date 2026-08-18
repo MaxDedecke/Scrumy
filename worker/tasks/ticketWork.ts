@@ -26,6 +26,8 @@ import {
 import { agentForRole, roleForTicket } from "@/lib/team";
 import { PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
 import { optionsFromAgent, type ClarificationOption } from "@/lib/clarificationOptions";
+import { checkFailed, detectCheckTargets, formatCheckResults, runChecks, type CheckRunResult } from "@/lib/testRun";
+import type { Agent } from "@/generated/prisma/client";
 import { AgentRunError, logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { continueSprint, loadWorkingProject } from "../orchestration";
@@ -223,6 +225,78 @@ Antworte nur so:
   return true;
 }
 
+function slugForFile(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[äöüß]/g, (c) => ({ ä: "ae", ö: "oe", ü: "ue", ß: "ss" })[c] ?? c)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return slug || "pruefung";
+}
+
+interface AutomaticVerification {
+  commit: NonNullable<Awaited<ReturnType<typeof commitAll>>>;
+  results: CheckRunResult[];
+  allPassed: boolean;
+}
+
+/// Wird angestoßen, wenn der Umsetzer keine Dateiänderung geliefert hat und
+/// auch keine fachliche Rückfrage stellt – wie im Fall, der diese Funktion
+/// ausgelöst hat: ein Ticket, das nur "prüfen, ob der Export funktioniert"
+/// verlangt, kein Modell kann das aus dem Diff heraus beantworten. Statt dem
+/// Auftraggeber die Frage "wurde getestet?" vorzulegen, lässt Scrumy es
+/// tatsächlich laufen (siehe src/lib/testRun.ts) und hält das Ergebnis als
+/// eigenen, von QA verantworteten Commit fest – dieselbe Nachvollziehbarkeit
+/// wie bei jedem Code-Commit, nur ist der Beleg hier ein echter Testlauf statt
+/// eines Diffs.
+///
+/// Gibt `null` zurück, wenn es nichts zu prüfen gab (kein package.json mit
+/// test-/lint-/build-Skript) oder der Runner selbst nicht erreichbar war
+/// (Docker-Socket fehlt) – dann bleibt der bisherige Weg über eine Klärung
+/// der richtige, weil wirklich niemand im Team das beantworten kann.
+async function attemptAutomaticVerification({
+  dir,
+  projectId,
+  ticket,
+  reviewer,
+}: {
+  dir: string;
+  projectId: string;
+  ticket: { id: string; title: string };
+  reviewer: Agent;
+}): Promise<AutomaticVerification | null> {
+  const targets = await detectCheckTargets(dir);
+  if (targets.length === 0) return null;
+
+  const results = await runChecks(projectId, targets);
+  if (results.every((result) => result.unavailable)) return null;
+
+  const allPassed = results.every((result) => !checkFailed(result));
+  const docPath = `docs/technik/pruefung-${slugForFile(ticket.title)}.md`;
+  const docContent = `# Automatische Prüfung: ${ticket.title}
+
+Von Scrumy automatisch ausgeführt, kein Modellurteil: \`npm ci\` (oder \`npm install\` ohne Lockfile), danach \`npm test\`/\`npm run lint\`/\`npm run build\`, je nachdem was das jeweilige package.json anbietet.
+
+${formatCheckResults(results)}
+`;
+  await writeFiles(dir, [{ path: docPath, content: docContent }]);
+  const commit = await commitAll(dir, {
+    authorName: reviewer.name,
+    message:
+      `Automatische Prüfung dokumentiert: ${ticket.title}\n\n` +
+      (allPassed
+        ? "Alle gefundenen Prüf-Skripte liefen durch (Exit-Code 0)."
+        : "Mindestens ein Prüf-Skript ist fehlgeschlagen – Details im Dokument.") +
+      `\n\nTicket: ${ticket.title} (${ticket.id})\nGeprüft von: ${reviewer.name}`,
+  });
+  // Kein Commit trotz Ergebnissen ist nur bei einem bereits identischen
+  // Dokument aus einem vorigen Anlauf denkbar (Wiederholung nach Requeue) –
+  // dann zaehlt trotzdem als Beleg, nur eben ohne neuen Commit.
+  if (!commit) return null;
+
+  return { commit, results, allPassed };
+}
+
 /** Wendet die kompakten, exakten Such-/Ersetzungsblöcke erst im Speicher an. */
 async function materializeChanges(
   dir: string,
@@ -415,6 +489,8 @@ Setze ausschließlich dieses kleine Ticket um. Ändere bestehende Dateien mit ex
 
 Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wesentliches offen lassen, das du nicht selbst entscheiden darfst (Fachlogik, Datenhaltung, Kosten, Rechte): Erfinde nichts. Setze um, was zweifelsfrei ist, und stelle die Frage im Feld KLÄRUNG – der Auftraggeber entscheidet, und das Team arbeitet danach mit dem Beschluss weiter.
 
+Verlangt das Ticket nur eine Prüfung eines bereits bestehenden Stands (z.B. "testen, ob X funktioniert") und gibt es dafür nichts zu ändern: Liefere trotzdem keine leere Antwort und keine Klärung nur deswegen, dass du selbst keine Befehle ausführen kannst – Scrumy führt npm ci/test/lint/build im Anschluss automatisch und echt aus (kein Modellurteil) und dokumentiert das Ergebnis selbst. Das ist kein Grund für KLÄRUNG.
+
 Zu jeder Klärung gehören die Wege, zwischen denen entschieden wird: Schreibe sie ins Feld WEGE, zwei bis vier Stück, jeden in einer eigenen Zeile als „Kurzer Titel: was das konkret bedeutet, mit Für und Wider in einem Satz". Es sind die fachlichen Möglichkeiten, die DU siehst (welcher Server, welches Datenmodell, welche Bibliothek) – nicht „nochmal versuchen" oder „abbrechen", die kennt Scrumy selbst.
 
 Antworte genau in diesem Format, ohne Code-Fences und ohne Escaping. Wiederhole EDIT-Blöcke, wenn eine Datei mehrere getrennte Stellen ändert:
@@ -520,10 +596,88 @@ vollständiger Inhalt der neuen Datei
       return;
     }
 
+    // Keine Datei geaendert und keine fachliche Rueckfrage: oft, weil das
+    // Ticket gar keinen Code veraendern soll, sondern etwas Bestehendes nur
+    // GEPRUEFT werden muss ("funktioniert der Export?"). Das kann kein
+    // Modell aus einem leeren Diff heraus beantworten – also lassen wir es
+    // tatsaechlich laufen, statt dem Auftraggeber die Frage "wurde getestet?"
+    // vorzulegen (siehe attemptAutomaticVerification).
+    if (!raisedQuestion && rejected.length === 0) {
+      const verifier = (await agentForRole(projectId, "QA")) ?? implementer;
+      const verification = await attemptAutomaticVerification({ dir, projectId, ticket, reviewer: verifier });
+      if (verification) {
+        await prisma.ticket.update({
+          where: { id: ticketId },
+          data: {
+            status: "IN_REVIEW",
+            result: `${summary}\n\nAutomatische Prüfung (${verifier.name}): ${
+              verification.allPassed ? "alle Prüf-Skripte erfolgreich." : "mindestens ein Prüf-Skript ist fehlgeschlagen."
+            }`,
+          },
+        });
+        await logActivity({
+          projectId,
+          ticketId,
+          actor: verifier.name,
+          agentId: verifier.id,
+          action: "code_committed",
+          detail: `${verification.commit.shortSha} · Automatische Prüfung dokumentiert (docs/technik/)`,
+        });
+
+        if (!verification.allPassed) {
+          const failureDetail = formatCheckResults(verification.results).slice(0, 2000);
+          if (attempt < MAX_ATTEMPTS) {
+            await prisma.ticket.update({
+              where: { id: ticketId },
+              data: { plan: `${plan}\n\n## Automatische Prüfung ist fehlgeschlagen\n${failureDetail}` },
+            });
+            await enqueueAgentJob("ticketWork", {
+              agentId: implementer.id,
+              projectId,
+              ticketId,
+              reason: `Automatische Prüfung fehlgeschlagen – Nacharbeit noetig: ${failureDetail.slice(0, 200)}`,
+              attempt: attempt + 1,
+            });
+          } else {
+            await requestHumanReview(
+              projectId,
+              ticketId,
+              ticket.title,
+              `Automatische Prüfung schlägt nach ${attempt} Anläufen weiter fehl:\n${failureDetail}`,
+              ticket.isCritical,
+            );
+          }
+        } else if (ticket.isCritical) {
+          await requestHumanReview(
+            projectId,
+            ticketId,
+            ticket.title,
+            "Kritisches Ticket – automatische Prüfung ist bestanden.",
+            true,
+          );
+        } else {
+          await prisma.ticket.update({ where: { id: ticketId }, data: { status: "DONE" } });
+          await logActivity({
+            projectId,
+            ticketId,
+            actor: verifier.name,
+            agentId: verifier.id,
+            action: "ticket_done",
+            detail: `„${ticket.title}" ist fertig – automatische Prüfung bestanden`,
+          });
+        }
+
+        if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+        return;
+      }
+    }
+
     // Frueher landete das trotzdem als Freigabe-Anfrage beim Menschen – eine
     // Freigabe fuer eine leere Aenderung. Jetzt ist es die Frage, die es
     // tatsaechlich ist: entweder hat der Agent selbst gefragt, oder auch der
-    // automatische Anlauf hat keine brauchbare Aenderung zustande gebracht.
+    // automatische Anlauf hat keine brauchbare Aenderung zustande gebracht,
+    // und es gibt im Repository nichts, was Scrumy automatisch haette
+    // pruefen koennen.
     await logActivity({
       projectId,
       ticketId,
@@ -615,6 +769,16 @@ vollständiger Inhalt der neuen Datei
   const reviewer = (await agentForRole(projectId, "QA")) ?? implementer;
   const diff = commit ? (await gitShow(dir, commit.sha)).slice(0, 60_000) : "(kein Commit entstanden)";
 
+  // Echte Prüfung statt Modell-Vermutung: QA bekommt hier kein "stell dir
+  // vor, ob npm test wohl durchläuft", sondern das tatsächliche Ergebnis
+  // eines soeben ausgeführten Laufs (siehe src/lib/testRun.ts). Scheitert der
+  // Lauf technisch (kein Docker erreichbar), bleibt QA nicht blind stehen –
+  // dann urteilt es wie bisher allein aus dem Diff.
+  const checkTargets = await detectCheckTargets(dir);
+  const checkResults = checkTargets.length > 0 ? await runChecks(projectId, checkTargets) : [];
+  const checksRanForReal = checkResults.some((result) => !result.unavailable);
+  const anyCheckFailed = checkResults.some((result) => checkFailed(result));
+
   const review = await runAgent({
     agent: reviewer,
     projectId,
@@ -637,6 +801,11 @@ ${summary}${notes ? `\n\nOffene Punkte: ${notes}` : ""}
 ## Änderung (Commit-Diff)
 ${diff}
 
+## Automatisch ausgeführte Prüfung${checksRanForReal ? " (echter Lauf, kein Modellurteil)" : ""}
+${checksRanForReal
+  ? formatCheckResults(checkResults)
+  : "(kein package.json mit test-/lint-/build-Skript gefunden, oder die automatische Prüfung war technisch nicht erreichbar – urteile allein aus dem Diff)"}
+
 Prüfe: Erfüllt die Änderung das Ticket? Ist der Code in sich stimmig und passt er zum bestehenden Stand? Fehlt etwas Offensichtliches?
 
 Antworte nur mit diesem JSON-Objekt:
@@ -647,12 +816,24 @@ Antworte nur mit diesem JSON-Objekt:
   "wege": [{ "label": "kurzer Titel", "detail": "was das konkret heißt, mit Für und Wider in 1-2 Sätzen" }]
 }
 
-"rework" nur bei echten Mängeln, nicht für Geschmacksfragen.
-"needs_decision", wenn das Team die Frage gar nicht selbst beantworten kann – wenn Auftrag und Anforderungen sich widersprechen oder etwas Fachliches offen lassen. Schreibe dann in "comment" die Frage, die der Auftraggeber entscheiden muss. Nacharbeit hilft in dem Fall nicht: Ein zweiter Anlauf würde dieselbe Lücke nur anders raten.
+"rework" nur bei echten Mängeln, nicht für Geschmacksfragen. Ein fehlgeschlagenes Prüf-Skript oben ist ein echter Mangel – "rework", nicht "needs_decision": ob Tests/Build/Lint durchlaufen, ist keine Entscheidung für den Auftraggeber, das ist eure Arbeit.
+"needs_decision", wenn das Team die Frage gar nicht selbst beantworten kann – wenn Auftrag und Anforderungen sich widersprechen oder etwas Fachliches offen lassen. Schreibe dann in "comment" die Frage, die der Auftraggeber entscheiden muss. Nacharbeit hilft in dem Fall nicht: Ein zweiter Anlauf würde dieselbe Lücke nur anders raten. Fehlende oder nicht erreichbare Prüfung ist NIEMALS ein Grund für "needs_decision" – dann urteile aus dem Diff wie zuvor.
 "wege" nur bei "needs_decision": zwei bis vier fachliche Möglichkeiten, zwischen denen der Auftraggeber wählt – nicht „nochmal versuchen" oder „abbrechen", die kennt Scrumy selbst. Sonst leer lassen.`,
   });
 
-  const { verdict, comment, risk, options: reviewOptions } = readVerdict(review.text);
+  const parsedVerdict = readVerdict(review.text);
+  // Verlass dich nicht darauf, dass das Modell die Anweisung oben befolgt:
+  // ein wirklich fehlgeschlagenes Prüf-Skript ist ein harter Fakt, kein
+  // Ermessen. Sagt QA trotzdem "approve" oder "needs_decision", stimmt das
+  // schlicht nicht mit dem echten Lauf ueberein – dann gilt der echte Lauf.
+  const { verdict, comment, risk, options: reviewOptions } =
+    anyCheckFailed && parsedVerdict.verdict !== "rework"
+      ? {
+          ...parsedVerdict,
+          verdict: "rework" as const,
+          comment: `Automatische Prüfung ist fehlgeschlagen (siehe Ergebnis oben) – das sticht die Einschätzung von ${reviewer.name}: ${parsedVerdict.comment}`,
+        }
+      : parsedVerdict;
 
   await logActivity({
     projectId,

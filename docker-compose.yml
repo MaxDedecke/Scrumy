@@ -77,6 +77,15 @@ services:
   worker:
     build: .
     restart: unless-stopped
+    # Wie "app" (siehe dort und docker/app-entrypoint.sh): startet kurz als
+    # root, um den gemounteten Docker-Socket nutzbar zu machen, faellt dann
+    # sofort auf "nextjs" zurueck. Der Worker braucht das fuer die
+    # automatischen Pruefungen (siehe src/lib/testRun.ts) – QA laesst dort
+    # echte "npm ci"/"npm test"-Laeufe in einem eigenen, ressourcenbegrenzten
+    # Sibling-Container laufen, statt sich auf ein Modellurteil ueber einen
+    # Diff zu verlassen.
+    user: root
+    entrypoint: ["/app/docker/app-entrypoint.sh"]
     command: ["npx", "tsx", "worker/index.ts"]
     # Ein Agenten-Schritt ist ein LLM-Aufruf und dauert Minuten. Ohne Wartezeit
     # killt Docker den Worker nach 10s mitten im Job – graphile-worker kann den
@@ -94,9 +103,19 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
+      # Automatische Pruefungen (src/lib/testRun.ts): derselbe generische
+      # Runner wie die Frontend-Vorschau (node+npm, richtige UID fuers
+      # Workspace-Volume) – kein eigenes Netz noetig, der Lauf ist synchron
+      # ("docker run" ohne "-d") und muss von niemandem erreicht werden.
+      TEST_RUNNER_IMAGE: scrumy-preview-runner
+      TEST_RUNNER_WORKSPACE_VOLUME: scrumy_scrumy_workspaces
     volumes:
       # Schreibend: hier committen die Agenten.
       - scrumy_workspaces:/workspaces
+      # Fuer die automatischen Pruefungen: startet Sibling-Container auf
+      # demselben Docker-Host, wie "app" es fuer die Vorschau tut (siehe dort
+      # fuer die Abwaegung dieses Zugriffs).
+      - /var/run/docker.sock:/var/run/docker.sock
 
   # Kein laufender Dienst, nur ein Image: die generische Laufzeit fuer JEDE
   # Frontend-Vorschau (siehe docker/preview-runner.Dockerfile). "app" startet
