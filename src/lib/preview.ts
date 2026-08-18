@@ -318,6 +318,41 @@ export async function killPreviewIfRunning(projectId: string): Promise<void> {
   await docker(["rm", "-f", name]).catch(() => {});
 }
 
+/// Sicherheitsnetz gegen verwaiste Vorschau-Container – Gegenstueck zu
+/// `reconcileOrphanWorkspaces` in worker/reconcile.ts, nur fuer Docker statt
+/// Dateisystem.
+///
+/// `killPreviewIfRunning` schluckt seinen Fehler bewusst (Kommentar dort):
+/// ist der Docker-Daemon in genau dem Moment kurz nicht erreichbar, oder
+/// stirbt der App-Container zwischen `stopProjectWork` und dem eigentlichen
+/// Loeschen, bleibt ein `scrumy-preview-<projectId>`-Container fuer ein
+/// Projekt zurueck, das es (samt Workspace und DB-Zeile) laengst nicht mehr
+/// gibt – er belegt weiter Port, RAM und CPU, unsichtbar fuer die
+/// Oberflaeche, die nur Projekte kennt, die es noch gibt.
+export async function reconcileOrphanPreviewContainers(): Promise<number> {
+  const raw = await docker(["ps", "-a", "--format", "{{.Names}}"]).catch(() => "");
+  const previewContainers = raw
+    .split("\n")
+    .map((name) => name.trim())
+    .filter((name) => name.startsWith("scrumy-preview-"));
+  if (previewContainers.length === 0) return 0;
+
+  const projectIds = previewContainers.map((name) => name.slice("scrumy-preview-".length));
+  const known = await prisma.project.findMany({
+    where: { id: { in: projectIds } },
+    select: { id: true },
+  });
+  const knownIds = new Set(known.map((project) => project.id));
+
+  let removed = 0;
+  for (const name of previewContainers) {
+    if (knownIds.has(name.slice("scrumy-preview-".length))) continue;
+    await docker(["rm", "-f", name]).catch(() => {});
+    removed++;
+  }
+  return removed;
+}
+
 // --- Status lesen --------------------------------------------------------------
 
 export interface PreviewInfo {

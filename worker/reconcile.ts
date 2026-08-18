@@ -12,6 +12,7 @@
 import { prisma } from "@/lib/prisma";
 import { listWorkspaceProjectIds, removeWorkspace } from "@/lib/workspace";
 import { deleteUnassignedAgents } from "@/lib/purge";
+import { reconcileOrphanPreviewContainers } from "@/lib/preview";
 import { cancelJobsOfDeletedAgents, unlockStaleJobs } from "./queue";
 import { openClarification } from "./clarification";
 
@@ -57,6 +58,11 @@ export async function reconcileOrphanWorkspaces(): Promise<number> {
   // Und Jobs, deren Agent schon weg ist – siehe cancelJobsOfDeletedAgents.
   const jobs = await cancelJobsOfDeletedAgents();
   if (jobs > 0) console.log(`[worker] ${jobs} Jobs geloeschter Agenten aus der Queue genommen.`);
+
+  // Und Vorschau-Container, deren Projekt schon weg ist – siehe
+  // reconcileOrphanPreviewContainers.
+  const previews = await reconcileOrphanPreviewContainers();
+  if (previews > 0) console.log(`[worker] ${previews} verwaiste Vorschau-Container entfernt.`);
 
   return orphans.length;
 }
