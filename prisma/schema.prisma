@@ -91,6 +91,30 @@ model Project {
   previewStartedAt       DateTime?
   previewError           String?
 
+  /// Zustand der Live-Anwendung (siehe src/lib/liveStack.ts) – anders als die
+  /// Vorschau der GANZE Docker-Compose-Stack des Kundenprojekts (Frontend,
+  /// Backend, Datenbank), nicht nur das Frontend. Genau wie previewStatus
+  /// immer live per `docker`/`docker compose` neu ermittelt, dieses Feld ist
+  /// nur der zuletzt bekannte Stand fuer die Oberflaeche.
+  liveStatus             PreviewStatus @default(STOPPED)
+  /// Wer den Stack gestartet hat – fuer die Anzeige ("Live" vs. "Live:
+  /// Sprint-Review-Pruefung laeuft").
+  liveTrigger            LiveTrigger?
+  /// Veroeffentlichter Host-Port des erreichbaren Frontend-Diensts (siehe
+  /// getLiveStackInfo) – wie previewPort baut erst die aufrufende Seite
+  /// daraus per Request-Host eine echte URL, liveStack.ts selbst hat keinen
+  /// Request-Kontext (wird auch vom Worker genutzt).
+  livePort               Int?
+  /// Name des Compose-Diensts hinter livePort, nur fuer die Anzeige.
+  liveService            String?
+  liveStartedAt          DateTime?
+  liveError              String?
+  /// Platzhalter fuer eine spaetere Premium-Funktion (Datenbank-Volume beim
+  /// Beenden behalten statt immer zu loeschen) – aktuell nur als
+  /// ausgegrauter Schalter in den Projekt-Einstellungen sichtbar, ohne
+  /// Wirkung in liveStack.ts (Terminate loescht die Daten immer).
+  liveKeepData           Boolean       @default(false)
+
   requirements   Requirement[]
   concept        Concept?
   tickets        Ticket[]
@@ -113,12 +137,23 @@ enum ProjectStatus {
   ARCHIVED
 }
 
-/// Lebenszyklus der Frontend-Vorschau eines Projekts (siehe `Project.previewStatus`).
+/// Lebenszyklus eines laufenden Sibling-Docker-Prozesses eines Projekts –
+/// genutzt sowohl fuer die Frontend-Vorschau (`Project.previewStatus`) als
+/// auch fuer die volle Live-Anwendung (`Project.liveStatus`).
 enum PreviewStatus {
   STOPPED
   STARTING
   RUNNING
   ERROR
+}
+
+/// Wer die Live-Anwendung gestartet hat (siehe `Project.liveTrigger`).
+enum LiveTrigger {
+  /// Ueber den "Anwendung starten"-Knopf im Projektkopf.
+  MANUAL
+  /// Automatisch durch die Integrationspruefung am Sprint-Ende (siehe
+  /// worker/tasks/sprintReview.ts).
+  SPRINT_REVIEW
 }
 
 /// Eine einzelne Anforderung fuer ein Projekt in der Discovery-Phase – entweder

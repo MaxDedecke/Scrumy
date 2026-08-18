@@ -17,7 +17,7 @@ export function ProjectTabs({ projectId, className = "" }: { projectId: string; 
     { label: "Übersicht", href: base },
     { label: "Anforderungen & Konzept", href: `${base}/discovery` },
     { label: "Team-Büro", href: `${base}/office` },
-    { label: "Vorschau", href: `${base}/preview` },
+    { label: "Benutzeroberfläche", href: `${base}/preview` },
     { label: "Nachweise", href: `${base}/records` },
     { label: "Team & Einstellungen", href: `${base}/team` },
   ];

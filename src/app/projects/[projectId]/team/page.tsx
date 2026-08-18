@@ -350,6 +350,22 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
           </div>
         </ActionForm>
 
+        {/* Noch ohne Funktion: liveKeepData existiert in der DB, wird aber
+            aktuell nirgends gelesen (siehe prisma/schema.prisma) – Terminate
+            löscht die Datenbank-Daten der Live-Anwendung immer. Sichtbar
+            ausgegraut, damit klar ist, dass die Funktion kommt, statt sie
+            vorzutäuschen. */}
+        <div className="mt-4 border-t border-hairline pt-4">
+          <label className="flex items-center gap-2 text-sm text-ink-4">
+            <input type="checkbox" disabled className="accent-accent-solid" />
+            Daten der Live-Anwendung beim Beenden behalten
+            <span className="pill pill-neutral">Premium – demnächst verfügbar</span>
+          </label>
+          <p className="mt-1 text-xs text-ink-4">
+            Aktuell werden die Datenbank-Inhalte der Live-Anwendung beim Beenden immer gelöscht, um Speicher zu sparen.
+          </p>
+        </div>
+
         <ActionForm action={deleteProject} className="mt-4 border-t border-hairline pt-4">
           <input type="hidden" name="id" value={project.id} />
           <ConfirmButton

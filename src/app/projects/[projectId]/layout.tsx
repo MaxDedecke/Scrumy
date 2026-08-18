@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { PROJECT_STATUS_LABEL, PROJECT_STATUS_PILL } from "@/lib/labels";
+import { LIVE_STATUS_LABEL, LIVE_STATUS_PILL, PROJECT_STATUS_LABEL, PROJECT_STATUS_PILL } from "@/lib/labels";
+import { getOtherLiveProject } from "@/lib/liveStack";
+import { LiveAppControls } from "@/components/LiveAppControls";
 import { LiveRefresh } from "@/components/LiveRefresh";
 import { PageHeader } from "@/components/PageHeader";
 import { ProjectTabs } from "@/components/ProjectTabs";
@@ -37,9 +39,14 @@ export default async function ProjectLayout({
       repoUrl: true,
       organizationId: true,
       organization: { select: { name: true } },
+      liveStatus: true,
     },
   });
   if (!project) notFound();
+
+  // Nur ein Projekt gleichzeitig live – fuer die deaktivierte Play-Taste bei
+  // allen ANDEREN Projekten, siehe LiveAppControls.
+  const otherLiveProject = await getOtherLiveProject(project.id);
 
   return (
     <main className={pageFixedClass}>
@@ -50,12 +57,24 @@ export default async function ProjectLayout({
         context={project.organization.name}
         title={project.name}
         status={
-          <span className={`${PROJECT_STATUS_PILL[project.status]} pill-dot`}>
-            {PROJECT_STATUS_LABEL[project.status]}
-          </span>
+          <>
+            <span className={`${PROJECT_STATUS_PILL[project.status]} pill-dot`}>
+              {PROJECT_STATUS_LABEL[project.status]}
+            </span>
+            {(project.liveStatus === "RUNNING" || project.liveStatus === "STARTING") && (
+              <span className={`${LIVE_STATUS_PILL[project.liveStatus]} pill-dot`}>
+                {LIVE_STATUS_LABEL[project.liveStatus]}
+              </span>
+            )}
+          </>
         }
         actions={
           <>
+            <LiveAppControls
+              projectId={project.id}
+              liveStatus={project.liveStatus}
+              blockedBy={otherLiveProject}
+            />
             <TeamControls
               projectId={project.id}
               status={project.status}

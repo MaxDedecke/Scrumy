@@ -167,6 +167,24 @@ export const PREVIEW_STATUS_PILL: Record<PreviewStatus, string> = {
   ERROR: "pill pill-critical",
 };
 
+// Eigene Texte fuer die Live-Anwendung (auch wenn liveStatus denselben
+// PreviewStatus-Enum-Typ wie previewStatus wiederverwendet, siehe
+// prisma/schema.prisma) – "Live" statt "Läuft" grenzt sie im Kopf klar von
+// der Vorschau ab.
+export const LIVE_STATUS_LABEL: Record<PreviewStatus, string> = {
+  STOPPED: "Nicht live",
+  STARTING: "Live startet …",
+  RUNNING: "Live",
+  ERROR: "Fehler",
+};
+
+export const LIVE_STATUS_PILL: Record<PreviewStatus, string> = {
+  STOPPED: "pill pill-neutral",
+  STARTING: "pill pill-info",
+  RUNNING: "pill pill-good",
+  ERROR: "pill pill-critical",
+};
+
 export const REQUIREMENT_SOURCE_LABEL: Record<RequirementSource, string> = {
   MANUAL: "Manuell",
   UPLOAD: "Hochgeladen",
@@ -292,6 +310,7 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   kickoff_completed: "Auftrag verstanden",
   sprint_planned: "Sprint geplant",
   sprint_reviewed: "Sprint abgeschlossen",
+  integration_check: "Integrationsprüfung (voller Stack)",
   backlog_empty: "Backlog leer",
   ticket_started: "Ticket übernommen",
   ticket_planned: "Ticket geplant",

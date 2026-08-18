@@ -8,6 +8,7 @@ import type { Task } from "graphile-worker";
 import { prisma } from "@/lib/prisma";
 import { commitAll, gitLog, writeFiles } from "@/lib/workspace";
 import { TICKET_STATUS_LABEL } from "@/lib/labels";
+import { runSprintIntegrationCheck } from "@/lib/liveStack";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { handOverTo, loadWorkingProject } from "../orchestration";
@@ -48,6 +49,18 @@ const sprintReview: Task<"sprintReview"> = async (payload: SprintReviewPayload, 
     ? commits.map((commit) => `- ${commit.shortSha} ${commit.author}: ${commit.subject}`).join("\n")
     : "(keine Commits in diesem Sprint)";
 
+  // Echte Integrationspruefung statt Modellurteil, wie die Ticket-Checks in
+  // ticketWork.ts (siehe src/lib/testRun.ts) – nur eben einmal pro Sprint und
+  // gegen den GANZEN Stack (Frontend, Backend, Datenbank), nicht pro Ticket
+  // und nur einzelne package.json-Skripte (siehe src/lib/liveStack.ts fuer
+  // die Begruendung der Sprint-statt-Ticket-Kadenz).
+  const integration = await runSprintIntegrationCheck(projectId);
+  const integrationReport = integration.skipped
+    ? `Übersprungen: ${integration.reason}`
+    : integration.passed
+      ? `Bestanden. ${integration.summary}`
+      : `NICHT bestanden. ${integration.summary}`;
+
   const context = await buildProjectContext(projectId, { includeRepo: false });
   const { text } = await runAgent({
     agent,
@@ -70,6 +83,9 @@ ${ticketReport || "(keine)"}
 ## Commits in diesem Sprint
 ${commitReport}
 
+## Integrationsprüfung (voller Stack, automatisch von Scrumy ausgeführt)
+${integrationReport}
+
 Schreibe das Sprint-Review als Markdown (ohne Code-Fence). Gliederung:
 
 # Sprint ${sprint.number} – Review
@@ -78,16 +94,28 @@ Schreibe das Sprint-Review als Markdown (ohne Code-Fence). Gliederung:
 ## Wo der Auftraggeber gefragt ist
 ## Empfehlung für den nächsten Sprint
 
-Keine Selbstbeweihräucherung, keine erfundenen Ergebnisse: Nur was aus Tickets und Commits hervorgeht.`,
+Ist die Integrationsprüfung NICHT bestanden, gehört das unter "Was offen blieb" – kein Blocker für den Sprintabschluss, aber ehrlich benennen.
+Keine Selbstbeweihräucherung, keine erfundenen Ergebnisse: Nur was aus Tickets, Commits und der Integrationsprüfung hervorgeht.`,
   });
 
   if (project.workspacePath) {
+    const docContent = `${text}\n\n## Anhang: Integrationsprüfung (voller Stack)\n${integrationReport}\n`;
     await writeFiles(project.workspacePath, [
-      { path: `docs/sprints/sprint-${sprint.number}-review.md`, content: text },
+      { path: `docs/sprints/sprint-${sprint.number}-review.md`, content: docContent },
     ]);
     await commitAll(project.workspacePath, {
       message: `Sprint ${sprint.number} abgeschlossen\n\nReview von ${agent.name} (Scrum Master).`,
       authorName: agent.name,
+    });
+  }
+
+  if (!integration.skipped) {
+    await logActivity({
+      projectId,
+      actor: agent.name,
+      agentId: agent.id,
+      action: "integration_check",
+      detail: `Sprint ${sprint.number}: ${integrationReport}`,
     });
   }
 

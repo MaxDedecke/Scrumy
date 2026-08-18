@@ -39,7 +39,7 @@ export default async function ProjectPreviewPage({
 
   return (
     <Panel
-      title="Vorschau"
+      title="Benutzeroberfläche"
       className="flex-1"
       padded={false}
       scroll={false}

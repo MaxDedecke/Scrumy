@@ -13,6 +13,7 @@ import { prisma } from "@/lib/prisma";
 import { listWorkspaceProjectIds, removeWorkspace } from "@/lib/workspace";
 import { deleteUnassignedAgents } from "@/lib/purge";
 import { reconcileOrphanPreviewContainers } from "@/lib/preview";
+import { reconcileOrphanLiveStacks } from "@/lib/liveStack";
 import { cancelJobsOfDeletedAgents, unlockStaleJobs } from "./queue";
 import { openClarification } from "./clarification";
 
@@ -63,6 +64,11 @@ export async function reconcileOrphanWorkspaces(): Promise<number> {
   // reconcileOrphanPreviewContainers.
   const previews = await reconcileOrphanPreviewContainers();
   if (previews > 0) console.log(`[worker] ${previews} verwaiste Vorschau-Container entfernt.`);
+
+  // Und Live-Anwendungs-Stacks, deren Projekt schon weg ist – siehe
+  // reconcileOrphanLiveStacks.
+  const liveStacks = await reconcileOrphanLiveStacks();
+  if (liveStacks > 0) console.log(`[worker] ${liveStacks} verwaiste Live-Stacks entfernt.`);
 
   return orphans.length;
 }

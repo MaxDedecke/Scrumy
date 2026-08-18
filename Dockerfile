@@ -26,8 +26,11 @@ ENV NODE_ENV=production
 # src/lib/preview.ts: jede Frontend-Vorschau laeuft als eigener Sibling-
 # Container statt als Kindprozess in diesem Container) als auch "worker"
 # (src/lib/testRun.ts: QAs automatische Pruefungen laufen genauso als
-# Sibling-Container) – ein Image fuer beide Dienste.
-RUN apk add --no-cache git docker-cli su-exec
+# Sibling-Container) – ein Image fuer beide Dienste. docker-cli-compose
+# liefert das "docker compose"-Plugin dazu, gebraucht von src/lib/liveStack.ts
+# (voller Compose-Stack des Kundenprojekts statt nur einem einzelnen
+# Container).
+RUN apk add --no-cache git docker-cli docker-cli-compose su-exec
 
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs

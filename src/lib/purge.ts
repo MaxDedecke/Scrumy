@@ -17,6 +17,7 @@
 // `stopProjectWork` VOR dem Loeschen und `purgeProjectRemains` DANACH auf.
 import { prisma } from "@/lib/prisma";
 import { killPreviewIfRunning } from "@/lib/preview";
+import { killLiveStackIfRunning } from "@/lib/liveStack";
 import { removeWorkspace } from "@/lib/workspace";
 import { cancelAgentJobs } from "../../worker/queue";
 
@@ -26,13 +27,15 @@ export interface ProjectToPurge {
 }
 
 /// Nimmt die wartende Arbeit der betroffenen Teams aus der Queue und beendet
-/// eine laufende Frontend-Vorschau (siehe src/lib/preview.ts). Vor dem
-/// Loeschen, damit weder ein Job noch ein Vorschau-Prozess auf ein
-/// Arbeitsverzeichnis zugreift, das gleich verschwindet.
+/// eine laufende Frontend-Vorschau sowie eine laufende Live-Anwendung (siehe
+/// src/lib/preview.ts bzw. src/lib/liveStack.ts). Vor dem Loeschen, damit
+/// weder ein Job noch ein laufender Container-Stack auf ein Arbeitsverzeichnis
+/// zugreift, das gleich verschwindet.
 export async function stopProjectWork(projectIds: string[]): Promise<number> {
   if (projectIds.length === 0) return 0;
 
   await Promise.all(projectIds.map((id) => killPreviewIfRunning(id)));
+  await Promise.all(projectIds.map((id) => killLiveStackIfRunning(id)));
 
   const assignments = await prisma.agentAssignment.findMany({
     where: { projectId: { in: projectIds } },
