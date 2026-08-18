@@ -33,6 +33,10 @@
   --color-accent-soft: rgba(122, 165, 247, 0.12);
   --color-accent-border: rgba(122, 165, 247, 0.32);
 
+  /* Marke: das giftgrüne S im Logo – bewusst getrennt vom UI-Akzent (Blau),
+     nur fürs Wortmarken-Icon in der Kopfzeile. */
+  --color-brand: #c6ff0a;
+
   /* Feste Status-Palette (nie für Kategorien wiederverwendet). */
   --color-good: #35c05a;
   --color-warning: #fab219;

@@ -4,7 +4,7 @@ import "./globals.css";
 import { prisma } from "@/lib/prisma";
 import { Sidebar } from "@/components/Sidebar";
 import { ToastProvider } from "@/components/Toast";
-import { SearchIcon, SettingsIcon } from "@/components/icons";
+import { ScrumyMark, SearchIcon, SettingsIcon } from "@/components/icons";
 
 export const metadata: Metadata = {
   title: "Scrumy",
@@ -36,8 +36,8 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
                 href="/"
                 className="flex shrink-0 items-center gap-2.5 text-sm font-semibold tracking-tight text-ink"
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-solid text-sm font-bold text-white">
-                  S
+                <span className="flex h-7 w-7 items-center justify-center text-brand">
+                  <ScrumyMark className="h-6 w-6 -rotate-6" />
                 </span>
                 Scrumy
               </Link>
