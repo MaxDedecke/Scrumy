@@ -31,7 +31,7 @@
 // Contexts sind unproblematisch (das CLI liest sie lokal und laedt sie hoch).
 // TEAM_GRUNDREGELN weist die Agenten deshalb an, Code beim Build zu kopieren.
 import { execFile, spawn } from "node:child_process";
-import { appendFileSync, closeSync, openSync, readFileSync } from "node:fs";
+import { appendFileSync, closeSync, openSync, readFileSync, unlinkSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -84,6 +84,30 @@ function readLiveLog(projectId: string): string {
     return lines.slice(-LOG_LINES).join("\n").trim();
   } catch {
     return "";
+  }
+}
+
+/// Oeffnet die Log-Datei zum Schreiben ("w") – best effort. Ein Rest aus
+/// einem frueheren Lauf, der aus welchem Grund auch immer einem anderen
+/// Nutzer gehoert (z.B. ein Container, der kurzzeitig als root lief), blockt
+/// sonst auf Dauer JEDEN weiteren Start dieses Projekts: /tmp traegt das
+/// Sticky-Bit, also darf nur der Eigentuemer die Datei loeschen – "unlinkSync"
+/// schlaegt dann ebenfalls fehl, das faengt der aeussere try/catch ab. Die
+/// Log-Datei ist reine Diagnose (Anzeige im "Zuletzt"-Panel, siehe
+/// readLiveLog); wenn sie partout nicht anzulegen ist, startet der Stack
+/// trotzdem – nur ohne Log-Tail statt mit "nix passiert".
+function openLiveLog(projectId: string): number | null {
+  const logPath = liveLogPath(projectId);
+  try {
+    return openSync(logPath, "w");
+  } catch {
+    try {
+      unlinkSync(logPath);
+      return openSync(logPath, "w");
+    } catch (error) {
+      console.error(`Live-Log fuer Projekt ${projectId} konnte nicht angelegt werden, starte ohne Log:`, error);
+      return null;
+    }
   }
 }
 
@@ -181,20 +205,16 @@ export async function startLiveStack(projectId: string, trigger: LiveTrigger = "
   await removeStackByLabel(name).catch(() => {});
 
   const logPath = liveLogPath(projectId);
-  let fd: number;
-  try {
-    fd = openSync(logPath, "w");
-  } catch (error) {
-    return fail(`Log-Datei für den Start konnte nicht angelegt werden: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  const fd = openLiveLog(projectId);
 
   try {
     const child = spawn(
       "docker",
       ["compose", "-f", composeFile, "-p", name, "up", "-d", "--build", "--remove-orphans"],
-      { stdio: ["ignore", fd, fd], detached: true },
+      { stdio: ["ignore", fd ?? "ignore", fd ?? "ignore"], detached: true },
     );
     child.on("close", (code) => {
+      if (fd === null) return;
       try {
         appendFileSync(logPath, `\n${START_MARKER} exit=${code}\n`);
         closeSync(fd);
@@ -205,7 +225,7 @@ export async function startLiveStack(projectId: string, trigger: LiveTrigger = "
     });
     child.unref();
   } catch (error) {
-    closeSync(fd);
+    if (fd !== null) closeSync(fd);
     const message = error instanceof Error ? error.message : String(error);
     await prisma.project.update({
       where: { id: projectId },
