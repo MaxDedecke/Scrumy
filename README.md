@@ -22,8 +22,10 @@ einer Firma:
 
 1. **Mannschaft aufstellen** – fehlende Rollen werden mit Namen besetzt
    (`src/lib/team.ts`).
-2. **Arbeitsplatz einrichten** – ein echtes lokales Git-Repository pro Projekt
-   (`src/lib/workspace.ts`), Konzept und Anforderungen landen als Dateien darin.
+2. **Arbeitsplatz einrichten** – ein hinterlegtes GitHub-Repository wird
+   geklont, andernfalls entsteht ein lokales Git-Repository
+   (`src/lib/workspace.ts`). Konzept und Anforderungen landen als Dateien
+   darin; jeder Team-Commit wird bei konfiguriertem `origin` direkt gepusht.
 3. **Auftrag verstehen** – der Product Owner schreibt `docs/verstaendnis.md`
    (Umfang, Annahmen, Risiken, offene Fragen) und committet es.
 4. **Scrum** – Sprint-Planung (Tickets + Ziel) → je Ticket: Planung, Umsetzung
@@ -59,8 +61,9 @@ deployt werden.
   der Support-Agent per Jira-Connector, der Backend-/DevOps-Agent per Git-Connector
   im Projekt-Repo. Kundenweit (`projectId` leer, z.B. das eine Jira-Postfach) oder
   projektspezifisch (z.B. genau 1 Repo). `config` enthält nur nicht-geheime
-  Verbindungsdaten; Zugangsdaten liegen über `credentialRef` in einem Secret-Store,
-  nicht in der DB. Konfiguriert wird das je Projekt unter "Team & Konnektoren".
+  Verbindungsdaten; Zugangsdaten liegen über `credentialRef` in der Umgebung
+  (`env:GITHUB_TOKEN`), nicht in der DB. Konfiguriert wird das je Projekt unter
+  "Team & Konnektoren".
 - **LlmProfile** – **global, nicht pro Kunde** – ein Cloud-Modell oder ein lokaler
   Ollama-Container, den Agenten zugewiesen werden. Verwaltung unter
   `/settings/llm-profiles`.
@@ -164,6 +167,33 @@ docker volume create scrumy_scrumy_db_data
 docker volume create scrumy_scrumy_workspaces
 ```
 
+## GitHub-Repository anbinden
+
+In den Projekt-Einstellungen eine HTTPS-URL wie
+`https://github.com/organisation/repository.git` hinterlegen. Beim ersten
+Teamstart klont Scrumy das Repository in den Projekt-Workspace. Ist das Remote
+leer, legt Scrumy `main` samt Grund-`.gitignore` an. Danach wird jeder Commit
+des Teams automatisch nach `origin` gepusht; ein abgelehnter Push lässt den
+Arbeitsschritt sichtbar scheitern, statt nur lokal Erfolg zu melden.
+
+Für private Repositories und Schreibzugriff `GITHUB_TOKEN` in `.env` setzen.
+Geeignet ist ein Fine-grained Personal Access Token oder GitHub-App-Token mit
+`Contents: Read and write` für genau die betroffenen Repositories. Der Token
+wird über Git Askpass nur an den jeweiligen Git-Prozess gereicht und weder in
+der Remote-URL noch in `.git/config` oder der Datenbank gespeichert.
+
+Optional kann unter „Team & Konnektoren“ ein projektspezifischer, aktiver
+`GIT`-Connector angelegt werden:
+
+```json
+{"repoUrl":"https://github.com/organisation/repository.git","defaultBranch":"main"}
+```
+
+Als Credential-Referenz wird `env:GITHUB_TOKEN` verwendet. Die URL im
+Projektfeld hat Vorrang vor einer URL im Connector. Für das Demo-Projekt kann
+`DEMO_REPO_URL` gesetzt werden; ohne diese Variable bleibt der Seed bewusst
+lokal und pusht nirgendwohin.
+
 ## RunPod: eigenes Modell statt Cloud-Anbieter
 
 Für Testläufe mit einem selbst gehosteten Modell – z.B. um in einer
@@ -261,9 +291,9 @@ einer separaten, horizontal skalierbaren Queue.
   `ticketWork` (planen → umsetzen → QA-Review), `sprintReview`, `teamInquiry`.
   Jeder Task reiht am Ende den nächsten ein (`worker/orchestration.ts`); ein
   pausiertes Projekt bricht die Kette beim nächsten Schritt ab.
-- `src/lib/workspace.ts` – die Git-Schicht: Repo anlegen, Dateien schreiben
+- `src/lib/workspace.ts` – die Git-Schicht: Repo klonen/anlegen, Dateien schreiben
   (mit Pfadprüfung gegen Ausbrüche aus dem Projektverzeichnis), im Namen des
-  Agenten committen, Log/Diff lesen. Die Repos liegen im Volume
+  Agenten committen, bei konfiguriertem Remote pushen, Log/Diff lesen. Die Repos liegen im Volume
   `scrumy_workspaces` (`WORKSPACE_ROOT`, Standard `/workspaces`), das sich `app`
   (liest) und `worker` (schreibt) teilen.
 - Ein Schritt dauert Minuten. Der `worker`-Service bekommt deshalb
@@ -284,7 +314,6 @@ Datenmodell, CRUD-Frontend, Discovery/Konzept-Flow und die Agenten-Orchestrierun
   eingehende Anfragen in den laufenden Sprint-Rhythmus.
 - Tests im Kundenprojekt ausführen (Build/Testlauf im Workspace) und das
   Ergebnis in den QA-Review geben, statt nur den Diff zu lesen.
-- Push in ein echtes Remote (`Project.repoUrl`) statt nur lokaler Historie.
 - Connector-Implementierungen (Jira-API-Client, E-Mail-Eingang) inkl. Status-
   Rücksync über `Ticket.externalRef`.
 - Auth & Mandantentrennung (Kunden sehen nur ihr eigenes Projekt/Postfach).

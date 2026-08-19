@@ -309,6 +309,7 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   autopilot_on: "Autopilot an",
   autopilot_off: "Autopilot aus",
   repo_created: "Repository angelegt",
+  repo_cloned: "Repository geklont",
   repo_reused: "Repository weiterverwendet",
   kickoff_completed: "Auftrag verstanden",
   sprint_planned: "Sprint geplant",

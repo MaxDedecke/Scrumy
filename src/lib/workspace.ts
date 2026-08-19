@@ -7,8 +7,8 @@
 // WARUM (Prompt + Antwort des Modells), das Repo zeigt das WAS.
 //
 // Das Verzeichnis liegt im Workspace-Volume (siehe docker-compose.yml), das
-// sich `app` und `worker` teilen: Der Worker schreibt (Agenten committen), die
-// App liest (Commit-Historie und Diffs in der Oberflaeche).
+// sich `app` und `worker` teilen: Der Worker schreibt (Agenten committen und
+// pushen), die App liest (Commit-Historie und Diffs in der Oberflaeche).
 import { execFile } from "node:child_process";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -19,7 +19,7 @@ const execFileAsync = promisify(execFile);
 /// Absichtlich ohne Shell (`execFile`, kein `exec`): Commit-Messages und
 /// Dateinamen kommen aus Modellantworten und duerfen niemals als Shell-Code
 /// interpretiert werden.
-async function git(cwd: string, args: string[]): Promise<string> {
+async function git(cwd: string, args: string[], token?: string): Promise<string> {
   const { stdout } = await execFileAsync("git", args, {
     cwd,
     maxBuffer: 20 * 1024 * 1024,
@@ -30,9 +30,165 @@ async function git(cwd: string, args: string[]): Promise<string> {
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_SYSTEM: "/dev/null",
       GIT_TERMINAL_PROMPT: "0",
+      ...(token
+        ? {
+            // Der Token bleibt ausschliesslich in der Umgebung dieses einen
+            // Git-Prozesses. Er landet weder in der Remote-URL noch in
+            // `.git/config`, Prozessargumenten, Datenbank oder Logs.
+            GIT_ASKPASS: process.env.SCRUMY_GIT_ASKPASS || path.join(process.cwd(), "docker/git-askpass.sh"),
+            GIT_ASKPASS_REQUIRE: "force",
+            SCRUMY_GIT_TOKEN: token,
+          }
+        : {}),
     },
   });
   return stdout;
+}
+
+export interface RemoteRepositoryOptions {
+  remoteUrl: string;
+  /** Zielbranch im Remote. Ohne Angabe bleibt der beim Klonen ausgecheckte
+   *  Default-Branch bzw. der aktuelle lokale Branch massgeblich. */
+  defaultBranch?: string | null;
+  /** Aktuell unterstuetzt: `env:NAME`. Ohne Referenz verwendet GitHub
+   *  automatisch `GITHUB_TOKEN`. Der Wert selbst wird nie gespeichert. */
+  credentialRef?: string | null;
+}
+
+function normalizedRemote(options?: RemoteRepositoryOptions | null): RemoteRepositoryOptions | null {
+  if (!options?.remoteUrl.trim()) return null;
+  const remoteUrl = options.remoteUrl.trim();
+  try {
+    const parsed = new URL(remoteUrl);
+    if (parsed.username || parsed.password) {
+      throw new WorkspaceError(
+        "Die Repository-URL darf keine Zugangsdaten enthalten. Verwende eine Credential-Referenz wie env:GITHUB_TOKEN.",
+      );
+    }
+  } catch (error) {
+    // SCP-artige SSH-URLs und lokale Pfade sind gueltige Git-Remotes, obwohl
+    // `URL` sie nicht versteht. Nur unser eigener Sicherheitsfehler darf hier
+    // nicht als vermeintlicher Parse-Fehler verschluckt werden.
+    if (error instanceof WorkspaceError) throw error;
+  }
+
+  const defaultBranch = options.defaultBranch?.trim() || null;
+  if (defaultBranch && !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(defaultBranch)) {
+    throw new WorkspaceError(`Ungueltiger Git-Branch: ${defaultBranch}`);
+  }
+  return { remoteUrl, defaultBranch, credentialRef: options.credentialRef?.trim() || null };
+}
+
+function githubHttpsRemote(remoteUrl: string): boolean {
+  try {
+    const parsed = new URL(remoteUrl);
+    return parsed.protocol === "https:" && parsed.hostname.toLowerCase() === "github.com";
+  } catch {
+    return false;
+  }
+}
+
+function remoteToken(remote: RemoteRepositoryOptions): string | undefined {
+  const credentialRef = remote.credentialRef?.trim();
+  let envName: string | null = null;
+  if (credentialRef) {
+    const match = /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(credentialRef);
+    if (!match) {
+      throw new WorkspaceError(
+        `Credential-Referenz „${credentialRef}" wird noch nicht unterstuetzt. Verwende env:GITHUB_TOKEN.`,
+      );
+    }
+    envName = match[1];
+  } else if (githubHttpsRemote(remote.remoteUrl)) {
+    envName = "GITHUB_TOKEN";
+  }
+
+  if (!envName) return undefined;
+  const token = process.env[envName]?.trim();
+  if (!token) {
+    throw new WorkspaceError(
+      `GitHub-Zugang fehlt: Die Umgebungsvariable ${envName} ist im Worker nicht gesetzt.`,
+    );
+  }
+  return token;
+}
+
+async function localGitConfig(dir: string, key: string): Promise<string | null> {
+  try {
+    return (await git(dir, ["config", "--local", "--get", key])).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function unsetLocalGitConfig(dir: string, key: string): Promise<void> {
+  await git(dir, ["config", "--local", "--unset-all", key]).catch(() => {});
+}
+
+async function storedRemoteOptions(dir: string): Promise<RemoteRepositoryOptions | null> {
+  const remoteUrl = await localGitConfig(dir, "remote.origin.url");
+  if (!remoteUrl) return null;
+  return {
+    remoteUrl,
+    defaultBranch: await localGitConfig(dir, "scrumy.remoteBranch"),
+    credentialRef: await localGitConfig(dir, "scrumy.credentialRef"),
+  };
+}
+
+/// Haelt `origin` und die nicht-geheimen Scrumy-Metadaten synchron mit der
+/// Projektkonfiguration. Eine entfernte URL trennt auch das lokale Repo wieder
+/// vom Remote; eine geaenderte URL aktualisiert sie ohne neues Klonen.
+export async function configureRepoRemote(
+  dir: string,
+  options?: RemoteRepositoryOptions | null,
+): Promise<void> {
+  const remote = normalizedRemote(options);
+  const currentUrl = await localGitConfig(dir, "remote.origin.url");
+
+  if (!remote) {
+    if (currentUrl) await git(dir, ["remote", "remove", "origin"]);
+    await unsetLocalGitConfig(dir, "scrumy.remoteBranch");
+    await unsetLocalGitConfig(dir, "scrumy.credentialRef");
+    return;
+  }
+
+  // Fehlende/ungueltige Credential-Referenzen fallen vor einem langen
+  // Agentenlauf auf, nicht erst beim abschliessenden Push.
+  remoteToken(remote);
+  if (currentUrl) await git(dir, ["remote", "set-url", "origin", remote.remoteUrl]);
+  else await git(dir, ["remote", "add", "origin", remote.remoteUrl]);
+
+  if (remote.defaultBranch) await git(dir, ["config", "--local", "scrumy.remoteBranch", remote.defaultBranch]);
+  else await unsetLocalGitConfig(dir, "scrumy.remoteBranch");
+  if (remote.credentialRef) await git(dir, ["config", "--local", "scrumy.credentialRef", remote.credentialRef]);
+  else await unsetLocalGitConfig(dir, "scrumy.credentialRef");
+}
+
+async function currentBranch(dir: string): Promise<string> {
+  try {
+    return (await git(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"])).trim();
+  } catch {
+    throw new WorkspaceError("Das Projekt-Repository steht auf einem detached HEAD und kann nicht automatisch pushen.");
+  }
+}
+
+/// Pusht den aktuellen Stand, sofern `origin` konfiguriert ist. `--set-upstream`
+/// macht sowohl den ersten Push in ein leeres GitHub-Repo als auch alle
+/// folgenden Pushes deterministisch; Force-Pushes sind bewusst ausgeschlossen.
+export async function pushRepo(dir: string): Promise<void> {
+  const remote = await storedRemoteOptions(dir);
+  if (!remote) return;
+  const localBranch = await currentBranch(dir);
+  const remoteBranch = remote.defaultBranch || localBranch;
+  const token = remoteToken(remote);
+  try {
+    await git(dir, ["push", "--set-upstream", "origin", `HEAD:refs/heads/${remoteBranch}`], token);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new WorkspaceError(
+      `Push nach origin/${remoteBranch} fehlgeschlagen. Prüfe Repository-URL, Schreibrecht und Branch-Schutz. ${detail}`,
+    );
+  }
 }
 
 export function workspaceRoot(): string {
@@ -46,24 +202,100 @@ export function workspacePathFor(projectId: string): string {
   return path.join(/* turbopackIgnore: true */ workspaceRoot(), projectId);
 }
 
-/// Legt das Repo an, falls es noch nicht existiert, und gibt seinen Pfad
-/// zurueck. Idempotent – ein zweiter Team-Start loescht keine Arbeit.
-export async function ensureRepo(projectId: string): Promise<{ dir: string; created: boolean }> {
+/// Klont das hinterlegte Repository oder legt ohne Remote ein neues lokales
+/// Repo an. Idempotent – ein zweiter Team-Start loescht keine Arbeit. Ein
+/// bestehendes lokales Repo bekommt eine spaeter hinterlegte Remote-URL und
+/// wird sofort gepusht, damit auch Bestandsprojekte angebunden werden koennen.
+export async function ensureRepo(
+  projectId: string,
+  options?: RemoteRepositoryOptions | null,
+): Promise<{ dir: string; created: boolean; cloned: boolean }> {
+  if (!/^[A-Za-z0-9_-]+$/.test(projectId)) {
+    throw new WorkspaceError(`Ungueltige Projekt-ID: ${projectId}`);
+  }
   const dir = workspacePathFor(projectId);
-  await mkdir(dir, { recursive: true });
 
+  let repoExists = false;
   try {
     await git(dir, ["rev-parse", "--git-dir"]);
-    return { dir, created: false };
+    repoExists = true;
   } catch {
+    // Ein noch nicht vorhandenes Verzeichnis und ein Verzeichnis ohne `.git`
+    // sind beides Kandidaten fuer die erstmalige Einrichtung unten.
+  }
+  if (repoExists) {
+    await configureRepoRemote(dir, options);
+    await pushRepo(dir);
+    return { dir, created: false, cloned: false };
+  }
+
+  const remote = normalizedRemote(options);
+  await mkdir(path.dirname(dir), { recursive: true });
+  const existingEntries = await readdir(dir).catch(() => []);
+  if (existingEntries.length > 0) {
+    throw new WorkspaceError(`Arbeitsverzeichnis existiert, ist aber kein Git-Repository: ${dir}`);
+  }
+
+  let cloned = false;
+  if (remote) {
+    const token = remoteToken(remote);
+    await rm(dir, { recursive: true, force: true });
+    try {
+      await git(path.dirname(dir), ["clone", "--origin", "origin", "--", remote.remoteUrl, dir], token);
+      cloned = true;
+    } catch (error) {
+      await rm(dir, { recursive: true, force: true });
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new WorkspaceError(`Repository konnte nicht geklont werden. ${detail}`);
+    }
+  } else {
+    await mkdir(dir, { recursive: true });
     await git(dir, ["init", "--initial-branch=main"]);
-    // Identitaet setzen wir pro Commit (der jeweilige Agent ist der Autor),
-    // hier nur das, was fuer jeden Commit gleich gilt.
-    await git(dir, ["config", "commit.gpgsign", "false"]);
+  }
+
+  // Identitaet setzen wir pro Commit (der jeweilige Agent ist der Autor),
+  // hier nur das, was fuer jeden Commit gleich gilt.
+  await git(dir, ["config", "commit.gpgsign", "false"]);
+
+  if (cloned && remote?.defaultBranch) {
+    let hasCommit = true;
+    try {
+      await git(dir, ["rev-parse", "--verify", "HEAD"]);
+    } catch {
+      hasCommit = false;
+    }
+    if (!hasCommit) {
+      await git(dir, ["symbolic-ref", "HEAD", `refs/heads/${remote.defaultBranch}`]);
+    } else {
+      let remoteBranchExists = true;
+      try {
+        await git(dir, ["rev-parse", "--verify", `refs/remotes/origin/${remote.defaultBranch}`]);
+      } catch {
+        remoteBranchExists = false;
+      }
+      await git(
+        dir,
+        remoteBranchExists
+          ? ["checkout", "-B", remote.defaultBranch, `origin/${remote.defaultBranch}`]
+          : ["checkout", "-B", remote.defaultBranch],
+      );
+    }
+  }
+  await configureRepoRemote(dir, remote);
+
+  let hasCommit = true;
+  try {
+    await git(dir, ["rev-parse", "--verify", "HEAD"]);
+  } catch {
+    hasCommit = false;
+  }
+  if (!hasCommit) {
     await writeFile(path.join(dir, ".gitignore"), DEFAULT_GITIGNORE, "utf8");
     await commitAll(dir, { message: "Repository eingerichtet", authorName: "Scrumy" });
-    return { dir, created: true };
+  } else {
+    await pushRepo(dir);
   }
+  return { dir, created: true, cloned };
 }
 
 /// Ohne das landet der erste `npm install` eines Umsetzer-Agenten (via
@@ -209,9 +441,11 @@ export interface CommitResult {
   changedFiles: number;
 }
 
-/// Committet alles, was im Arbeitsverzeichnis liegt, im Namen eines Agenten.
+/// Committet alles im Namen eines Agenten und pusht den Stand, falls `origin`
+/// konfiguriert ist.
 /// Gibt `null` zurueck, wenn es nichts zu committen gab (ein Agent, der nichts
-/// geaendert hat, soll keinen leeren Commit hinterlassen).
+/// geaendert hat, soll keinen leeren Commit hinterlassen). Auch dann wird ein
+/// eventuell nach einem frueheren Netzwerkfehler ausstehender Push wiederholt.
 export async function commitAll(
   dir: string,
   { message, authorName }: { message: string; authorName: string },
@@ -220,7 +454,10 @@ export async function commitAll(
 
   const status = await git(dir, ["status", "--porcelain"]);
   const changedFiles = status.split("\n").filter((line) => line.trim().length > 0).length;
-  if (changedFiles === 0) return null;
+  if (changedFiles === 0) {
+    await pushRepo(dir);
+    return null;
+  }
 
   const email = `${slugForEmail(authorName)}@agents.scrumy.local`;
   await git(dir, [
@@ -234,6 +471,7 @@ export async function commitAll(
   ]);
 
   const sha = (await git(dir, ["rev-parse", "HEAD"])).trim();
+  await pushRepo(dir);
   return { sha, shortSha: sha.slice(0, 8), changedFiles };
 }
 

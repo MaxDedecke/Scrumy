@@ -14,6 +14,7 @@ import { commitAll, ensureRepo, writeFiles } from "@/lib/workspace";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { handOverTo, loadWorkingProject } from "../orchestration";
+import { remoteSettingsForProject } from "../projectRepository";
 import type { TeamKickoffPayload } from "../taskTypes";
 
 const teamKickoff: Task<"teamKickoff"> = async (payload: TeamKickoffPayload, helpers) => {
@@ -36,7 +37,8 @@ const teamKickoff: Task<"teamKickoff"> = async (payload: TeamKickoffPayload, hel
   });
 
   // --- 1. Arbeitsplatz einrichten -------------------------------------------
-  const { dir, created } = await ensureRepo(projectId);
+  const remote = await remoteSettingsForProject(project);
+  const { dir, created, cloned } = await ensureRepo(projectId, remote);
   if (project.workspacePath !== dir) {
     await prisma.project.update({ where: { id: projectId }, data: { workspacePath: dir } });
   }
@@ -44,8 +46,12 @@ const teamKickoff: Task<"teamKickoff"> = async (payload: TeamKickoffPayload, hel
     projectId,
     actor: agent.name,
     agentId: agent.id,
-    action: created ? "repo_created" : "repo_reused",
-    detail: created ? `Lokales Git-Repository angelegt (${dir})` : `Bestehendes Repository weiterverwendet (${dir})`,
+    action: cloned ? "repo_cloned" : created ? "repo_created" : "repo_reused",
+    detail: cloned
+      ? `Git-Repository von ${remote?.remoteUrl} geklont (${dir})`
+      : created
+        ? `Lokales Git-Repository angelegt (${dir})`
+        : `Bestehendes Repository weiterverwendet (${dir})`,
   });
 
   // --- 2. Auftragsunterlagen ins Repo ---------------------------------------

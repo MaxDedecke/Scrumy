@@ -101,6 +101,13 @@ const sprintPlanning: Task<"sprintPlanning"> = async (payload: SprintPlanningPay
     helpers.logger.info(
       `Sprint ${latestSprint.number} ist bereits ${latestSprint.status} – Sprint-Planung übersprungen (Doppel-Anstoß).`,
     );
+    // Nach einem erfolgreichen lokalen Commit, dessen Remote-Push kurzzeitig
+    // scheiterte, kommt derselbe Planungsjob ebenfalls hier an: Der zentrale
+    // Repo-Abgleich hat den Commit beim Retry bereits gepusht, aber der erste
+    // Anlauf konnte den nächsten Ticket-Job noch nicht einreihen. Das
+    // jobKey-Deduping der Ticket-Queue macht den Aufruf auch für einen echten
+    // Doppel-Anstoß sicher.
+    await continueSprint(projectId, latestSprint.id);
     return;
   }
 

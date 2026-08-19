@@ -149,6 +149,9 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
+      # HTTPS-Schreibzugriff auf GitHub-Repositories. Der Token wird nur dem
+      # Git-Prozess via Askpass gegeben und nie in der Remote-URL gespeichert.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # Automatische Pruefungen (src/lib/testRun.ts): derselbe generische
       # Runner wie die Frontend-Vorschau (node+npm, richtige UID fuers
       # Workspace-Volume) – kein eigenes Netz noetig, der Lauf ist synchron

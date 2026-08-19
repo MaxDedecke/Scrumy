@@ -137,7 +137,8 @@ export default async function DashboardPage() {
                   </div>
                   <div>
                     <label className={labelClass}>Repository-URL (optional)</label>
-                    <input name="repoUrl" className={inputClass} placeholder="https://github.com/…" />
+                    <input name="repoUrl" type="url" className={inputClass} placeholder="https://github.com/…" />
+                    <p className="mt-1 text-xs text-ink-4">Wird beim Teamstart geklont; neue Commits werden automatisch gepusht.</p>
                   </div>
                   <div className="sm:col-span-2">
                     <label className={labelClass}>Beschreibung (optional)</label>

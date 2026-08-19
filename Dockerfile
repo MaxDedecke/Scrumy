@@ -42,7 +42,7 @@ RUN mkdir -p /workspaces && chown nextjs:nodejs /workspaces
 ENV WORKSPACE_ROOT=/workspaces
 
 COPY --from=builder --chown=nextjs:nodejs /app ./
-RUN chmod +x docker/app-entrypoint.sh
+RUN chmod +x docker/app-entrypoint.sh docker/git-askpass.sh
 
 USER nextjs
 EXPOSE 3000

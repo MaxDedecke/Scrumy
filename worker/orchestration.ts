@@ -14,6 +14,7 @@ import { enqueueAgentJob } from "./queue";
 import { logActivity } from "./agentRun";
 import { blockedTicketIds, openClarification, projectBlocker, sprintBlocker } from "./clarification";
 import { TICKET_ATTEMPT_GRANT } from "@/lib/clarificationOptions";
+import { prepareProjectRepository } from "./projectRepository";
 
 /// Vorgabe fuer das Sprint-Budget eines Projekts (`Project.sprintBudget`).
 /// Ohne Obergrenze wuerde das Team unbegrenzt weiterbauen und Modellkosten
@@ -30,6 +31,7 @@ export async function loadWorkingProject(projectId: string): Promise<Project | n
   if (!project) return null;
   if (project.status !== "ACTIVE") return null;
   if (await projectBlocker(projectId)) return null;
+  await prepareProjectRepository(project);
   return project;
 }
 

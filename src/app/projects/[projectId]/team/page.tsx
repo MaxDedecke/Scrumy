@@ -296,7 +296,7 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                 <input
                   name="credentialRef"
                   className={inputClass}
-                  placeholder="vault://…, nie den Schlüssel selbst"
+                  placeholder="GitHub: env:GITHUB_TOKEN; sonst vault://…"
                 />
               </div>
               <div className="sm:col-span-2">
@@ -337,7 +337,14 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
           </div>
           <div>
             <label className={labelClass}>Repository-URL</label>
-            <input name="repoUrl" defaultValue={project.repoUrl ?? ""} className={inputClass} />
+            <input
+              name="repoUrl"
+              type="url"
+              defaultValue={project.repoUrl ?? ""}
+              placeholder="https://github.com/organisation/repository.git"
+              className={inputClass}
+            />
+            <p className="mt-1 text-xs text-ink-4">HTTPS-Repo; Scrumy klont es und pusht jeden Team-Commit nach origin.</p>
           </div>
           <div>
             <label className={labelClass}>Beschreibung</label>
