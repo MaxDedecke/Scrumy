@@ -60,9 +60,31 @@ export async function ensureRepo(projectId: string): Promise<{ dir: string; crea
     // Identitaet setzen wir pro Commit (der jeweilige Agent ist der Autor),
     // hier nur das, was fuer jeden Commit gleich gilt.
     await git(dir, ["config", "commit.gpgsign", "false"]);
+    await writeFile(path.join(dir, ".gitignore"), DEFAULT_GITIGNORE, "utf8");
+    await commitAll(dir, { message: "Repository eingerichtet", authorName: "Scrumy" });
     return { dir, created: true };
   }
 }
+
+/// Ohne das landet der erste `npm install` eines Umsetzer-Agenten (via
+/// run_command, siehe worker/agentTools.ts) komplett in Git: node_modules
+/// hat leicht zehntausende Dateien, und jeder folgende `git status`/`git
+/// add -A`/`git ls-files` (list_files, commitAll, ...) muss sie durchwühlen
+/// – bis ein Kommando das 20MB-Ausgabelimit reißt und den ganzen Job crasht
+/// (siehe git() unten), statt nur den Ticket-Versuch fehlschlagen zu lassen.
+/// Beobachtet im OnwPhoto-Projekt: 2236 committete node_modules-Dateien,
+/// danach ein toter Worker-Job ohne jede sichtbare Fehlermeldung am Ticket.
+const DEFAULT_GITIGNORE = `node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+.env
+.env.*
+*.log
+.DS_Store
+`;
 
 /// Loescht das Arbeitsverzeichnis eines Projekts mitsamt der Software, die das
 /// Team dort gebaut hat. Gegenstueck zu `ensureRepo` – wird ein Projekt

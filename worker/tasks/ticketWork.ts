@@ -509,7 +509,25 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
       helpers.logger.info(`Ticket ${ticket.title} war zu groß und wurde automatisch zerlegt.`);
       return;
     }
-    throw error;
+    // Alles andere ist ein unerwarteter Absturz mitten im Werkzeug-Loop (z.B.
+    // eine Git-Operation, deren Ausgabe ein Puffer-Limit reißt – beobachtet
+    // im OnwPhoto-Projekt: node_modules ohne .gitignore committet, danach
+    // 'stdout maxBuffer length exceeded'). Ohne Fangnetz hier wirft graphile-
+    // worker den Job nach MAX_ATTEMPTS einfach weg: das Ticket bleibt für
+    // immer auf IN_PROGRESS stehen, ohne dass irgendwo ein Fehler sichtbar
+    // wird. Lieber wie einen regulären Fehlschlag behandeln – Mensch schaut
+    // drauf, statt dass der Job spurlos verschwindet.
+    const message = error instanceof Error ? error.message : String(error);
+    helpers.logger.error(`Ticket ${ticket.title}: Umsetzungsloop abgestürzt – ${message}`);
+    await requestHumanReview(
+      projectId,
+      ticketId,
+      ticket.title,
+      `Unerwarteter Fehler beim Umsetzen (Anlauf ${attempt}): ${message.slice(0, 500)}`,
+      true,
+    );
+    if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+    return;
   }
 
   // Der Umsetzungs-Loop eben kann (Budget 900s) minutenlang gedauert haben.
