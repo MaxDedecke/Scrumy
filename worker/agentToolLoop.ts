@@ -14,7 +14,13 @@ import { ALL_TOOLS, executeTool, type ToolContext } from "./agentTools";
 /// Jeder Turn ist gezielt (ein Werkzeugaufruf, eine Antwort) – deutlich
 /// grosszuegiger als frueher noetig, wo ein einzelner Aufruf die ganze
 /// Umsetzung tragen musste.
-const MAX_TOOL_TURNS = 20;
+///
+/// 20 war bei kleineren/lokalen Modellen (u.a. qwen3-coder über RunPod) zu
+/// knapp: 12-13 Turns gehen dort oft fürs reine Erkunden drauf (list/read/
+/// search), bevor überhaupt geschrieben wird – bei ~3-5s je Turn bleibt im
+/// 15-Minuten-Budget (siehe LOOP_BUDGET_MS) reichlich Luft nach oben, ohne
+/// die Zielsetzung ("gezielt, ein Aufruf pro Turn") aufzugeben.
+const MAX_TOOL_TURNS = 32;
 /// Gesamtbudget ueber alle Turns UND Bash-Aufrufe zusammen, entspricht dem
 /// bisherigen Zeitlimit des einzelnen Umsetzungs-Aufrufs.
 const LOOP_BUDGET_MS = 900_000;
