@@ -603,6 +603,21 @@ vollständiger Inhalt der neuen Datei
     throw error;
   }
 
+  // Der Umsetzungs-Aufruf eben kann (Timeout 900s) minutenlang gedauert haben.
+  // In der Zwischenzeit kann ein Klärungsbeschluss dieses Ticket längst
+  // geschlossen haben (effect "close" in clarificationDecision.ts – bewusst
+  // OHNE erneutes Einreihen, siehe Kommentar dort). Ohne diesen Re-Check
+  // würde dieser jetzt veraltete Anlauf das DONE einfach überschreiben und
+  // ein längst erledigtes Ticket wieder aufreißen, inklusive neuer Klärung –
+  // beobachtet in OurJira: ein Ticket landete so bei 10 Klärungen, ohne dass
+  // sich sein Status je bewegte.
+  const freshStatus = await prisma.ticket.findUnique({ where: { id: ticketId }, select: { status: true } });
+  if (!freshStatus || freshStatus.status === "DONE") {
+    helpers.logger.info(`Ticket ${ticket.title} wurde während der Bearbeitung bereits anderweitig geschlossen – Ergebnis verworfen.`);
+    if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+    return;
+  }
+
   const result = parseImplementation(implementation.text);
   const materialized = await materializeChanges(dir, result, previouslyRejectedPaths);
   const { accepted: safeFiles, rejected: unsafe } = partitionSafeChanges(dir, materialized.files);
@@ -900,6 +915,16 @@ Antworte nur mit diesem JSON-Objekt:
 "needs_decision", wenn das Team die Frage gar nicht selbst beantworten kann – wenn Auftrag und Anforderungen sich widersprechen oder etwas Fachliches offen lassen. Schreibe dann in "comment" die Frage, die der Auftraggeber entscheiden muss. Nacharbeit hilft in dem Fall nicht: Ein zweiter Anlauf würde dieselbe Lücke nur anders raten. Fehlende oder nicht erreichbare Prüfung ist NIEMALS ein Grund für "needs_decision" – dann urteile aus dem Diff wie zuvor.
 "wege" nur bei "needs_decision": zwei bis vier fachliche Möglichkeiten, zwischen denen der Auftraggeber wählt – nicht „nochmal versuchen" oder „abbrechen", die kennt Scrumy selbst. Sonst leer lassen.`,
   });
+
+  // Derselbe Re-Check wie vor der Umsetzung: Auch der QA-Review-Aufruf kann
+  // lange genug gedauert haben, dass ein Klärungsbeschluss das Ticket in der
+  // Zwischenzeit schon geschlossen hat.
+  const freshStatusAfterReview = await prisma.ticket.findUnique({ where: { id: ticketId }, select: { status: true } });
+  if (!freshStatusAfterReview || freshStatusAfterReview.status === "DONE") {
+    helpers.logger.info(`Ticket ${ticket.title} wurde während des Reviews bereits anderweitig geschlossen – Urteil verworfen.`);
+    if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+    return;
+  }
 
   const parsedVerdict = readVerdict(review.text);
   // Verlass dich nicht darauf, dass das Modell die Anweisung oben befolgt:

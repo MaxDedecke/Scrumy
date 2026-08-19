@@ -86,7 +86,25 @@ const sprintPlanning: Task<"sprintPlanning"> = async (payload: SprintPlanningPay
     orderBy: { number: "asc" },
     include: { tickets: true },
   });
-  const nextNumber = (previousSprints.at(-1)?.number ?? 0) + 1;
+  // scheduleNextStep (src/lib/nextStep.ts) und die Autopilot-Kette
+  // (worker/tasks/sprintReview.ts) reihen beide unabhängig voneinander einen
+  // sprintPlanning-Job ein, sobald sie den letzten Sprint als DONE sehen –
+  // ohne sich gegenseitig zu kennen. Feuern zwei solcher Anstöße kurz
+  // hintereinander, ist der letzte Sprint zum Zeitpunkt des zweiten Jobs
+  // bereits neu geplant (ACTIVE) statt DONE: Dann ist dieser Anlauf ein
+  // Doppel-Anstoß und plant nichts. Ohne diese Prüfung entstanden in OurJira
+  // zwei Sprints mit fast identischem Ziel und Ticket-Set 59 Sekunden
+  // auseinander, seither parallel gegeneinander bearbeitet (bis hin zu zwei
+  // Agenten gleichzeitig am selben Ticket).
+  const latestSprint = previousSprints.at(-1);
+  if (latestSprint && latestSprint.status !== "DONE") {
+    helpers.logger.info(
+      `Sprint ${latestSprint.number} ist bereits ${latestSprint.status} – Sprint-Planung übersprungen (Doppel-Anstoß).`,
+    );
+    return;
+  }
+
+  const nextNumber = (latestSprint?.number ?? 0) + 1;
 
   if (nextNumber > project.sprintBudget) {
     await logActivity({
