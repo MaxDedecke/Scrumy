@@ -25,6 +25,7 @@ import { openClarification } from "../clarification";
 import { enqueueAgentJob } from "../queue";
 import { runImplementationLoop, type AttemptTrace } from "../agentToolLoop";
 import type { TicketWorkPayload } from "../taskTypes";
+import { withWorkspaceLock } from "../workspaceLock";
 
 /// Nach so vielen Anläufen IN FOLGE hört das Team auf, ein Ticket allein lösen
 /// zu wollen, und holt den Menschen dazu – wie ein Kollege, der nach dem
@@ -509,6 +510,16 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
     return;
   }
   const dir = project.workspacePath;
+
+  // Ab hier wird gelesen und geschrieben (Planung, Umsetzungs-Loop,
+  // automatische Prüfung, Commit) – alles im selben Arbeitsverzeichnis wie
+  // ein zweites Ticket desselben Projekts, das gerade parallel bei einem
+  // anderen Kollegen läuft (Jobs sind nur pro Agent serialisiert, nicht pro
+  // Projekt, siehe worker/queue.ts). Ohne diese Sperre könnte ein
+  // fehlgeschlagener Anlauf (discardUncommittedChanges) den unfertigen, aber
+  // legitimen Stand des anderen Agenten wegreißen. Bewusst NICHT neu
+  // eingerückt, um den Diff auf die eigentliche Änderung zu beschränken.
+  return withWorkspaceLock(dir, async () => {
 
   const ticket = await prisma.ticket.findUnique({ where: { id: ticketId }, include: { sprint: true } });
   if (!ticket || ticket.status === "DONE") {
@@ -1219,6 +1230,7 @@ Antworte nur mit diesem JSON-Objekt:
 
   helpers.logger.info(`Ticket ${ticket.title} bearbeitet (${reason}).`);
   if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+  });
 };
 
 type Verdict = "approve" | "rework" | "needs_decision";
