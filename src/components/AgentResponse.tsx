@@ -86,7 +86,20 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
-function CodeBlock({ code, label }: { code: string; label?: string }) {
+/// `nested`: innerhalb eines <ToolCallBlock> (dessen Kachel bereits selbst
+/// die Flaeche traegt) bewusst OHNE eigenen Rahmen/Hintergrund – sonst steht
+/// eine Karte in der Karte (z.B. "search"/"replace" beide in edit_file).
+/// Nur der grosse, freistehende Codeblock im Fliesstext bekommt seine
+/// eigene Kachel.
+function CodeBlock({ code, label, nested = false }: { code: string; label?: string; nested?: boolean }) {
+  if (nested) {
+    return (
+      <div className="flex flex-col gap-1">
+        {label && <div className="text-[0.6875rem] font-medium uppercase tracking-wide text-ink-4">{label}</div>}
+        <pre className="overflow-x-auto font-mono text-xs leading-relaxed text-ink-2">{code}</pre>
+      </div>
+    );
+  }
   return (
     <div className="overflow-hidden rounded-lg border border-hairline bg-surface-2/60">
       {label && (
@@ -155,12 +168,12 @@ function ToolCallBlock({
         {path && <span className="font-mono text-ink-3">{path}</span>}
       </div>
       {entries.length > 0 && (
-        <div className="flex flex-col gap-2 p-3">
+        <div className="flex flex-col divide-y divide-hairline/50 px-3 [&>*]:py-2.5">
           {entries.map(([key, value], i) => {
             const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
             const multiline = text.includes("\n") || text.length > 80;
             if (CODE_ARG_KEYS.has(key) || multiline) {
-              return <CodeBlock key={`${keyPrefix}-a${i}`} code={text} label={key} />;
+              return <CodeBlock key={`${keyPrefix}-a${i}`} code={text} label={key} nested />;
             }
             return (
               <p key={`${keyPrefix}-a${i}`} className="font-mono text-xs text-ink-3">
