@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { AGENT_ROLE_LABEL, RUN_KIND_LABEL, RUN_STATUS_LABEL, RUN_STATUS_PILL } from "@/lib/labels";
 import { Panel, PanelGrid, PanelStrip } from "@/components/Panel";
+import { AgentResponse } from "@/components/AgentResponse";
 
 // Ein einzelner Agentenlauf, vollständig aufgeklappt: Rolle und Modell, der
 // Auftrag an das Modell (Systemprompt + Prompt) und die Antwort im Wortlaut.
@@ -62,19 +63,17 @@ export default async function AgentRunPage({
 
       <PanelGrid className="lg:grid-cols-2">
         <Panel title={run.error ? "Fehler" : "Antwort des Agenten"} padded={false}>
-          <pre
-            className={`whitespace-pre-wrap p-4 text-sm leading-relaxed ${
-              run.error ? "text-critical" : "text-ink-2"
-            }`}
-          >
-            {run.error ?? run.response ?? "Keine Antwort protokolliert."}
-          </pre>
+          {run.error ? (
+            <pre className="whitespace-pre-wrap p-4 text-sm leading-relaxed text-critical">{run.error}</pre>
+          ) : run.response ? (
+            <AgentResponse text={run.response} className="p-4" />
+          ) : (
+            <p className="p-4 text-sm leading-relaxed text-ink-2">Keine Antwort protokolliert.</p>
+          )}
           {run.error && run.response && (
             <div className="border-t border-hairline">
               <h3 className="section-title px-4 pb-1 pt-3">Antwort des Agenten</h3>
-              <pre className="whitespace-pre-wrap p-4 pt-0 text-sm leading-relaxed text-ink-2">
-                {run.response}
-              </pre>
+              <AgentResponse text={run.response} className="px-4 pb-4 pt-0" />
             </div>
           )}
         </Panel>
