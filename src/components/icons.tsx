@@ -332,6 +332,76 @@ export function DesktopIcon({ className, filled = false }: { className?: string;
   );
 }
 
+/// Stuhl für die Büroansicht. Trägt selbst keinen Zustand über die Farbe –
+/// nur seine Position/Drehung (vom Aufrufer per Transform gesetzt) zeigt an,
+/// ob er an- oder abgerückt ist.
+export function ChairIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M6 10.5h12M7 10.5V6.75A1.5 1.5 0 0 1 8.5 5.25h7A1.5 1.5 0 0 1 17 6.75V10.5M6.5 10.5 6 19.5m11.5-9 .5 9"
+      />
+    </svg>
+  );
+}
+
+/// Deko-Item 1/4 für den Bürotisch: Topfpflanze.
+export function PlantIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <path strokeLinecap="round" d="M8 21h8M12 21v-7" />
+      <path
+        strokeLinejoin="round"
+        d="M12 14c0-3.5-2.5-5.5-6-5.5C6 12 8.5 14 12 14Zm0 0c0-4 2.8-6.5 6.5-6.5C18.5 11.5 15.8 14 12 14Z"
+      />
+    </svg>
+  );
+}
+
+/// Deko-Item 2/4: Tasse. Bekommt bei "zuletzt aktiv" optional Dampf
+/// (`SteamIcon`) dazu – kleine Kaffeepause-Anspielung.
+export function MugIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <rect x="5" y="9" width="10" height="9" rx="1.5" />
+      <path strokeLinecap="round" d="M15 11h2a2 2 0 0 1 0 4h-2" />
+    </svg>
+  );
+}
+
+/// Deko-Item 3/4: Bücherstapel.
+export function BooksIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <rect x="4" y="14" width="16" height="3" rx="0.75" />
+      <rect x="5.5" y="10.5" width="13" height="3" rx="0.75" />
+      <rect x="7" y="7" width="10" height="3" rx="0.75" />
+    </svg>
+  );
+}
+
+/// Deko-Item 4/4: gerahmtes Foto.
+export function FrameIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <rect x="6" y="6" width="12" height="12" rx="1.25" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8.5 15.5 11 12l2 2.3L15.5 11l1 1.8" />
+    </svg>
+  );
+}
+
+/// Dampf über der Tasse bei "zuletzt aktiv" – rein dekorativ, animiert über
+/// `.office-steam` in globals.css, nie das einzige Statussignal.
+export function SteamIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 12 15" fill="none" stroke="currentColor" strokeWidth={1.3} className={className} aria-hidden>
+      <path strokeLinecap="round" d="M4 12c1.2-1.3-1.2-2.4 0-4M8 12c1.2-1.3-1.2-2.4 0-4" />
+    </svg>
+  );
+}
+
 export function SettingsIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>

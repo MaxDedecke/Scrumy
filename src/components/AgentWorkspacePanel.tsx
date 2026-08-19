@@ -4,7 +4,17 @@ import { useState, type ReactNode } from "react";
 import type { AgentRole, AgentStatus } from "@/generated/prisma/client";
 import { AGENT_ROLE_LABEL, AGENT_STATUS_LABEL, AGENT_STATUS_PILL, RUN_KIND_LABEL } from "@/lib/labels";
 import { Panel, PanelEmpty } from "@/components/Panel";
-import { DesktopIcon, GridIcon, ListIcon, PersonIcon } from "@/components/icons";
+import {
+  BooksIcon,
+  ChairIcon,
+  FrameIcon,
+  GridIcon,
+  ListIcon,
+  MugIcon,
+  PersonIcon,
+  PlantIcon,
+  SteamIcon,
+} from "@/components/icons";
 
 export type AgentWorkspaceEntry = {
   id: string;
@@ -124,34 +134,109 @@ function AgentListView({ agents }: { agents: AgentWorkspaceEntry[] }) {
   );
 }
 
-// Der Büroplan: jeder Agent ein Strichmännchen an seinem PC. Arbeitet er,
-// sitzt er dran – Männchen und Bildschirm rücken zusammen und werden massiv
-// grün. Ist er passiv, rückt das Männchen vom PC ab und beide bleiben nur
-// grün umrandet. Der Zustand ist damit auf einen Blick sichtbar, ohne Text
-// lesen zu müssen.
+type DeskState = "working" | "idle" | "fresh";
+type Decor = "plant" | "mug" | "books" | "frame";
+
+const DECOR_ICON: Record<Decor, (props: { className?: string }) => ReactNode> = {
+  plant: PlantIcon,
+  mug: MugIcon,
+  books: BooksIcon,
+  frame: FrameIcon,
+};
+
+// Stabiler String-Hash statt Math.random(): dasselbe Deko-Item bei jedem
+// Rerender, damit man Kolleg:innen am Tisch wiedererkennt statt bei jedem
+// Laden neu zu würfeln.
+function hash(input: string): number {
+  let h = 0;
+  for (let i = 0; i < input.length; i++) h = (h * 31 + input.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function agentDecor(id: string): Decor {
+  const decors: Decor[] = ["plant", "mug", "books", "frame"];
+  return decors[hash(id) % decors.length];
+}
+
+// Der Büroplan: Agenten werden nach Rolle in Cluster ("Pods") mit Hängeschild
+// gruppiert – das Rollenlabel steht damit einmal pro Gruppe statt auf jeder
+// Karte. Jeder Tisch trägt drei Zustandssignale, die alleine (auch in
+// Graustufen über Position/Form) den Blick tragen: Monitor leuchtet + Stuhl
+// ist herangerückt = arbeitet; Monitor aus + Stuhl abgerückt = zuletzt aktiv;
+// Monitor aus + Stuhl mittig, kein Deko-Item = noch nie etwas getan. Ein
+// festes Deko-Item pro Person (aus der ID abgeleitet) und Dampf an der Tasse
+// bei einer Pause sind reine Atmosphäre und nie das einzige Signal.
 function AgentOfficeView({ agents }: { agents: AgentWorkspaceEntry[] }) {
+  const pods = new Map<AgentRole, AgentWorkspaceEntry[]>();
+  for (const agent of agents) {
+    const bucket = pods.get(agent.role);
+    if (bucket) bucket.push(agent);
+    else pods.set(agent.role, [agent]);
+  }
+  // Feste Pipeline-Reihenfolge (siehe AGENT_ROLE_LABEL) statt Auftrittsreihenfolge,
+  // damit die Pods nicht springen, wenn sich Status/Sortierung der Agenten ändert.
+  const roles = Object.keys(AGENT_ROLE_LABEL) as AgentRole[];
+
   return (
-    <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 md:grid-cols-4">
-      {agents.map((agent) => {
-        const working = agent.running !== null;
-        return (
-          <div
-            key={agent.id}
-            title={working ? agent.running!.headline : (agent.last?.headline ?? "noch nichts getan")}
-            className="flex flex-col items-center gap-2 rounded-lg border border-hairline px-2 py-3 text-center"
-          >
-            <div className="flex h-16 w-full flex-col items-center justify-end text-good">
-              <PersonIcon
-                filled={working}
-                className={`h-7 w-7 shrink-0 transition-[margin] ${working ? "-mb-1.5" : "mb-2.5"}`}
-              />
-              <DesktopIcon filled={working} className="h-8 w-8 shrink-0" />
+    <div className="office-room p-4">
+      {roles
+        .filter((role) => pods.has(role))
+        .map((role) => (
+          <div key={role} className="office-pod">
+            <div className="office-pod-sign rounded-md border border-hairline bg-surface-2 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-ink-3 uppercase">
+              {AGENT_ROLE_LABEL[role]}
             </div>
-            <span className="w-full truncate text-xs font-medium text-ink">{agent.name}</span>
-            <span className="text-[11px] text-ink-3">{AGENT_ROLE_LABEL[agent.role]}</span>
+            <div className="office-desks">
+              {pods.get(role)!.map((agent) => (
+                <Desk key={agent.id} agent={agent} />
+              ))}
+            </div>
           </div>
-        );
-      })}
+        ))}
+    </div>
+  );
+}
+
+function Desk({ agent }: { agent: AgentWorkspaceEntry }) {
+  const state: DeskState = agent.running !== null ? "working" : agent.last !== null ? "idle" : "fresh";
+  const decor = agentDecor(agent.id);
+  const decorSide = hash(`${agent.id}:side`) % 2 === 0 ? "corner-left" : "corner-right";
+  const DecorIcon = DECOR_ICON[decor];
+  const showSteam = state === "idle" && decor === "mug";
+
+  return (
+    <div
+      data-state={state}
+      title={
+        state === "working"
+          ? agent.running!.headline
+          : state === "idle"
+            ? `zuletzt: ${agent.last!.headline} · ${formatTime(agent.last!.startedAt)}`
+            : "noch nichts getan"
+      }
+      className="office-desk flex flex-col items-center gap-2 rounded-lg px-1 py-2"
+    >
+      <div className="office-desk-scene relative h-[5.75rem] w-full">
+        <div className="office-desk-surface" />
+        {state !== "fresh" && (
+          <DecorIcon className={`office-decor ${decorSide} h-4 w-4`} />
+        )}
+        {showSteam && <SteamIcon className={`office-steam ${decorSide === "corner-left" ? "left-[9%]" : "right-[9%]"} h-3.5 w-3`} />}
+        <div className="office-monitor-foot" />
+        <div className="office-monitor" />
+        {state === "working" && (
+          <div className="office-dots">
+            <span />
+            <span />
+            <span />
+          </div>
+        )}
+        <ChairIcon className="office-chair h-[1.375rem] w-[1.375rem]" />
+        <PersonIcon filled={state === "working"} className="office-person h-6 w-6" />
+      </div>
+      <span className="office-nameplate w-full truncate rounded-full px-2 py-0.5 text-center text-xs font-medium text-ink">
+        {agent.name}
+      </span>
     </div>
   );
 }
