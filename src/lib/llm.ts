@@ -315,6 +315,40 @@ function parseOpenAiToolCalls(raw: OpenAiToolCall[] | undefined): ToolCall[] {
   });
 }
 
+/// Manche Modelle (beobachtet bei qwen3-coder über Ollamas eigenen
+/// "qwen3-coder"-Renderer/Parser, siehe RunPod-Setup) rutschen gelegentlich
+/// aus dem strukturierten `tool_calls`-Feld raus und schreiben den Aufruf
+/// stattdessen als Text in `message.content` – meist fehlt der öffnende
+/// `<tool_call>`-Tag, weshalb Ollamas Parser den Block nicht erkennt:
+///   <function=NAME>
+///   <parameter=PNAME>
+///   WERT
+///   </parameter>
+///   </function>
+///   </tool_call>
+/// Ohne diesen Ausweich sieht der Aufrufer "kein Werkzeugaufruf" und der
+/// Umsetzungs-Loop (worker/agentToolLoop.ts) dreht sich bis zum Turn-Limit im
+/// Kreis, bevor er ohne Ergebnis neu startet – deshalb hier selbst geparst.
+const FUNCTION_BLOCK_RE = /<function=([a-zA-Z0-9_]+)>([\s\S]*?)<\/function>/g;
+const PARAMETER_RE = /<parameter=([a-zA-Z0-9_]+)>([\s\S]*?)<\/parameter>/g;
+
+function parsePseudoToolCalls(text: string): { text: string; toolCalls: ToolCall[] } {
+  const toolCalls: ToolCall[] = [];
+  let cleaned = text;
+  for (const match of text.matchAll(FUNCTION_BLOCK_RE)) {
+    const input: Record<string, unknown> = {};
+    for (const paramMatch of match[2].matchAll(PARAMETER_RE)) {
+      input[paramMatch[1]] = paramMatch[2].trim();
+    }
+    toolCalls.push({ id: nextToolCallId(), name: match[1], input });
+    cleaned = cleaned.replace(match[0], "");
+  }
+  // Umschließende Reste (<tool_call>, </tool_call>) weg – was übrig bleibt,
+  // ist der echte Fließtext-Anteil der Antwort.
+  cleaned = cleaned.replace(/<\/?tool_call>/g, "").trim();
+  return { text: cleaned, toolCalls };
+}
+
 async function chatTurnOllama(
   profile: ChatProfile,
   system: string,
@@ -337,8 +371,15 @@ async function chatTurnOllama(
     timeoutMs,
   )) as { message?: { content?: string; tool_calls?: OpenAiToolCall[] } };
 
-  const text = pickString(data.message?.content) ?? "";
-  const toolCalls = parseOpenAiToolCalls(data.message?.tool_calls);
+  let text = pickString(data.message?.content) ?? "";
+  let toolCalls = parseOpenAiToolCalls(data.message?.tool_calls);
+  if (toolCalls.length === 0 && text.includes("<function=")) {
+    const fallback = parsePseudoToolCalls(text);
+    if (fallback.toolCalls.length > 0) {
+      toolCalls = fallback.toolCalls;
+      text = fallback.text;
+    }
+  }
   if (!text.trim() && toolCalls.length === 0) {
     throw new LlmError("Ollama hat keinen Text zurückgegeben.");
   }
