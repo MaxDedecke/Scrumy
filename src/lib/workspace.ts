@@ -304,6 +304,24 @@ const SOURCE_EXTENSIONS = new Set([
   ".swift", ".toml", ".ts", ".tsx", ".vue", ".xml", ".yaml", ".yml",
 ]);
 
+/// Diese Pfade sind der eingefrorene Auftrag – Umsetzer duerfen sie nicht
+/// aendern (siehe worker/tasks/ticketWork.ts) – UND stehen bereits vollstaendig
+/// strukturiert im Projektkontext jedes Tickets (siehe worker/projectContext.ts,
+/// Abschnitte „Freigegebenes Konzept"/„Freigegebene Anforderungen"). Sie
+/// zusaetzlich als Rohtext in den Ticket-Prompt zu laden, verdoppelt nur den
+/// Kontext, ohne neue Information zu liefern.
+export const FROZEN_DOC_PATHS = [
+  /^docs\/konzept\.md$/i,
+  /^docs\/anforderungen\.md$/i,
+  /^docs\/verstaendnis\.md$/i,
+  /^docs\/sprints\//i,
+];
+
+export function isFrozenDocPath(file: string): boolean {
+  const normalized = file.replace(/^\.\//, "");
+  return FROZEN_DOC_PATHS.some((pattern) => pattern.test(normalized));
+}
+
 const QUERY_STOP_WORDS = new Set([
   "aber", "auch", "dass", "eine", "einem", "einen", "einer", "eines", "fuer", "implementieren", "mit",
   "oder", "soll", "ticket", "umsetzen", "und", "von", "werden", "wird", "with", "the", "this", "that",
@@ -327,6 +345,7 @@ function scoreRepoPath(
   explicitlyMentioned: Set<string>,
   contentMatches: Set<string>,
 ): number {
+  if (isFrozenDocPath(file)) return 0;
   const normalized = file.toLowerCase();
   let score = explicitlyMentioned.has(normalized) ? 1000 : 0;
   if (contentMatches.has(normalized)) score += 30;

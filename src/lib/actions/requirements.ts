@@ -126,7 +126,36 @@ const GENERATE_SYSTEM_PROMPT = [
   "Schneide jede Anforderung so zu, dass ein Entwicklungsteam sie ohne fremde Hilfe in wenigen Tagen umsetzen und mit Testdaten prüfen kann.",
   'Enthält das Konzept einen Abschnitt „Blockiert auf Zulieferung durch den Kunden" (oder ähnlich betitelt, z.B. Migration, Zugangsdaten, Provider-Auswahl), leite daraus KEINE Anforderung ab – das sind Voraussetzungen, die erst der Kunde liefern muss, keine Arbeit für das Team.',
   "Erfinde nichts, was nicht im Konzept steht oder sich zwingend daraus ergibt.",
+  "Jede Anforderung darf nur EIN Mal in der Liste vorkommen. Formuliere nichts, was inhaltlich schon eine andere Anforderung in deiner eigenen Liste oder in der Liste der bereits erfassten Anforderungen abdeckt, auch nicht mit anderen Worten oder aus einem anderen Blickwinkel (z.B. nicht \"Grundrechenarten implementieren\" UND separat \"Addition, Subtraktion, Multiplikation, Division unterstützen\") – das verdoppelt nur den Auftrag, ohne neuen Umfang zu beschreiben. Fasse stattdessen zu einer einzigen, vollständigeren Anforderung zusammen.",
 ].join(" ");
+
+/// Normalisiert einen Titel fuer den Duplikat-Vergleich: klein geschrieben,
+/// ohne Satzzeichen, einzelne Wortzwischenraeume.
+function normalizeTitle(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9äöüß\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/// Grobe Wortueberlappung (Jaccard) zwischen zwei Titeln. Reicht, um
+/// Umformulierungen wie "Grundlegende Rechenoperationen implementieren"
+/// (im echten Betrieb mehrfach mit leicht anderem Wortlaut generiert) als
+/// Duplikat zu erkennen, ohne einen weiteren LLM-Aufruf dafuer zu brauchen.
+function titleSimilarity(a: string, b: string): number {
+  const wordsA = new Set(normalizeTitle(a).split(" ").filter((w) => w.length >= 3));
+  const wordsB = new Set(normalizeTitle(b).split(" ").filter((w) => w.length >= 3));
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  const intersection = [...wordsA].filter((w) => wordsB.has(w)).length;
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return intersection / union;
+}
+
+/// Schwelle, ab der zwei Titel als dasselbe Anliegen gelten. 0.6 faengt
+/// Umformulierungen zuverlaessig ab, ohne unterschiedliche Anforderungen mit
+/// nur zufaellig gemeinsamen Fachbegriffen faelschlich zusammenzuwerfen.
+const DUPLICATE_TITLE_THRESHOLD = 0.6;
+
+function isDuplicateTitle(title: string, against: string[]): boolean {
+  return against.some((other) => titleSimilarity(title, other) >= DUPLICATE_TITLE_THRESHOLD);
+}
 
 /// Leitet Anforderungen per LLM aus dem Konzept ab. Nutzt das Standard-Profil
 /// aus den globalen LLM-Einstellungen. Bestehende Anforderungen bleiben
@@ -186,11 +215,22 @@ export async function generateRequirementsFromConcept(formData: FormData): Promi
   }
 
   const priorities: Priority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];
+  // Duplikate faengt der Prompt oben nur an, wenn das Modell sich daran haelt
+  // – zuverlaessig ist nur eine Pruefung danach. `seenTitles` waechst mit
+  // jeder uebernommenen Anforderung, damit auch Duplikate INNERHALB derselben
+  // Modellantwort erkannt werden, nicht nur gegen den alten Bestand.
+  const seenTitles = existing.map((r) => r.title);
+  let skippedDuplicates = 0;
   const parsed = items.flatMap((item) => {
     if (typeof item !== "object" || item === null) return [];
     const record = item as Record<string, unknown>;
     const title = typeof record.title === "string" ? record.title.trim() : "";
     if (!title) return [];
+    if (isDuplicateTitle(title, seenTitles)) {
+      skippedDuplicates += 1;
+      return [];
+    }
+    seenTitles.push(title);
     const description =
       typeof record.description === "string" && record.description.trim().length > 0
         ? record.description.trim()
@@ -201,7 +241,11 @@ export async function generateRequirementsFromConcept(formData: FormData): Promi
   });
 
   if (parsed.length === 0) {
-    return fail("Das Modell hat keine verwertbaren Anforderungen geliefert.");
+    return fail(
+      skippedDuplicates > 0
+        ? "Das Modell hat nur Anforderungen geliefert, die inhaltlich schon vorhanden sind."
+        : "Das Modell hat keine verwertbaren Anforderungen geliefert.",
+    );
   }
 
   await prisma.$transaction([
@@ -212,7 +256,8 @@ export async function generateRequirementsFromConcept(formData: FormData): Promi
         projectId,
         actor: "Product-Owner-Agent",
         action: "requirements_generated",
-        detail: `${parsed.length} Anforderungen aus dem Konzept abgeleitet (${profile.name})`,
+        detail: `${parsed.length} Anforderungen aus dem Konzept abgeleitet (${profile.name})` +
+          (skippedDuplicates > 0 ? `, ${skippedDuplicates} inhaltliche Duplikate übersprungen` : ""),
       },
     }),
   ]);
@@ -221,7 +266,10 @@ export async function generateRequirementsFromConcept(formData: FormData): Promi
   revalidatePath(`/projects/${projectId}`);
 
   return ok(
-    `${parsed.length} Anforderung${parsed.length === 1 ? "" : "en"} erzeugt mit „${profile.name}“. Bitte prüfen.`,
+    `${parsed.length} Anforderung${parsed.length === 1 ? "" : "en"} erzeugt mit „${profile.name}“. Bitte prüfen.` +
+      (skippedDuplicates > 0
+        ? ` (${skippedDuplicates} inhaltliche${skippedDuplicates === 1 ? "s" : ""} Duplikat${skippedDuplicates === 1 ? "" : "e"} übersprungen)`
+        : ""),
   );
 }
 

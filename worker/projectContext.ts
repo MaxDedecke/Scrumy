@@ -29,9 +29,10 @@ function clip(text: string, maxChars: number): string {
 
 export async function buildProjectContext(
   projectId: string,
-  options: { includeRepo?: boolean; includeBoard?: boolean; compact?: boolean; focus?: string } = {},
+  options: { includeRepo?: boolean; includeBoard?: boolean; compact?: boolean; focus?: string; ticketId?: string } = {},
 ): Promise<string> {
-  const { includeRepo = true, includeBoard = true, compact = false, focus = "" } = options;
+  const { includeRepo = true, includeBoard = true, compact = false, focus = "", ticketId } = options;
+  const focusTerms = focus.toLowerCase().split(/[^a-z0-9äöüß]+/).filter((term) => term.length >= 4);
 
   const project = await prisma.project.findUniqueOrThrow({
     where: { id: projectId },
@@ -63,7 +64,12 @@ export async function buildProjectContext(
     prisma.clarification.findMany({
       where: { projectId, status: "DECIDED" },
       orderBy: { decidedAt: "desc" },
-      take: compact ? 8 : 20,
+      // Im Compact-Modus wird unten nach Ticket-Bezug gefiltert (siehe
+      // relevantDecisions) – dafuer braucht es einen groesseren Kandidatenpool
+      // als die 6, die am Ende tatsaechlich in den Prompt kommen, sonst faellt
+      // ein aelterer, aber fuer GENAU DIESES Ticket relevanter Beschluss schon
+      // hier raus.
+      take: compact ? 40 : 20,
       include: { ticket: { select: { title: true } } },
     }),
     prisma.clarification.findMany({
@@ -74,7 +80,6 @@ export async function buildProjectContext(
     }),
   ]);
 
-  const focusTerms = focus.toLowerCase().split(/[^a-z0-9äöüß]+/).filter((term) => term.length >= 4);
   const orderedRequirements = compact && focusTerms.length > 0
     ? [...project.requirements].sort((a, b) => {
         const score = (value: typeof a) => {
@@ -102,9 +107,29 @@ export async function buildProjectContext(
     .join("\n");
   parts.push(`# Freigegebene Anforderungen\n${requirements || "(keine erfasst)"}`);
 
-  if (decisions.length > 0) {
-    const register = decisions
-      .reverse()
+  // Im Compact-Modus geht es nicht um das ganze Beschlussregister, sondern um
+  // das, was FUER DIESES TICKET gilt: sein eigener Verlauf (immer, egal wie
+  // alt) sowie Beschluesse, deren Frage inhaltlich zum Ticket passt. Sonst
+  // schleppt jeder Ticket-Prompt projektweit die zuletzt getroffenen
+  // Beschluesse mit, auch wenn sie ein ganz anderes Ticket betreffen.
+  const relevantDecisions = compact && focusTerms.length > 0
+    ? [...decisions]
+        .sort((a, b) => {
+          const score = (entry: (typeof decisions)[number]) => {
+            if (ticketId && entry.ticketId === ticketId) return 1000;
+            const text = `${entry.ticket?.title ?? ""} ${entry.question} ${entry.decision ?? ""}`.toLowerCase();
+            return focusTerms.reduce((sum, term) => sum + (text.includes(term) ? 1 : 0), 0);
+          };
+          return score(b) - score(a);
+        })
+        .slice(0, 6)
+        // Danach wieder chronologisch (aeltester zuerst) fuer die Erzaehlung
+        // im Prompt – die Relevanz entschied nur, WELCHE reinkommen.
+        .sort((a, b) => (a.decidedAt ?? a.createdAt).getTime() - (b.decidedAt ?? b.createdAt).getTime())
+    : [...decisions].reverse();
+
+  if (relevantDecisions.length > 0) {
+    const register = relevantDecisions
       .map((entry) => {
         const when = (entry.decidedAt ?? entry.createdAt).toLocaleDateString("de-DE");
         const subject = entry.ticket ? ` (Ticket „${entry.ticket.title}")` : "";

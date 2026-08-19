@@ -15,6 +15,7 @@ import { extractJsonObject } from "@/lib/llm";
 import {
   commitAll,
   gitShow,
+  isFrozenDocPath,
   partitionSafeChanges,
   readRepoFile,
   readRelevantSourceContext,
@@ -51,17 +52,10 @@ function clipForPrompt(text: string, maxChars: number): string {
 /// sind Belege gegenüber dem Auftraggeber. Ein Coding-Agent, der sie
 /// „nebenbei" neu schreibt, verfälscht genau die Unterlagen, an denen später
 /// gemessen wird – deshalb werden solche Änderungen verworfen und protokolliert.
-const PROTECTED_PATHS = [
-  /^docs\/konzept\.md$/i,
-  /^docs\/anforderungen\.md$/i,
-  /^docs\/verstaendnis\.md$/i,
-  /^docs\/sprints\//i,
-];
-
-function isProtected(path: string): boolean {
-  const normalized = path.replace(/^\.\//, "");
-  return PROTECTED_PATHS.some((pattern) => pattern.test(normalized));
-}
+/// (Liste der Pfade: `isFrozenDocPath` in src/lib/workspace.ts – dieselbe
+/// Liste sorgt dort auch dafür, dass diese Dateien nicht doppelt als
+/// Datei-Inhalt in den Prompt geladen werden, wo sie schon strukturiert stehen.)
+const isProtected = isFrozenDocPath;
 
 /// Markiert im Ticket-Ergebnis die Liste abgelehnter Dateien, damit ein
 /// erneuter Anlauf sie wiederfindet (siehe rejectedPathsFromResult).
@@ -131,6 +125,7 @@ async function splitTicketAfterTokenLimit({
     includeBoard: false,
     compact: true,
     focus: `${ticket.title}\n${ticket.description ?? ""}`,
+    ticketId: ticket.id,
   });
   const split = await runAgent({
     agent: productOwner,
@@ -349,6 +344,61 @@ async function materializeChanges(
   return { files: [...changed].map(([path, content]) => ({ path, content })), rejected };
 }
 
+/// Billige Vorpruefung, bevor Planung UND Umsetzung (der teure Modellaufruf
+/// mit vollem Quellcode-Kontext) angestossen werden: Manche Tickets sind
+/// laengst erfuellt – etwa ein Teilticket nach automatischer Zerlegung, dessen
+/// Arbeit ein anderes Ticket zwischenzeitlich schon erledigt hat, oder ein
+/// wiederholter Anlauf nach "Nochmal versuchen", bei dem der Code laengst
+/// stimmt. Nur wenn das Ticket eine erkennbare Akzeptanzkriterien-Liste hat
+/// und es ueberhaupt passenden Bestandscode gibt, sonst normaler Ablauf.
+/// Antwortet das Modell nicht eindeutig mit "satisfied", passiert nichts –
+/// der normale (teure) Ablauf laeuft unveraendert weiter. Kritische Tickets
+/// werden nie automatisch geschlossen, die brauchen ohnehin menschliche
+/// Freigabe.
+async function checkAlreadySatisfied({
+  agent,
+  projectId,
+  ticket,
+  dir,
+}: {
+  agent: Agent;
+  projectId: string;
+  ticket: { id: string; title: string; description: string | null; sprintId: string | null };
+  dir: string;
+}): Promise<{ satisfied: boolean; reason: string } | null> {
+  const focus = `${ticket.title}\n${ticket.description ?? ""}`;
+  const sourceContext = await readRelevantSourceContext(dir, focus, { maxChars: 10_000, maxFiles: 6 });
+  if (sourceContext.startsWith("(keine anhand des Tickets relevante Quelldatei gefunden)")) return null;
+
+  const checked = await runAgent({
+    agent,
+    projectId,
+    ticketId: ticket.id,
+    sprintId: ticket.sprintId ?? undefined,
+    kind: "acceptance_precheck",
+    headline: `Prüft, ob „${ticket.title}" schon erfüllt ist`,
+    maxTokens: 300,
+    system: `${TEAM_GRUNDREGELN}
+
+Du bist ${agent.name}. Du prüfst NUR, ob ein Ticket anhand des bereits vorhandenen Codes schon vollständig erfüllt ist – du änderst nichts und schlägst nichts vor. Du antwortest ausschließlich mit einem JSON-Objekt.`,
+    prompt: `## Ticket
+${ticket.title}
+${clipForPrompt(ticket.description ?? "", 3000)}
+
+## Bestehender Code (zum Ticket passende Auswahl)
+${sourceContext}
+
+Sind ALLE Akzeptanzkriterien des Tickets bereits durch genau diesen Code erfüllt, ganz ohne weitere Änderung? Sei konservativ: Bei Zweifel, bei Kriterien, die sich nicht rein am Code ablesen lassen (z.B. Laufzeitverhalten), oder wenn auch nur ein Kriterium fehlt, antworte mit "satisfied": false.
+
+Antworte nur so:
+{"satisfied": true|false, "reason": "ein Satz Begründung"}`,
+  });
+
+  const parsed = extractJsonObject(checked.text);
+  if (typeof parsed.satisfied !== "boolean") return null;
+  return { satisfied: parsed.satisfied, reason: String(parsed.reason ?? "").trim().slice(0, 400) };
+}
+
 const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helpers) => {
   const { agentId, projectId, ticketId, reason } = payload;
   const attempt = payload.attempt ?? 1;
@@ -387,6 +437,28 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
   }
 
   const implementer = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } });
+
+  // --- 0. Billige Vorpruefung: ist das Ticket schon erfuellt? ---------------
+  if (!ticket.isCritical && /##\s*Akzeptanzkriterien/i.test(ticket.description ?? "")) {
+    const already = await checkAlreadySatisfied({ agent: implementer, projectId, ticket, dir });
+    if (already?.satisfied) {
+      await prisma.ticket.update({
+        where: { id: ticketId },
+        data: { status: "DONE", result: `Bereits erfüllt (automatisch geprüft, kein neuer Anlauf nötig): ${already.reason}` },
+      });
+      await logActivity({
+        projectId,
+        ticketId,
+        actor: implementer.name,
+        agentId: implementer.id,
+        action: "ticket_done",
+        detail: `„${ticket.title}" ist bereits erfüllt – automatisch vor der Umsetzung erkannt, keine Planung/Umsetzung nötig (${already.reason})`,
+      });
+      if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+      return;
+    }
+  }
+
   // Dateien, deren EDIT-Block beim letzten Anlauf abgelehnt wurde. Steht im
   // ticket.result, sobald ein Anlauf Dateien abgelehnt hat – unabhängig vom
   // attempt-Zähler, der bei einer menschlichen Zurückweisung wieder bei 1
@@ -414,6 +486,7 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
     includeBoard: false,
     compact: true,
     focus,
+    ticketId: ticket.id,
   });
 
   // --- 1. Planung -----------------------------------------------------------
@@ -483,7 +556,7 @@ ${await readRelevantSourceContext(dir, sourceQuery)}
 ${previouslyRejectedPaths.size > 0
   ? `\n## Vorheriger Anlauf ist gescheitert\nBei folgenden Dateien passte der SEARCH-Ausschnitt nicht exakt (oder mehrfach) auf den heutigen Stand: ${[...previouslyRejectedPaths].join(", ")}. Kopiere den SEARCH-Text diesmal Zeichen für Zeichen aus „Bestehender Code" oben, inklusive Einrückung – oder, falls die Änderung ohnehin den Großteil der Datei betrifft, gib genau diese Dateien ausnahmsweise vollständig in einem DATEI-Block zurück (nur für die hier genannten Pfade erlaubt).\n`
   : ""}
-Die Auftragsunterlagen (docs/konzept.md, docs/anforderungen.md, docs/verstaendnis.md und docs/sprints/…) sind der eingefrorene Auftrag – die änderst du nicht. Eigene Dokumentation legst du woanders ab, z.B. unter docs/technik/.
+Die Auftragsunterlagen (docs/konzept.md, docs/anforderungen.md, docs/verstaendnis.md und docs/sprints/…) sind der eingefrorene Auftrag – die änderst du nicht. Lege dabei auch keine eigene Markdown-Dokumentation an oder aktualisiere sie (z.B. unter docs/technik/) – das kostet in jedem folgenden Ticket erneut Kontext-Budget, ohne dass der Auftraggeber danach gefragt hat. Dokumentation ist nur dann Teil dieses Tickets, wenn genau das der Auftrag ist; das Team bündelt eigene Dokumentation sonst am Projektende in einem eigenen Ticket.
 
 Setze ausschließlich dieses kleine Ticket um. Ändere bestehende Dateien mit exakten SEARCH/REPLACE-Blöcken; kopiere in SEARCH genug unveränderten Kontext, damit der Ausschnitt genau einmal vorkommt. Gib bestehende Dateien niemals vollständig zurück – Ausnahme ist ein oben unter „Vorheriger Anlauf ist gescheitert" ausdrücklich genannter Pfad. Nur NEUE Dateien (und diese Ausnahme) kommen vollständig in einen DATEI-Block. Dateien, die du nicht anfasst, lässt du weg.
 
