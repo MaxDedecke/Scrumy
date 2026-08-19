@@ -64,12 +64,24 @@ const clarificationTriage: Task<"clarificationTriage"> = async (payload: Clarifi
       where: { ticketId: clarification.ticketId, status: { in: ["DECIDED", "WITHDRAWN"] } },
     });
     if (priorDecisions >= REPEAT_ESCALATION_THRESHOLD) {
+      // Nicht nur ein Hinweis, sondern eine Voreinstellung: Ohne sie landet
+      // die Oberfläche bei der immer gleichen Wahl zwischen zwei
+      // "nochmal versuchen"-Wegen, und genau die hat schon ${priorDecisions}
+      // mal nichts gebracht (beobachteter Fall: 9 Runden zur selben Frage,
+      // "Ticket abschließen" stand jedes Mal zur Wahl, wurde aber nie
+      // gewählt). Gibt es einen "close"-Weg, wird er vorausgewählt, damit ein
+      // Zustimmen ohne eigene Formulierung reicht.
+      const closeOption = options.find((option) => option.effect === "close");
       const note =
         `Für dieses Ticket wurden schon ${priorDecisions} Klärungen entschieden, ohne dass es fertig wurde – ` +
-        `ein weiteres automatisches "nochmal versuchen" würde vermutlich genauso wenig ändern. Das braucht jetzt einen echten Blick.`;
+        `ein weiteres automatisches "nochmal versuchen" würde vermutlich genauso wenig ändern. Das braucht jetzt einen echten Blick` +
+        (closeOption ? `, meine Empfehlung: „${closeOption.label}".` : ".");
       await prisma.clarification.updateMany({
         where: { id: clarificationId, status: "OPEN" },
-        data: { agenda: [`**${role}:** ${note}`, clarification.agenda].filter(Boolean).join("\n\n") },
+        data: {
+          agenda: [`**${role}:** ${note}`, clarification.agenda].filter(Boolean).join("\n\n"),
+          recommendedOptionKey: closeOption?.key ?? clarification.recommendedOptionKey,
+        },
       });
       await logActivity({
         projectId,

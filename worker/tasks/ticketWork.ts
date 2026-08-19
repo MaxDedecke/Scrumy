@@ -47,6 +47,28 @@ function clipForPrompt(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}\n… (${text.length - maxChars} Zeichen für diesen Arbeitsschritt ausgeblendet)`;
 }
 
+/// Ab so vielen bereits entschiedenen Klärungen für dasselbe Ticket bekommt
+/// eine neue Klärung einen Hinweis auf die Vorgeschichte mit auf den Weg.
+/// Ohne den sieht weder der Scrum Master bei der Vorlage noch der Auftraggeber
+/// beim Entscheiden, dass "nochmal versuchen" hier schon mehrfach nichts
+/// gebracht hat – die Klärung wirkt jedes Mal wie die erste (siehe
+/// clarificationTriage.ts, wo derselbe Schwellenwert das automatische
+/// Entscheiden abschaltet; hier geht es zusätzlich darum, dass auch ein
+/// Mensch die Wiederholung sieht, statt wieder "resume" zu wählen).
+const REPEAT_HISTORY_THRESHOLD = 2;
+
+async function repeatHistoryNote(ticketId: string): Promise<string> {
+  const priorDecisions = await prisma.clarification.count({
+    where: { ticketId, status: { in: ["DECIDED", "WITHDRAWN"] } },
+  });
+  if (priorDecisions < REPEAT_HISTORY_THRESHOLD) return "";
+  return (
+    `ACHTUNG: Für dieses Ticket wurden schon ${priorDecisions} Klärungen entschieden, ohne dass es fertig wurde. ` +
+    `Ein weiteres "nochmal versuchen" hat bisher nichts geändert. Prüfe ernsthaft, ob "Ticket abschließen" ` +
+    `der richtige Weg ist, statt dieselbe Frage erneut zu stellen.\n\n`
+  );
+}
+
 /// Der Auftrag und was das Team dazu festgehalten hat, gehört nicht den
 /// Umsetzern: Konzept, Anforderungen, Projektverständnis und Sprint-Dokumente
 /// sind Belege gegenüber dem Auftraggeber. Ein Coding-Agent, der sie
@@ -793,6 +815,7 @@ vollständiger Inhalt der neuen Datei
       // fachlich richtigen – sonst bleibt es bei den Standardvorschlägen.
       options: raisedOptions,
       context:
+        (await repeatHistoryNote(ticketId)) +
         `Was ${implementer.name} dazu sagt:\n${summary}` +
         (notes ? `\n\nOffene Punkte: ${notes}` : "") +
         (raisedQuestion ? `\n\nRückfrage des Agenten: ${raisedQuestion}` : "") +
@@ -852,6 +875,7 @@ vollständiger Inhalt der neuen Datei
       question: `„${ticket.title}": ${raisedQuestion}`,
       options: raisedOptions,
       context:
+        (await repeatHistoryNote(ticketId)) +
         `${implementer.name} hat den unstrittigen Teil umgesetzt und committet (${commit?.shortSha ?? "kein Commit"}).\n\n` +
         `Zusammenfassung: ${summary}${notes ? `\n\nOffene Punkte: ${notes}` : ""}`,
       resume: { task: "ticketWork", payload: { ...payload, attempt: attempt + 1 } },
