@@ -59,8 +59,7 @@ export default async function ProjectLayout({
       <PageHeader
         className="mb-5"
         backHref="/"
-        backLabel="Kunden"
-        context={project.organization.name}
+        backLabel={project.organization.name}
         title={project.name}
         status={
           <>

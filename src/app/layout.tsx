@@ -3,8 +3,9 @@ import Link from "next/link";
 import "./globals.css";
 import { prisma } from "@/lib/prisma";
 import { Sidebar } from "@/components/Sidebar";
+import { SidebarToggle } from "@/components/SidebarToggle";
 import { ToastProvider } from "@/components/Toast";
-import { ScrumyMark, SearchIcon, SettingsIcon } from "@/components/icons";
+import { SearchIcon, SettingsIcon } from "@/components/icons";
 
 export const metadata: Metadata = {
   title: "Scrumy",
@@ -32,16 +33,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
         <ToastProvider>
           <header className="shrink-0 border-b border-hairline bg-canvas-raised">
             <div className="flex h-14 items-center gap-5 px-5">
-              <Link
-                href="/"
-                aria-label="Scrumy"
-                title="Scrumy"
-                className="flex shrink-0 items-center text-sm font-semibold tracking-tight text-ink"
-              >
-                <span className="flex h-7 w-7 items-center justify-center text-brand">
-                  <ScrumyMark className="h-6 w-6 -rotate-6" />
-                </span>
-              </Link>
+              <SidebarToggle />
 
               <form action="/search" className="w-full max-w-sm">
                 <div className="relative">
