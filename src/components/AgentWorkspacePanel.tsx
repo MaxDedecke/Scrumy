@@ -35,11 +35,14 @@ export function AgentWorkspacePanel({
   agents,
   footer,
   children,
+  className,
 }: {
   agents: AgentWorkspaceEntry[];
   footer?: ReactNode;
   /** Zusatzinhalt unter der Ansicht, z.B. Rückfragen – unabhängig vom Modus. */
   children?: ReactNode;
+  /** z.B. `lg:col-span-3`, wenn das Panel eine ganze Rasterzeile einnimmt. */
+  className?: string;
 }) {
   const [mode, setMode] = useState<ViewMode>("list");
 
@@ -53,6 +56,7 @@ export function AgentWorkspacePanel({
       title="Wer gerade woran arbeitet"
       count={agents.length}
       padded={false}
+      className={className}
       footer={footer}
       collapsible
       collapsedView={<p className="line-clamp-2 px-4 py-3 text-sm text-ink-2">{namesLine}</p>}

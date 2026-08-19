@@ -8,7 +8,7 @@ import { LiveRefresh } from "@/components/LiveRefresh";
 import { PageHeader } from "@/components/PageHeader";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { TeamControls } from "@/components/TeamControls";
-import { ExternalLinkIcon, InboxIcon } from "@/components/icons";
+import { ExternalLinkIcon, InboxIcon, SpinnerIcon } from "@/components/icons";
 import { iconButtonClass, pageFixedClass } from "@/lib/ui";
 
 // Gemeinsamer Rahmen aller Projekt-Tabs: Kopfzeile, Team-Steuerung und
@@ -29,19 +29,25 @@ export default async function ProjectLayout({
 }: LayoutProps<"/projects/[projectId]">) {
   const { projectId } = await params;
 
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: {
-      id: true,
-      name: true,
-      status: true,
-      autopilot: true,
-      repoUrl: true,
-      organizationId: true,
-      organization: { select: { name: true } },
-      liveStatus: true,
-    },
-  });
+  // Läuft parallel zum Projekt-Fetch: die Kopfzeile ist auf jedem Tab
+  // sichtbar, der "Team arbeitet"-Spinner also unabhängig davon, welche
+  // Unterseite gerade offen ist (siehe office/page.tsx für die Details).
+  const [project, runningCount] = await Promise.all([
+    prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        autopilot: true,
+        repoUrl: true,
+        organizationId: true,
+        organization: { select: { name: true } },
+        liveStatus: true,
+      },
+    }),
+    prisma.agentRun.count({ where: { projectId, status: "RUNNING" } }),
+  ]);
   if (!project) notFound();
 
   // Nur ein Projekt gleichzeitig live – fuer die deaktivierte Play-Taste bei
@@ -58,6 +64,19 @@ export default async function ProjectLayout({
         title={project.name}
         status={
           <>
+            {/* Ersetzt die frühere Textkarte "Das Team arbeitet gerade." im
+                Büro-Tab: der Zustand ist tab-übergreifend relevant, deshalb
+                hier direkt neben dem Namen statt als eigener Panel-Streifen. */}
+            {runningCount > 0 && (
+              <span
+                role="status"
+                title={`Team arbeitet – ${runningCount} laufende${runningCount === 1 ? "r Schritt" : " Schritte"}`}
+                aria-label={`Team arbeitet – ${runningCount} laufende${runningCount === 1 ? "r Schritt" : " Schritte"}`}
+                className="inline-flex shrink-0"
+              >
+                <SpinnerIcon className="h-4 w-4 text-good motion-safe:animate-spin" />
+              </span>
+            )}
             <span className={`${PROJECT_STATUS_PILL[project.status]} pill-dot`}>
               {PROJECT_STATUS_LABEL[project.status]}
             </span>

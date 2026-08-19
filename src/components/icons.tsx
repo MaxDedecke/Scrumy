@@ -402,6 +402,18 @@ export function SteamIcon({ className }: { className?: string }) {
   );
 }
 
+/// Team arbeitet gerade: voller, blasser Ring + ein heller Bogen. Dreht sich
+/// über die vom Aufrufer gesetzte Klasse `motion-safe:animate-spin` – ohne
+/// Bewegung bleibt der Ring trotzdem als "läuft"-Symbol erkennbar.
+export function SpinnerIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" strokeOpacity="0.25" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function SettingsIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
