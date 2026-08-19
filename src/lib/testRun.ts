@@ -77,12 +77,37 @@ export async function runInSandbox(
     pidsLimit,
     "-w",
     "/workspaces",
+    // CI=true bringt praktisch jeden JS-Testrunner (vitest, jest, CRA/react-
+    // scripts, …) dazu, einmal durchzulaufen statt in den Watch-Modus zu
+    // gehen. Ohne das hängt z.B. "npm test" (→ vitest ohne --run) den
+    // gesamten Container auf, s.u. – das war real der Grund, warum ein
+    // Agenten-Ticket-Job nie fertig wurde und die komplette Job-Queue dieses
+    // Agenten blockiert hat.
+    "-e",
+    "CI=true",
     "--entrypoint",
     "sh",
     testRunnerImage(),
     "-c",
     script,
   ];
+
+  // Zweite Absicherung GEGEN genau diesen Fall (falsch konfiguriertes
+  // Skript startet trotzdem einen Dauerprozess, z.B. "npm start"): Der
+  // execFile-"timeout" oben killt nur den lokalen "docker"-CLI-Prozess per
+  // SIGTERM. Bei "docker run" (angehängt, ohne -d) hängt die Ausgabe- und
+  // Exit-Weiterleitung des CLI aber am tatsächlichen Container-Ende – bei
+  // Pipelines ("... | tail") oder ignoriertem SIGTERM in der Shell kommt das
+  // Signal nie beim eigentlichen Kindprozess an, der CLI-Prozess (und damit
+  // unser await) bleibt für immer hängen, obwohl "timeout" "gefeuert" hat.
+  // Deshalb zusätzlich direkt beim Docker-Daemon killen – das ist vom
+  // Zustand des lokalen CLI-Prozesses unabhängig und beendet den Container
+  // zuverlässig, --rm räumt ihn danach weg.
+  const hardKillTimer = setTimeout(() => {
+    execFile("docker", ["kill", containerName], () => {
+      // Bestmöglicher Versuch – wenn der Container schon weg ist, ist das ok.
+    });
+  }, timeoutMs + 2_000);
 
   try {
     const { stdout, stderr } = await execFileAsync("docker", args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 });
@@ -99,6 +124,8 @@ export async function runInSandbox(
       unavailable: false,
       output: clipOutput(combined || (err.message ?? String(error)), maxOutputChars),
     };
+  } finally {
+    clearTimeout(hardKillTimer);
   }
 }
 
