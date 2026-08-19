@@ -265,6 +265,7 @@ export async function logActivity(entry: {
   detail?: string;
   agentId?: string;
   ticketId?: string;
+  supportRequestId?: string;
 }) {
   await prisma.activityLogEntry.create({
     data: {
@@ -274,6 +275,7 @@ export async function logActivity(entry: {
       detail: entry.detail,
       agentId: entry.agentId,
       ticketId: entry.ticketId,
+      supportRequestId: entry.supportRequestId,
     },
   });
 }
