@@ -248,12 +248,15 @@ export const RUN_KIND_LABEL: Record<string, string> = {
   sprint_planning: "Sprint-Planung",
   ticket_plan: "Ticket-Planung",
   implementation: "Umsetzung",
+  acceptance_precheck: "Vorprüfung",
+  no_change_audit: "Nachprüfung ohne Änderung",
   review: "QA-Review",
   sprint_review: "Sprint-Review",
   inquiry: "Rückfrage beantwortet",
   clarification_prep: "Klärung vorbereitet",
   clarification_triage: "Klärung geprüft",
   review_triage: "Freigabe geprüft",
+  po_sweep: "Projekt aufgeräumt",
 };
 
 // Wie weit eine offene Klaerung die Arbeit anhaelt.

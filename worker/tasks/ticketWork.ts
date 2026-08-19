@@ -59,7 +59,11 @@ async function recordAttempt(input: {
     if (trace.searched.length > 0) lines.push(`Gesucht nach: ${trace.searched.slice(0, 10).join(", ")}`);
     if (trace.commands.length > 0) lines.push(`Ausgeführt: ${trace.commands.slice(0, 8).join(" · ")}`);
     if (trace.lastText) lines.push(`Zuletzt gesagt: „${trace.lastText.slice(0, 400)}"`);
-    lines.push(`(${trace.turns} Arbeitsschritte)`);
+    lines.push(
+      `(${trace.turns} Arbeitsschritte` +
+        (trace.replayed > 0 ? `, davon ${trace.replayed} bereits vorher gemachte Abfragen wiederholt` : "") +
+        ")",
+    );
   }
 
   const current = await prisma.ticket.findUnique({ where: { id: input.ticketId }, select: { attemptLog: true } });
@@ -388,6 +392,91 @@ Antworte nur so:
   const parsed = extractJsonObject(checked.text);
   if (typeof parsed.satisfied !== "boolean") return null;
   return { satisfied: parsed.satisfied, reason: String(parsed.reason ?? "").trim().slice(0, 400) };
+}
+
+/// Das Urteil ueber die Behauptung "es gibt hier nichts zu tun".
+interface NoChangeAudit {
+  /// "erfuellt": jedes Akzeptanzkriterium ist am Code nachweisbar erfuellt.
+  /// "luecke": mindestens eines nachweislich nicht – dann ist das ein
+  /// Arbeitsauftrag, keine Frage. "unklar": am Code nicht entscheidbar.
+  verdict: "erfuellt" | "luecke" | "unklar";
+  reason: string;
+  gaps: string[];
+  question: string;
+}
+
+/// Prueft nach, wenn der Umsetzer ohne eine einzige Aenderung zurueckkommt.
+///
+/// Das war der haeufigste Ausgang ueberhaupt (28 von 43 beobachteten
+/// Anlaeufen) und landete jedes Mal als Klaerung beim Auftraggeber: „X hat
+/// keine Änderung geliefert. Wie sollen wir mit dem Ticket umgehen?" – 15 von
+/// 18 Klaerungen waren dieser eine Satz. Das ist keine Entscheidung, die ein
+/// Mensch treffen kann: Der Umsetzer behauptet, alles sei schon da, und ob das
+/// stimmt, steht im Repository. Also nachsehen statt fragen – und je nach
+/// Befund abschliessen, gezielt nacharbeiten lassen oder (nur dann) fragen.
+async function auditNoChangeClaim({
+  agent,
+  projectId,
+  ticket,
+  dir,
+  claim,
+}: {
+  agent: Agent;
+  projectId: string;
+  ticket: { id: string; title: string; description: string | null; sprintId: string | null };
+  dir: string;
+  /// Womit der Umsetzer begruendet hat, dass nichts zu tun war.
+  claim: string;
+}): Promise<NoChangeAudit | null> {
+  const focus = `${ticket.title}\n${ticket.description ?? ""}`;
+  const sourceContext = await readRelevantSourceContext(dir, focus, { maxChars: 12_000, maxFiles: 8 });
+
+  const audited = await runAgent({
+    agent,
+    projectId,
+    ticketId: ticket.id,
+    sprintId: ticket.sprintId ?? undefined,
+    kind: "no_change_audit",
+    headline: `Prüft nach: „${ticket.title}" ohne Änderung zurückgegeben`,
+    maxTokens: 900,
+    system: `${TEAM_GRUNDREGELN}
+
+Du bist ${agent.name} und prüfst eine Behauptung nach: Ein Kollege gibt ein Ticket zurück, ohne eine Zeile geändert zu haben, weil angeblich schon alles da ist. Du gehst die Akzeptanzkriterien einzeln durch und urteilst allein am vorliegenden Code. Du änderst nichts. Du antwortest ausschließlich mit einem JSON-Objekt.`,
+    prompt: `## Ticket
+${ticket.title}
+${clipForPrompt(ticket.description ?? "", 4000)}
+
+## Was der Umsetzer sagt
+${clipForPrompt(claim || "(keine Begründung abgegeben)", 2000)}
+
+## Bestehender Code (zum Ticket passende Auswahl)
+${sourceContext}
+
+Geh die Akzeptanzkriterien des Tickets einzeln durch und prüfe jedes am Code.
+
+- "erfuellt": Du kannst JEDES Kriterium konkret am gezeigten Code belegen (Datei, Funktion, Endpunkt). Nur dann.
+- "luecke": Mindestens ein Kriterium ist nachweislich nicht erfüllt. Schreibe in "gaps" je einen kurzen, umsetzbaren Satz pro fehlendem Punkt – das ist die Arbeitsanweisung für den nächsten Anlauf, also konkret: welche Datei, welches Verhalten.
+- "unklar": Das Ticket lässt sich am Code gar nicht beurteilen, weil eine fachliche Entscheidung fehlt oder Auftrag und Anforderungen sich widersprechen. Schreibe dann in "question" die eine Frage, die der Auftraggeber beantworten muss. Fehlende Prüfmöglichkeit ist KEIN Grund für "unklar" – urteile dann aus dem Code.
+
+Antworte nur so:
+{"verdict": "erfuellt"|"luecke"|"unklar", "reason": "ein bis zwei Sätze Begründung", "gaps": ["..."], "question": "..."}`,
+  });
+
+  const parsed = extractJsonObject(audited.text);
+  const verdict = String(parsed.verdict ?? "");
+  if (verdict !== "erfuellt" && verdict !== "luecke" && verdict !== "unklar") return null;
+  const gaps = Array.isArray(parsed.gaps)
+    ? parsed.gaps.map((gap) => String(gap).trim()).filter(Boolean).slice(0, 8)
+    : [];
+  // Eine "luecke" ohne benannte Luecke ist keine Arbeitsanweisung, sondern nur
+  // ein Gefuehl – dann lieber fragen als blind noch einen Anlauf verbrennen.
+  if (verdict === "luecke" && gaps.length === 0) return null;
+  return {
+    verdict,
+    reason: String(parsed.reason ?? "").trim().slice(0, 600),
+    gaps,
+    question: String(parsed.question ?? "").trim().slice(0, 400),
+  };
 }
 
 const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helpers) => {
@@ -785,12 +874,79 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
       }
     }
 
-    // Frueher landete das trotzdem als Freigabe-Anfrage beim Menschen – eine
-    // Freigabe fuer eine leere Aenderung. Jetzt ist es die Frage, die es
-    // tatsaechlich ist: entweder hat der Agent selbst gefragt, oder auch der
-    // automatische Anlauf hat keine brauchbare Aenderung zustande gebracht,
-    // und es gibt im Repository nichts, was Scrumy automatisch haette
-    // pruefen koennen.
+    // Der Umsetzer behauptet, es sei nichts zu tun. Ob das stimmt, steht im
+    // Repository – also nachsehen, statt dem Auftraggeber eine Frage
+    // vorzulegen, die er gar nicht beantworten kann (siehe
+    // auditNoChangeClaim). Nur wenn auch die Nachpruefung nicht weiterkommt,
+    // wird daraus eine Klaerung.
+    let audit: NoChangeAudit | null = null;
+    if (!raisedQuestion) {
+      const auditor = (await agentForRole(projectId, "QA")) ?? implementer;
+      audit = await auditNoChangeClaim({
+        agent: auditor,
+        projectId,
+        ticket,
+        dir,
+        claim: `${summary}${notes ? `\n\nOffene Punkte: ${notes}` : ""}`,
+      });
+
+      if (audit?.verdict === "erfuellt") {
+        const result = `Ohne Änderung abgeschlossen: ${audit.reason}`;
+        if (ticket.isCritical) {
+          await requestHumanReview(projectId, ticketId, ticket.title, `Kritisches Ticket, keine Änderung nötig – ${audit.reason}`, true);
+        } else {
+          await prisma.ticket.update({ where: { id: ticketId }, data: { status: "DONE", result } });
+          await logActivity({
+            projectId,
+            ticketId,
+            actor: auditor.name,
+            agentId: auditor.id,
+            action: "ticket_done",
+            detail: `„${ticket.title}" ist erfüllt, ohne dass etwas zu ändern war – von ${auditor.name} am Code nachgeprüft (${audit.reason.slice(0, 200)})`,
+          });
+        }
+        if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+        return;
+      }
+
+      // Eine benannte Luecke ist ein Arbeitsauftrag, keine Frage: Der naechste
+      // Anlauf bekommt sie in den Plan geschrieben und laeuft sofort weiter.
+      // Begrenzt wird das nicht von MAX_ATTEMPTS (das gilt fuer blinde
+      // Wiederholungen), sondern vom Anlauf-Budget des Tickets – jede Runde
+      // hier traegt eine neue, konkrete Anweisung.
+      if (audit?.verdict === "luecke" && totalAttempt < ticket.attemptBudget) {
+        const gapList = audit.gaps.map((gap) => `- ${gap}`).join("\n");
+        await prisma.ticket.update({
+          where: { id: ticketId },
+          data: {
+            plan: `${plan}\n\n## Nachgeprüft nach Anlauf ${totalAttempt} (${auditor.name}): diese Punkte fehlen noch\n${gapList}`,
+          },
+        });
+        await logActivity({
+          projectId,
+          ticketId,
+          actor: auditor.name,
+          agentId: auditor.id,
+          action: "ticket_reworked",
+          detail: `„${ticket.title}": keine Änderung geliefert, aber ${audit.gaps.length} offene(r) Punkt(e) am Code nachgewiesen – Nacharbeit statt Rückfrage`,
+        });
+        await enqueueAgentJob("ticketWork", {
+          agentId: implementer.id,
+          projectId,
+          ticketId,
+          reason: `Nachprüfung nach Anlauf ${totalAttempt}: ${audit.gaps.join("; ")}`.slice(0, 300),
+          attempt: attempt + 1,
+        });
+        if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+        return;
+      }
+    }
+
+    // Jetzt erst der Mensch: Entweder hat der Agent selbst eine fachliche
+    // Frage gestellt, die Nachpruefung kommt am Code nicht weiter, oder das
+    // Anlauf-Budget ist aufgebraucht. Anders als frueher geht die Frage nicht
+    // mehr als „keine Änderung geliefert, was nun?" raus, sondern mit dem
+    // konkreten Befund.
     await logActivity({
       projectId,
       ticketId,
@@ -806,7 +962,12 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
       ticketId,
       sprintId: ticket.sprintId,
       raisedById: implementer.id,
-      question: `„${ticket.title}": ${implementer.name} hat keine Änderung geliefert. Wie sollen wir mit dem Ticket umgehen?`,
+      // Eine echte Frage schlaegt die Verlegenheitsfrage: Hat die Nachpruefung
+      // benannt, woran es haengt, steht das hier – nicht mehr „keine Änderung
+      // geliefert, was nun?", worauf niemand sinnvoll antworten kann.
+      question: audit?.question
+        ? `„${ticket.title}": ${audit.question}`
+        : `„${ticket.title}": ${implementer.name} hat keine Änderung geliefert. Wie sollen wir mit dem Ticket umgehen?`,
       // Hat er dabei selbst eine Frage gestellt, sind seine Wege auch hier die
       // fachlich richtigen – sonst bleibt es bei den Standardvorschlägen.
       options: raisedOptions,
@@ -815,6 +976,10 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
         `Was ${implementer.name} dazu sagt:\n${summary}` +
         (notes ? `\n\nOffene Punkte: ${notes}` : "") +
         (raisedQuestion ? `\n\nRückfrage des Agenten: ${raisedQuestion}` : "") +
+        (audit
+          ? `\n\nNachprüfung am Code: ${audit.reason}` +
+            (audit.gaps.length > 0 ? `\nOffen geblieben:\n${audit.gaps.map((gap) => `- ${gap}`).join("\n")}` : "")
+          : "") +
         (rejected.length > 0
           ? `\n\nNicht übernommene Dateien: ${rejected.map((file) => `${file.path} (${file.reason})`).join("; ")}`
           : ""),

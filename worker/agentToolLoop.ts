@@ -28,6 +28,26 @@ const LOOP_BUDGET_MS = 900_000;
 /// darf – ein Agent, der nur noch Tests laufen laesst, soll nicht das ganze
 /// Budget einer einzigen Bash-Kette opfern.
 const BASH_TIME_BUDGET_MS = 600_000;
+/// Ab diesem Schritt bekommt ein Anlauf, der noch nichts geschrieben hat, eine
+/// Erinnerung an sein Budget. Beobachtet: Zwei Drittel aller Werkzeugaufrufe
+/// waren Lesen (293 read_file gegen 96 Schreibaufrufe), und knapp die Haelfte
+/// aller Anlaeufe lief ins Limit, ohne je etwas zu aendern – der Agent merkt
+/// von sich aus nicht, dass ihm die Schritte ausgehen.
+const NUDGE_AFTER_TURN = 18;
+/// So viele Schritte vor Schluss wird zum Abschluss aufgefordert. Ohne diese
+/// letzte Runde endet ein Anlauf am Limit stumm, und `discardUncommittedChanges`
+/// wirft auch fertige Arbeit weg – ein "finish" mit dem, was da ist, ist immer
+/// besser als ein verworfener Anlauf.
+const LAST_CALL_TURNS = 3;
+/// Anteil des Zeitbudgets, ab dem dieselbe Schlussaufforderung greift – ein
+/// Anlauf kann auch an der Zeit sterben, lange bevor die Schritte alle sind.
+const LAST_CALL_TIME_FRACTION = 0.85;
+
+/// Werkzeuge, deren Ergebnis sich innerhalb eines Anlaufs nur aendert, wenn
+/// jemand schreibt. Nur die kommen aus dem Zwischenspeicher: `run_command`
+/// gehoert bewusst nicht dazu (Tests nach einer Aenderung erneut laufen zu
+/// lassen ist der Sinn der Sache), `edit_file`/`write_file` erst recht nicht.
+const REPLAYABLE_TOOLS = new Set(["read_file", "list_files", "search_files"]);
 
 /// Was ein Anlauf getan hat – rein zur Diagnose, unabhaengig davon, ob er
 /// erfolgreich war. Ein gescheiterter Anlauf liefert keine `files` (sein
@@ -49,6 +69,10 @@ export interface AttemptTrace {
   wrote: string[];
   /** Letzte Wortmeldung des Modells, gekuerzt – meist seine Begruendung. */
   lastText: string;
+  /** Wie oft der Agent einen lesenden Aufruf wiederholt hat, den er im selben
+   *  Anlauf schon gemacht hatte (siehe REPLAYABLE_TOOLS). Hoher Wert heisst:
+   *  Der Agent dreht sich im Kreis, statt zu arbeiten. */
+  replayed: number;
 }
 
 export interface ImplementationLoopResult {
@@ -65,6 +89,34 @@ export interface ImplementationLoopResult {
   commitMessage: string;
   /** Immer gefuellt, auch bei einem abgebrochenen Anlauf. */
   trace: AttemptTrace;
+}
+
+/// Der Hinweis, der einem Werkzeug-Ergebnis angehaengt wird, wenn das Budget
+/// knapp wird. Bewusst am letzten Tool-Ergebnis statt als eigener Textblock:
+/// Ein Anbieter darf zwischen Werkzeugaufruf und Ergebnis keine fremde
+/// Nachricht sehen, der Text im Ergebnis kommt ueberall gleich an.
+function budgetNote(input: { turn: number; wroteSomething: boolean; remainingMs: number }): string {
+  const turnsLeft = MAX_TOOL_TURNS - input.turn;
+  const timeIsUp = input.remainingMs <= LOOP_BUDGET_MS * (1 - LAST_CALL_TIME_FRACTION);
+
+  if (turnsLeft <= LAST_CALL_TURNS || timeIsUp) {
+    return (
+      `\n\n[Scrumy] Letzte Runde: ${turnsLeft <= LAST_CALL_TURNS ? `noch ${Math.max(turnsLeft, 0)} Schritt(e)` : "die Zeit ist gleich um"}. ` +
+      `Ruf JETZT "finish" auf – mit dem, was du hast. ` +
+      (input.wroteSomething
+        ? "Deine Änderungen sind sonst verloren: Ein Anlauf ohne finish wird komplett verworfen."
+        : "Wenn du nichts ändern konntest, schreib in \"summary\", woran es lag und was du geprüft hast.")
+    );
+  }
+
+  if (input.turn >= NUDGE_AFTER_TURN && !input.wroteSomething) {
+    return (
+      `\n\n[Scrumy] Schritt ${input.turn} von ${MAX_TOOL_TURNS}, und noch keine einzige Änderung geschrieben. ` +
+      `Hör auf zu lesen und fang an zu ändern (edit_file/write_file) – ein Anlauf, der nur liest, endet ohne Ergebnis und zählt trotzdem als Versuch.`
+    );
+  }
+
+  return "";
 }
 
 export async function runImplementationLoop({
@@ -109,6 +161,12 @@ export async function runImplementationLoop({
   const readFiles = new Set<string>();
   const searched = new Set<string>();
   const commands: string[] = [];
+  // Ergebnisse lesender Aufrufe innerhalb dieses Anlaufs. Beobachtet wurde
+  // dieselbe Datei 33 Mal gelesen und `list_files` 51 Mal aufgerufen – jedes
+  // Mal Modellzeit, Kontext und ein verbrauchter Schritt fuer eine Antwort,
+  // die der Agent schon hatte.
+  const replayCache = new Map<string, { content: string; turn: number }>();
+  let replayedCalls = 0;
   let turnsUsed = 0;
   let lastText = "";
   const trace = (): AttemptTrace => ({
@@ -118,6 +176,7 @@ export async function runImplementationLoop({
     commands,
     wrote: [...touchedFiles],
     lastText: lastText.slice(0, 600),
+    replayed: replayedCalls,
   });
 
   try {
@@ -183,7 +242,26 @@ export async function runImplementationLoop({
 
       const toolResultBlocks: ContentBlock[] = [];
       for (const call of turnResult.toolCalls) {
-        const execResult = await executeTool(call.name, call.input, ctx);
+        const cacheKey = `${call.name}:${JSON.stringify(call.input)}`;
+        const cached = REPLAYABLE_TOOLS.has(call.name) ? replayCache.get(cacheKey) : undefined;
+
+        let execResult;
+        if (cached) {
+          replayedCalls++;
+          execResult = {
+            content:
+              `${cached.content}\n\n[Scrumy] Genau diesen Aufruf hattest du in Schritt ${cached.turn} schon; ` +
+              `seitdem hat sich an der Datei nichts geändert, das Ergebnis ist unverändert. ` +
+              `Arbeite damit weiter, statt es noch einmal abzufragen – dieser Schritt ist trotzdem verbraucht.`,
+            isError: false,
+          };
+        } else {
+          execResult = await executeTool(call.name, call.input, ctx);
+          if (REPLAYABLE_TOOLS.has(call.name) && !execResult.isError) {
+            replayCache.set(cacheKey, { content: execResult.content, turn });
+          }
+        }
+
         if (call.name === "read_file") readFiles.add(String(call.input.path ?? ""));
         if (call.name === "search_files") searched.add(String(call.input.query ?? ""));
         if (call.name === "run_command") commands.push(String(call.input.command ?? "").slice(0, 120));
@@ -197,8 +275,24 @@ export async function runImplementationLoop({
             }
           }
         }
+        // Nach einem Schreibzugriff stimmt kein gespeichertes Leseergebnis mehr
+        // – weder der Dateiinhalt noch Dateibaum oder Suchtreffer. Lieber alles
+        // verwerfen als dem Agenten seinen eigenen alten Stand vorzuhalten.
+        if ((call.name === "write_file" || call.name === "edit_file") && !execResult.isError) {
+          replayCache.clear();
+        }
+        // `run_command` darf ebenfalls schreiben (npm install, Generatoren).
+        if (call.name === "run_command") replayCache.clear();
+
         toolResultBlocks.push({ type: "tool_result", toolUseId: call.id, content: execResult.content, isError: execResult.isError });
       }
+
+      // Budgethinweis an das letzte Ergebnis haengen, damit der Agent
+      // mitbekommt, wo er steht (siehe budgetNote).
+      const note = budgetNote({ turn, wroteSomething: touchedFiles.size > 0, remainingMs: deadline - Date.now() });
+      const lastBlock = toolResultBlocks[toolResultBlocks.length - 1];
+      if (note && lastBlock?.type === "tool_result") lastBlock.content += note;
+
       messages.push({ role: "user", content: toolResultBlocks });
       loggedPrompt = toolResultBlocks
         .map((block) => (block.type === "tool_result" ? `[Ergebnis]\n${block.content}` : ""))

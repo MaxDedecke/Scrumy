@@ -35,6 +35,15 @@ export async function enqueueAgentJob<TIdentifier extends keyof GraphileWorker.T
   // AgentTurnPayload) – TS kann das ueber den generischen Indexed-Access-Typ
   // allein nicht ableiten, daher hier ein begruendeter Cast.
   const agentId = (payload as { agentId: string }).agentId;
+  // Ein Ticket darf nie zweimal gleichzeitig in der Warteschlange stehen.
+  // Beobachtet: Jeder Nacharbeits-Pfad reiht das Ticket erneut ein und ruft
+  // danach `continueSprint`, das dasselbe – weiterhin offene – Ticket gleich
+  // noch einmal zieht. Ergebnis waren zwei Jobs fuer dasselbe Ticket, also ein
+  // kompletter doppelter Anlauf samt Modellkosten und verbrauchtem
+  // Anlauf-Budget. Mit `jobKey` ueberschreibt das zweite Einreihen das erste;
+  // laeuft der erste Job schon, legt graphile-worker den neuen sauber daneben.
+  const ticketId = (payload as { ticketId?: string }).ticketId;
+
   // `addJob`s eigene Signatur ist ueber ein zweites, hier nicht sichtbares
   // Generic konditional typisiert – TS kann das mit unserem `TIdentifier`
   // nicht mehr vereinheitlichen, obwohl beide Seiten strukturell identisch
@@ -42,6 +51,7 @@ export async function enqueueAgentJob<TIdentifier extends keyof GraphileWorker.T
   // Parametertypen dieser Funktion.
   await utils.addJob(taskIdentifier, payload as never, {
     queueName: `agent:${agentId}`,
+    ...(ticketId ? { jobKey: `${taskIdentifier}:${ticketId}`, jobKeyMode: "replace" as const } : {}),
     // graphile-worker wiederholt fehlgeschlagene Jobs sonst bis zu 25 Mal.
     // Ein Agenten-Schritt ist ein LLM-Aufruf: Ein zweiter Versuch faengt eine
     // Zufallsstoerung ab, alles darueber verbrennt nur Modellkosten fuer einen
