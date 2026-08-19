@@ -19,7 +19,11 @@ export class AgentRunError extends Error {
   constructor(
     message: string,
     readonly runId: string,
-    readonly code?: "TOKEN_LIMIT",
+    // Gereicht durch von LlmError.code (siehe src/lib/llm.ts) – der Aufrufer
+    // (worker/agentToolLoop.ts) muss wissen, ob der Anbieter selbst
+    // gescheitert ist ("TRANSPORT"), um bisherige Dateiänderungen nicht
+    // grundlos zu verwerfen.
+    readonly code?: "TOKEN_LIMIT" | "TRANSPORT",
   ) {
     super(message);
     this.name = "AgentRunError";

@@ -8,7 +8,7 @@ import type { Agent } from "@/generated/prisma/client";
 import type { ChatMessage, ContentBlock } from "@/lib/llm";
 import { discardUncommittedChanges } from "@/lib/workspace";
 import { optionsFromAgent, type ClarificationOption } from "@/lib/clarificationOptions";
-import { runAgentTurn } from "./agentRun";
+import { AgentRunError, runAgentTurn } from "./agentRun";
 import { ALL_TOOLS, executeTool, type ToolContext } from "./agentTools";
 
 /// Jeder Turn ist gezielt (ein Werkzeugaufruf, eine Antwort) – deutlich
@@ -299,13 +299,30 @@ export async function runImplementationLoop({
         .join("\n\n");
     }
   } catch (error) {
-    // Ein Turn ist mit einem echten Fehler abgebrochen (z.B. Anbieter nicht
-    // erreichbar) – nicht nur Turn-/Zeitlimit erreicht. Genau wie unten muss
-    // ein angefangener, nicht committeter Stand weg, sonst sieht ein erneuter
-    // Anlauf (Requeue durch graphile-worker) fremde Halbarbeit als
-    // Ausgangslage. Der eigentliche Fehler zaehlt trotzdem als Fehlschlag des
-    // Ticket-Jobs – deshalb wird er nach dem Aufräumen weitergereicht.
-    await discardUncommittedChanges(dir).catch(() => {});
+    // Ein Turn ist mit einem echten Fehler abgebrochen – nicht nur Turn-/
+    // Zeitlimit erreicht. Zwei grundverschiedene Fälle:
+    //
+    // 1. Der Anbieter selbst hat versagt (nicht erreichbar, 429/5xx, kaputtes
+    //    JSON – siehe LlmError.code "TRANSPORT" in src/lib/llm.ts). Das sagt
+    //    nichts über die bis dahin per write_file/edit_file geschriebenen
+    //    Dateien aus – die sind echte, erfolgreich ausgeführte Werkzeug-
+    //    aufrufe, keine Halbarbeit. Sie zu verwerfen, nur weil der NÄCHSTE
+    //    API-Aufruf rate-limitiert wurde, kostet den Fortschritt ohne Grund:
+    //    beobachtet im Drapbox-Projekt, wo dieselbe package.json-Korrektur
+    //    neun Anläufe lang immer wieder vom 429 der nächsten Anfrage
+    //    weggeworfen wurde, statt jemals committet zu werden.
+    // 2. Alles andere (Bug im eigenen Code, kaputter Zustand) – da bleibt es
+    //    beim bisherigen Verhalten: angefangener, nicht committeter Stand
+    //    weg, sonst sieht ein erneuter Anlauf (Requeue durch graphile-worker)
+    //    fremde Halbarbeit als Ausgangslage.
+    //
+    // Der eigentliche Fehler zaehlt in beiden Faellen trotzdem als
+    // Fehlschlag des Ticket-Jobs – deshalb wird er nach dem Aufräumen
+    // weitergereicht.
+    const isTransportFailure = error instanceof AgentRunError && error.code === "TRANSPORT";
+    if (!isTransportFailure) {
+      await discardUncommittedChanges(dir).catch(() => {});
+    }
     // Der Weg bis zum Absturz ist fuer den naechsten Anlauf genauso wertvoll
     // wie bei einem regulaeren Fehlschlag – ticketWork liest ihn hier ab.
     (error as { attemptTrace?: AttemptTrace }).attemptTrace = trace();

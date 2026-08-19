@@ -17,7 +17,13 @@ import type { LlmProfile, LlmProvider } from "@/generated/prisma/client";
 export class LlmError extends Error {
   constructor(
     message: string,
-    readonly code?: "TOKEN_LIMIT",
+    // "TRANSPORT": Anbieter/Netzwerk hat den Aufruf selbst nicht sauber
+    // beantwortet (nicht erreichbar, HTTP-Fehlerstatus wie 429, kaputtes
+    // JSON) – unabhängig davon, was der Agent inhaltlich vorhatte. Wer diesen
+    // Code sieht, weiß: der bisherige Arbeitsstand (schon geschriebene
+    // Dateien) ist nicht die Ursache und darf nicht verworfen werden (siehe
+    // worker/agentToolLoop.ts).
+    readonly code?: "TOKEN_LIMIT" | "TRANSPORT",
   ) {
     super(message);
     this.name = "LlmError";
@@ -127,20 +133,22 @@ async function postJson(url: string, headers: HeadersInit, body: unknown, timeou
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new LlmError(`Anbieter nicht erreichbar (${url}): ${reason}`);
+    throw new LlmError(`Anbieter nicht erreichbar (${url}): ${reason}`, "TRANSPORT");
   }
 
   const text = await response.text();
   if (!response.ok) {
     // Antwortkörper mitgeben – die Fehlermeldungen der Anbieter sind meist
-    // konkret (falsches Modell, Guthaben leer, Key ungültig).
-    throw new LlmError(`Anbieter antwortete mit ${response.status}: ${text.slice(0, 500)}`);
+    // konkret (falsches Modell, Guthaben leer, Key ungültig). "TRANSPORT",
+    // weil das auch 429/5xx einschließt: rate-limitiert oder überlastet ist
+    // der Anbieter, nicht der bisherige Arbeitsstand des Agenten.
+    throw new LlmError(`Anbieter antwortete mit ${response.status}: ${text.slice(0, 500)}`, "TRANSPORT");
   }
 
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new LlmError(`Antwort des Anbieters war kein JSON: ${text.slice(0, 300)}`);
+    throw new LlmError(`Antwort des Anbieters war kein JSON: ${text.slice(0, 300)}`, "TRANSPORT");
   }
 }
 
