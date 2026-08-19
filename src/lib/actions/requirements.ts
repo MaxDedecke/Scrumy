@@ -122,11 +122,13 @@ const GENERATE_SYSTEM_PROMPT = [
   "Du liest ein Projektkonzept und leitest daraus die Anforderungen ab, die das Entwicklungsteam umsetzen muss.",
   "Antworte ausschließlich mit einem JSON-Array, ohne Fließtext davor oder danach.",
   "Jedes Element hat die Felder: title (kurz, umsetzbar, deutsch), description (1–3 Sätze, was fachlich passieren muss),",
-  'priority (genau einer der Werte "LOW", "MEDIUM", "HIGH", "URGENT").',
-  "Schneide jede Anforderung so zu, dass ein Entwicklungsteam sie ohne fremde Hilfe in wenigen Tagen umsetzen und mit Testdaten prüfen kann.",
+  'priority (genau einer der Werte "LOW", "MEDIUM", "HIGH", "URGENT"), acceptanceCriteria (Array aus 1–4 kurzen, konkret prüfbaren Sätzen – woran ein Tester ohne Rückfrage erkennt, dass genau DIESE Anforderung erfüllt ist).',
+  "Ein Konzept-Abschnitt beschreibt meist eine ganze Fähigkeit (z.B. \"Excel/CSV-Import\"), keine einzelne Anforderung. Zerlege jede Fähigkeit in ihre einzeln umsetz- und prüfbaren Facetten, statt sie als einen Satz zusammenzufassen – typische Facetten sind u.a.: das Kernverhalten selbst (z.B. Datei einlesen und Felder zuordnen), Konfiguration/Zuordnung (z.B. Spalten-Mapping, wenn Formate variieren können), Validierung und Fehlerbehandlung bei fehlerhaften Eingaben, wiederkehrende/geplante Ausführung (falls die Fähigkeit laut Konzept nicht nur einmalig gebraucht wird), Protokollierung/Nachvollziehbarkeit, sowie Rechte/Sichtbarkeit falls das Konzept das andeutet. Nimm nur Facetten auf, die das Konzept tatsächlich trägt – erfinde keine Facette, die weder explizit noch zwingend impliziert ist.",
+  "Beispiel für zu grob (NICHT so): title \"Excel/CSV-Import implementieren\", description \"Import von Daten aus Excel- und CSV-Dateien, wiederkehrend einsetzbar, nicht nur zur Erstbefüllung.\" Das gehört in mehrere Anforderungen aufgeteilt, z.B.: \"Datei-Upload mit Format-/Spaltenerkennung\", \"Zuordnung von Datei-Spalten zu Zielfeldern konfigurierbar machen\", \"Ungültige oder unvollständige Zeilen beim Import erkennen und melden statt sie stillschweigend zu übernehmen\", \"Wiederkehrenden Import derselben Datenquelle auslösen können, ohne die Erstbefüllung zu wiederholen\" – jede davon für sich mit eigenen Akzeptanzkriterien.",
+  "Schneide jede einzelne Anforderung so zu, dass ein Entwicklungsteam sie ohne fremde Hilfe an ein bis zwei Tagen umsetzen und anhand ihrer eigenen Akzeptanzkriterien mit Testdaten prüfen kann – nicht die ganze Fähigkeit aus dem Konzept, sondern genau die eine Facette. Enthält ein Titel mehrere große Bestandteile (erkennbar an \"und\"/Aufzählungen wie \"Import und Export\", \"Anlegen, Ändern und Löschen\"), zerlege ihn weiter.",
   'Enthält das Konzept einen Abschnitt „Blockiert auf Zulieferung durch den Kunden" (oder ähnlich betitelt, z.B. Migration, Zugangsdaten, Provider-Auswahl), leite daraus KEINE Anforderung ab – das sind Voraussetzungen, die erst der Kunde liefern muss, keine Arbeit für das Team.',
   "Erfinde nichts, was nicht im Konzept steht oder sich zwingend daraus ergibt.",
-  "Jede Anforderung darf nur EIN Mal in der Liste vorkommen. Formuliere nichts, was inhaltlich schon eine andere Anforderung in deiner eigenen Liste oder in der Liste der bereits erfassten Anforderungen abdeckt, auch nicht mit anderen Worten oder aus einem anderen Blickwinkel (z.B. nicht \"Grundrechenarten implementieren\" UND separat \"Addition, Subtraktion, Multiplikation, Division unterstützen\") – das verdoppelt nur den Auftrag, ohne neuen Umfang zu beschreiben. Fasse stattdessen zu einer einzigen, vollständigeren Anforderung zusammen.",
+  "Jede Anforderung darf nur EIN Mal in der Liste vorkommen: Merge nur, wenn zwei Formulierungen exakt dasselbe Ergebnis mit anderen Worten beschreiben (reine Umformulierung, z.B. nicht separat \"Login mit E-Mail\" UND \"Anmeldung per E-Mail-Adresse\"). Zwei Anforderungen, die unterschiedliche Facetten derselben Fähigkeit abdecken und sich einzeln testen lassen (z.B. \"Import ausführen\" und \"Import wiederholbar terminieren\"), sind KEIN Duplikat und bleiben getrennt, auch wenn sie viele Wörter wie den Fähigkeitsnamen gemeinsam haben.",
 ].join(" ");
 
 /// Normalisiert einen Titel fuer den Duplikat-Vergleich: klein geschrieben,
@@ -148,10 +150,14 @@ function titleSimilarity(a: string, b: string): number {
   return intersection / union;
 }
 
-/// Schwelle, ab der zwei Titel als dasselbe Anliegen gelten. 0.6 faengt
-/// Umformulierungen zuverlaessig ab, ohne unterschiedliche Anforderungen mit
-/// nur zufaellig gemeinsamen Fachbegriffen faelschlich zusammenzuwerfen.
-const DUPLICATE_TITLE_THRESHOLD = 0.6;
+/// Schwelle, ab der zwei Titel als dasselbe Anliegen gelten. Seit der Prompt
+/// gezielt viele kleine Facetten EINER Faehigkeit verlangt (z.B. "Import
+/// ausfuehren" und "Import terminieren"), teilen benachbarte Anforderungen
+/// absichtlich den Faehigkeitsnamen als gemeinsames Wort – bei 0.6 waeren
+/// solche gewollt getrennten Facetten faelschlich als Duplikat weggefallen.
+/// 0.82 faengt weiterhin reine Umformulierungen ab, laesst aber Titel mit nur
+/// einem gemeinsamen Kernbegriff und sonst unterschiedlichem Wortlaut stehen.
+const DUPLICATE_TITLE_THRESHOLD = 0.82;
 
 function isDuplicateTitle(title: string, against: string[]): boolean {
   return against.some((other) => titleSimilarity(title, other) >= DUPLICATE_TITLE_THRESHOLD);
@@ -215,6 +221,7 @@ export async function generateRequirementsFromConcept(formData: FormData): Promi
   }
 
   const priorities: Priority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];
+  const MAX_CRITERIA_PER_REQUIREMENT = 4;
   // Duplikate faengt der Prompt oben nur an, wenn das Modell sich daran haelt
   // – zuverlaessig ist nur eine Pruefung danach. `seenTitles` waechst mit
   // jeder uebernommenen Anforderung, damit auch Duplikate INNERHALB derselben
@@ -231,10 +238,26 @@ export async function generateRequirementsFromConcept(formData: FormData): Promi
       return [];
     }
     seenTitles.push(title);
-    const description =
+    const baseDescription =
       typeof record.description === "string" && record.description.trim().length > 0
         ? record.description.trim()
-        : null;
+        : "";
+    // Akzeptanzkriterien haben (wie bei Tickets, siehe sprintPlanning.ts) kein
+    // eigenes DB-Feld, sondern werden als Markdown-Abschnitt in die
+    // Beschreibung eingebettet – gleiche Darstellung, ein Textfeld zum Lesen.
+    const criteria = Array.isArray(record.acceptanceCriteria)
+      ? record.acceptanceCriteria
+          .map((entry) => String(entry).trim())
+          .filter(Boolean)
+          .slice(0, MAX_CRITERIA_PER_REQUIREMENT)
+      : [];
+    const description =
+      [
+        baseDescription,
+        criteria.length > 0 ? `## Akzeptanzkriterien\n${criteria.map((entry) => `- ${entry}`).join("\n")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n") || null;
     const raw = typeof record.priority === "string" ? record.priority.toUpperCase() : "";
     const priority = (priorities as string[]).includes(raw) ? (raw as Priority) : "MEDIUM";
     return [{ projectId, title, description, priority, source: "GENERATED" as const }];

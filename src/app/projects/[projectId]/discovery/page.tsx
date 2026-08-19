@@ -262,7 +262,9 @@ export default async function ProjectDiscoveryPage({
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-ink">{req.title}</p>
                     {req.description && (
-                      <p className="mt-0.5 text-xs leading-relaxed text-ink-3">{req.description}</p>
+                      <p className="mt-0.5 whitespace-pre-line break-words text-xs leading-relaxed text-ink-3">
+                        {req.description}
+                      </p>
                     )}
                   </div>
                   <ActionForm action={deleteRequirement}>
