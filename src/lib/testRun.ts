@@ -28,6 +28,80 @@ function testRunnerVolume(): string {
   return process.env.TEST_RUNNER_WORKSPACE_VOLUME || process.env.PREVIEW_WORKSPACE_VOLUME || "scrumy_scrumy_workspaces";
 }
 
+/// Führt ein Shell-Skript in einem frischen, ressourcenbegrenzten Sibling-
+/// Container aus, der NUR das Arbeitsverzeichnis eines einzelnen Projekts
+/// sieht – nicht das ganze geteilte Workspace-Volume. Grundlage für die
+/// automatischen Prüfungen unten UND für das `run_command`-Werkzeug des
+/// Umsetzer-Agenten (siehe worker/agentTools.ts).
+///
+/// Bewusst `--mount ... volume-subpath=<projectId>` statt `-v volume:/workspaces`
+/// mit anschliessendem `cd` im Skript: Bei den Prüfungen unten ist der
+/// `cd`-Zielpfad zwar serverseitig fest, aber `run_command` fuehrt
+/// MODELLGENERIERTE Befehle aus. Ein "cd .." oder "ls /workspaces" waere ohne
+/// den Subpath-Mount ein Mandanten-uebergreifendes Datenleck – mit ihm sieht
+/// der Container strukturell nur noch das eigene Projektverzeichnis als "/",
+/// unabhaengig davon, was der Befehl tut. Braucht Docker >= 24.
+export async function runInSandbox(
+  projectId: string,
+  script: string,
+  {
+    containerNamePrefix = "scrumy-run",
+    timeoutMs = 120_000,
+    memory = "1g",
+    cpus = "2",
+    pidsLimit = "512",
+    maxOutputChars = 8000,
+  }: {
+    containerNamePrefix?: string;
+    timeoutMs?: number;
+    memory?: string;
+    cpus?: string;
+    pidsLimit?: string;
+    maxOutputChars?: number;
+  } = {},
+): Promise<{ exitCode: number | null; timedOut: boolean; unavailable: boolean; output: string }> {
+  const containerName = `${containerNamePrefix}-${projectId}-${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 128);
+
+  const args = [
+    "run",
+    "--rm",
+    "--name",
+    containerName,
+    "--mount",
+    `type=volume,source=${testRunnerVolume()},target=/workspaces,volume-subpath=${projectId}`,
+    "--memory",
+    memory,
+    "--cpus",
+    cpus,
+    "--pids-limit",
+    pidsLimit,
+    "-w",
+    "/workspaces",
+    "--entrypoint",
+    "sh",
+    testRunnerImage(),
+    "-c",
+    script,
+  ];
+
+  try {
+    const { stdout, stderr } = await execFileAsync("docker", args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 });
+    return { exitCode: 0, timedOut: false, unavailable: false, output: clipOutput(`${stdout}\n${stderr}`.trim(), maxOutputChars) };
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; killed?: boolean; code?: number };
+    if (err.code === "ENOENT" || (!("stdout" in err) && !("stderr" in err))) {
+      return { exitCode: null, timedOut: false, unavailable: true, output: err.message ?? String(error) };
+    }
+    const combined = `${err.stdout ?? ""}\n${err.stderr ?? ""}`.trim();
+    return {
+      exitCode: typeof err.code === "number" ? err.code : null,
+      timedOut: Boolean(err.killed),
+      unavailable: false,
+      output: clipOutput(combined || (err.message ?? String(error)), maxOutputChars),
+    };
+  }
+}
+
 /// Die Skripte, die als Nachweis zählen – in dieser Reihenfolge ausgeführt.
 /// Absichtlich nur diese drei, konventionellen Namen: Scrumys eigene
 /// Grundregeln erzwingen keinen Techstack, aber "test"/"lint"/"build" sind der
@@ -130,7 +204,9 @@ async function runSingleCheck(
   timeoutMs: number,
   maxOutputChars: number,
 ): Promise<CheckRunResult> {
-  const workdir = path.posix.join("/workspaces", projectId, target.relDir === "." ? "" : target.relDir);
+  // Dank Subpath-Mount (siehe runInSandbox) ist "/workspaces" im Container
+  // bereits die Projektwurzel – hier nur noch relDir anhängen.
+  const workdir = target.relDir === "." ? "/workspaces" : path.posix.join("/workspaces", target.relDir);
   const script = [
     `cd "${workdir}" || { echo "${MARKER} install exit=97"; exit 97; }`,
     `if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi`,
@@ -140,75 +216,21 @@ async function runSingleCheck(
     ...target.scripts.map((name) => `npm run ${name} --if-present; echo "${MARKER} ${name} exit=$?"`),
   ].join("\n");
 
-  const containerName =
-    `scrumy-check-${projectId}-${target.relDir.replace(/[^a-zA-Z0-9_-]/g, "_") || "root"}-${Date.now()}`.slice(0, 128);
-
-  const args = [
-    "run",
-    "--rm",
-    "--name",
-    containerName,
-    "-v",
-    `${testRunnerVolume()}:/workspaces`,
-    "--memory",
-    "1g",
-    "--cpus",
-    "2",
-    "--pids-limit",
-    "512",
-    "--entrypoint",
-    "sh",
-    testRunnerImage(),
-    "-c",
-    script,
-  ];
-
-  try {
-    const { stdout, stderr } = await execFileAsync("docker", args, {
-      timeout: timeoutMs,
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    const combined = `${stdout}\n${stderr}`.trim();
-    const { installExitCode, scriptExitCodes } = parseMarkers(combined);
-    return {
-      relDir: target.relDir,
-      scripts: target.scripts,
-      installExitCode,
-      scriptExitCodes,
-      timedOut: false,
-      unavailable: false,
-      output: clipOutput(combined, maxOutputChars),
-    };
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; killed?: boolean; code?: number };
-    // "docker" selbst fehlt/antwortet nicht (kein Socket gemountet, Runner-
-    // Image nicht gebaut, …) – das ist keine Aussage über das Projekt.
-    if (err.code === "ENOENT" || (!("stdout" in err) && !("stderr" in err))) {
-      return {
-        relDir: target.relDir,
-        scripts: target.scripts,
-        installExitCode: null,
-        scriptExitCodes: {},
-        timedOut: false,
-        unavailable: true,
-        output: err.message ?? String(error),
-      };
-    }
-    const combined = `${err.stdout ?? ""}\n${err.stderr ?? ""}`.trim();
-    const { installExitCode, scriptExitCodes } = parseMarkers(combined);
-    // Aufgeräumt bleiben lassen: bei Timeout raeumt "--rm" den Container erst
-    // beim (durch das Signal ausgeloesten) Beenden weg, das passiert von
-    // selbst – kein zusaetzliches "docker rm -f" noetig.
-    return {
-      relDir: target.relDir,
-      scripts: target.scripts,
-      installExitCode,
-      scriptExitCodes,
-      timedOut: Boolean(err.killed),
-      unavailable: false,
-      output: clipOutput(combined || (err.message ?? String(error)), maxOutputChars),
-    };
-  }
+  const run = await runInSandbox(projectId, script, {
+    containerNamePrefix: `scrumy-check-${target.relDir.replace(/[^a-zA-Z0-9_-]/g, "_") || "root"}`,
+    timeoutMs,
+    maxOutputChars,
+  });
+  const { installExitCode, scriptExitCodes } = parseMarkers(run.output);
+  return {
+    relDir: target.relDir,
+    scripts: target.scripts,
+    installExitCode,
+    scriptExitCodes,
+    timedOut: run.timedOut,
+    unavailable: run.unavailable,
+    output: run.output,
+  };
 }
 
 export function checkFailed(result: CheckRunResult): boolean {

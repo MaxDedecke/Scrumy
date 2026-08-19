@@ -12,18 +12,7 @@
 import type { Task } from "graphile-worker";
 import { prisma } from "@/lib/prisma";
 import { extractJsonObject } from "@/lib/llm";
-import {
-  commitAll,
-  gitShow,
-  isFrozenDocPath,
-  partitionSafeChanges,
-  readRepoFile,
-  readRelevantSourceContext,
-  repoOverview,
-  safeRepoPath,
-  writeFiles,
-  type FileChange,
-} from "@/lib/workspace";
+import { commitAll, gitShow, readRelevantSourceContext, repoOverview, writeFiles } from "@/lib/workspace";
 import { agentForRole, roleForTicket } from "@/lib/team";
 import { PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
 import { optionsFromAgent, type ClarificationOption } from "@/lib/clarificationOptions";
@@ -34,7 +23,7 @@ import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { continueSprint, loadWorkingProject } from "../orchestration";
 import { openClarification } from "../clarification";
 import { enqueueAgentJob } from "../queue";
-import { parseImplementation } from "../fileBlocks";
+import { runImplementationLoop } from "../agentToolLoop";
 import type { TicketWorkPayload } from "../taskTypes";
 
 /// Nach so vielen Anläufen hört das Team auf, ein Ticket allein lösen zu
@@ -69,40 +58,16 @@ async function repeatHistoryNote(ticketId: string): Promise<string> {
   );
 }
 
-/// Der Auftrag und was das Team dazu festgehalten hat, gehört nicht den
-/// Umsetzern: Konzept, Anforderungen, Projektverständnis und Sprint-Dokumente
-/// sind Belege gegenüber dem Auftraggeber. Ein Coding-Agent, der sie
-/// „nebenbei" neu schreibt, verfälscht genau die Unterlagen, an denen später
-/// gemessen wird – deshalb werden solche Änderungen verworfen und protokolliert.
-/// (Liste der Pfade: `isFrozenDocPath` in src/lib/workspace.ts – dieselbe
-/// Liste sorgt dort auch dafür, dass diese Dateien nicht doppelt als
-/// Datei-Inhalt in den Prompt geladen werden, wo sie schon strukturiert stehen.)
-const isProtected = isFrozenDocPath;
-
-/// Markiert im Ticket-Ergebnis die Liste abgelehnter Dateien, damit ein
-/// erneuter Anlauf sie wiederfindet (siehe rejectedPathsFromResult).
+/// Markiert im Ticket-Ergebnis die Liste abgelehnter Dateien – reine
+/// Information für den Menschen (siehe Nachweise), keine Erinnerung für einen
+/// erneuten Anlauf mehr: Innerhalb eines Tool-Loops (worker/agentToolLoop.ts)
+/// sieht der Agent eine Ablehnung sofort als Tool-Ergebnis und korrigiert im
+/// selben Anlauf – ein zweiter Ticket-Versuch startet deshalb ohne
+/// Sonderbehandlung frueherer Ablehnungen.
 const REJECTED_FILES_MARKER = "Abgelehnte Änderungen:";
 
 function formatRejectedFiles(rejected: { path: string; reason: string }[]): string {
   return `${REJECTED_FILES_MARKER}\n${rejected.map((file) => `- ${file.path}: ${file.reason}`).join("\n")}`;
-}
-
-/// Welche Dateien beim letzten Anlauf an einem SEARCH/REPLACE gescheitert
-/// sind. Ohne das wiederholt ein zweiter Anlauf denselben Fehler blind: Der
-/// Coding-Agent bekommt denselben Plan und denselben Bestandscode zu sehen
-/// und schreibt mit hoher Wahrscheinlichkeit wieder einen SEARCH-Ausschnitt,
-/// der nicht exakt passt. Diese Pfade dürfen deshalb ausnahmsweise komplett
-/// (DATEI statt EDIT) ersetzt werden.
-function rejectedPathsFromResult(result: string | null): Set<string> {
-  if (!result || !result.includes(REJECTED_FILES_MARKER)) return new Set();
-  const section = result.slice(result.indexOf(REJECTED_FILES_MARKER) + REJECTED_FILES_MARKER.length);
-  const paths = [...section.matchAll(/^-\s*(\S+):/gm)].map((match) => match[1]);
-  return new Set(paths);
-}
-
-interface MaterializedChanges {
-  files: FileChange[];
-  rejected: { path: string; reason: string }[];
 }
 
 interface SplitTicket {
@@ -314,58 +279,6 @@ ${formatCheckResults(results)}
   return { commit, results, allPassed };
 }
 
-/** Wendet die kompakten, exakten Such-/Ersetzungsblöcke erst im Speicher an. */
-async function materializeChanges(
-  dir: string,
-  result: ReturnType<typeof parseImplementation>,
-  /** Pfade, deren EDIT-Block im vorigen Anlauf abgelehnt wurde – für sie ist
-   *  ein DATEI-Block ausnahmsweise auch für eine bestehende Datei erlaubt. */
-  retryFullFileFor: Set<string> = new Set(),
-): Promise<MaterializedChanges> {
-  const changed = new Map<string, string>();
-  const rejected: MaterializedChanges["rejected"] = [];
-
-  for (const edit of result.edits) {
-    try {
-      safeRepoPath(dir, edit.path);
-      const current = changed.get(edit.path) ?? await readRepoFile(dir, edit.path);
-      if (current === null) {
-        rejected.push({ path: edit.path, reason: "Datei existiert nicht – für neue Dateien DATEI verwenden" });
-        continue;
-      }
-      const occurrences = current.split(edit.search).length - 1;
-      if (occurrences !== 1) {
-        rejected.push({
-          path: edit.path,
-          reason: occurrences === 0
-            ? "SEARCH-Ausschnitt wurde nicht gefunden"
-            : `SEARCH-Ausschnitt ist nicht eindeutig (${occurrences} Treffer)`,
-        });
-        continue;
-      }
-      changed.set(edit.path, current.replace(edit.search, edit.replace));
-    } catch (error) {
-      rejected.push({ path: edit.path, reason: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  for (const file of result.files) {
-    try {
-      safeRepoPath(dir, file.path);
-      const exists = await readRepoFile(dir, file.path) !== null;
-      if ((exists || changed.has(file.path)) && !retryFullFileFor.has(file.path)) {
-        rejected.push({ path: file.path, reason: "Datei existiert bereits – für bestehende Dateien EDIT verwenden" });
-        continue;
-      }
-      changed.set(file.path, file.content);
-    } catch (error) {
-      rejected.push({ path: file.path, reason: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  return { files: [...changed].map(([path, content]) => ({ path, content })), rejected };
-}
-
 /// Billige Vorpruefung, bevor Planung UND Umsetzung (der teure Modellaufruf
 /// mit vollem Quellcode-Kontext) angestossen werden: Manche Tickets sind
 /// laengst erfuellt – etwa ein Teilticket nach automatischer Zerlegung, dessen
@@ -488,13 +401,6 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
     }
   }
 
-  // Dateien, deren EDIT-Block beim letzten Anlauf abgelehnt wurde. Steht im
-  // ticket.result, sobald ein Anlauf Dateien abgelehnt hat – unabhängig vom
-  // attempt-Zähler, der bei einer menschlichen Zurückweisung wieder bei 1
-  // anfängt. Ohne diese Erinnerung sieht ein erneuter Anlauf denselben Plan
-  // und denselben Bestandscode und schreibt mit hoher Wahrscheinlichkeit
-  // wieder einen SEARCH-Ausschnitt, der nicht exakt passt.
-  const previouslyRejectedPaths = rejectedPathsFromResult(ticket.result);
   const ticketHead =
     `## Ticket\n${ticket.title}\nTyp: ${TICKET_TYPE_LABEL[ticket.type]} · Priorität: ${PRIORITY_LABEL[ticket.priority]}` +
     `${ticket.isCritical ? " · kritisch (braucht menschliche Freigabe)" : ""}\n\n${clipForPrompt(ticket.description ?? "", 6000)}`;
@@ -555,63 +461,44 @@ Schreibe einen knappen Umsetzungsplan als Markdown-Liste: welche Dateien angeleg
     });
   }
 
-  // --- 2. Umsetzung ---------------------------------------------------------
+  // --- 2. Umsetzung -----------------------------------------------------
+  // Kein vorbereiteter Kontext-Dump und kein starres Blockformat mehr: Der
+  // Agent arbeitet in einem Werkzeug-Loop (siehe worker/agentToolLoop.ts) –
+  // liest/sucht, was er braucht, ändert gezielt mit edit_file/write_file,
+  // lässt bei Bedarf selbst Tests/Build laufen (run_command) und ruft erst
+  // finish, wenn alles erledigt ist. Dateien sind zu diesem Zeitpunkt bereits
+  // auf der Platte (jedes Werkzeug schreibt sofort) – committet wird gleich
+  // unten in einem Schritt, wie zuvor.
   const planForPrompt = clipForPrompt(plan, 8000);
-  const sourceQuery = `${focus}\n${planForPrompt}`;
-  let implementation;
+  let loopResult;
   try {
-    implementation = await runAgent({
+    loopResult = await runImplementationLoop({
       agent: implementer,
       projectId,
+      dir,
       ticketId,
       sprintId: ticket.sprintId ?? undefined,
-      kind: "implementation",
-      headline: `Setzt Ticket „${ticket.title}" um`,
-      maxTokens: 16000,
-      // Auch kompakte Edits koennen bei langsamen lokalen Modellen dauern.
-      timeoutMs: 900_000,
       system: `${TEAM_GRUNDREGELN}
 
-Du bist ${implementer.name} und setzt das Ticket im Repository um. Du antwortest ausschließlich im vorgegebenen Blockformat, ohne Vorrede.`,
-      prompt: `${context}
+Du bist ${implementer.name} und setzt das Ticket im Repository um, mit echten Werkzeugen (lesen, suchen, schreiben, Befehle ausführen) – wie ein Kollege am Terminal, nicht mit einer einzigen vorbereiteten Antwort. Ruf "finish" nie zusammen mit einem anderen Werkzeug im selben Schritt auf.`,
+      initialPrompt: `${context}
 
 ${ticketHead}
 
 ## Umsetzungsplan
 ${planForPrompt}
 
-## Bestehender Code
-${await readRelevantSourceContext(dir, sourceQuery)}
-${previouslyRejectedPaths.size > 0
-  ? `\n## Vorheriger Anlauf ist gescheitert\nBei folgenden Dateien passte der SEARCH-Ausschnitt nicht exakt (oder mehrfach) auf den heutigen Stand: ${[...previouslyRejectedPaths].join(", ")}. Kopiere den SEARCH-Text diesmal Zeichen für Zeichen aus „Bestehender Code" oben, inklusive Einrückung – oder, falls die Änderung ohnehin den Großteil der Datei betrifft, gib genau diese Dateien ausnahmsweise vollständig in einem DATEI-Block zurück (nur für die hier genannten Pfade erlaubt).\n`
-  : ""}
-Die Auftragsunterlagen (docs/konzept.md, docs/anforderungen.md, docs/verstaendnis.md und docs/sprints/…) sind der eingefrorene Auftrag – die änderst du nicht. Lege dabei auch keine eigene Markdown-Dokumentation an oder aktualisiere sie (z.B. unter docs/technik/) – das kostet in jedem folgenden Ticket erneut Kontext-Budget, ohne dass der Auftraggeber danach gefragt hat. Dokumentation ist nur dann Teil dieses Tickets, wenn genau das der Auftrag ist; das Team bündelt eigene Dokumentation sonst am Projektende in einem eigenen Ticket.
+## Repository-Überblick
+${await repoOverview(dir, 160, focus)}
 
-Setze ausschließlich dieses kleine Ticket um. Ändere bestehende Dateien mit exakten SEARCH/REPLACE-Blöcken; kopiere in SEARCH genug unveränderten Kontext, damit der Ausschnitt genau einmal vorkommt. Gib bestehende Dateien niemals vollständig zurück – Ausnahme ist ein oben unter „Vorheriger Anlauf ist gescheitert" ausdrücklich genannter Pfad. Nur NEUE Dateien (und diese Ausnahme) kommen vollständig in einen DATEI-Block. Dateien, die du nicht anfasst, lässt du weg.
+Die Auftragsunterlagen (docs/konzept.md, docs/anforderungen.md, docs/verstaendnis.md und docs/sprints/…) sind der eingefrorene Auftrag – write_file/edit_file lehnen Änderungen daran ohnehin ab. Lege dabei auch keine eigene Markdown-Dokumentation an (z.B. unter docs/technik/) – das kostet in jedem folgenden Ticket erneut Kontext-Budget, ohne dass der Auftraggeber danach gefragt hat. Dokumentation ist nur dann Teil dieses Tickets, wenn genau das der Auftrag ist.
 
-Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wesentliches offen lassen, das du nicht selbst entscheiden darfst (Fachlogik, Datenhaltung, Kosten, Rechte): Erfinde nichts. Setze um, was zweifelsfrei ist, und stelle die Frage im Feld KLÄRUNG – der Auftraggeber entscheidet, und das Team arbeitet danach mit dem Beschluss weiter.
+Setze ausschließlich dieses kleine Ticket um. Nutze read_file/list_files/search_files, um dir den nötigen Kontext selbst zu holen, statt zu raten.
 
-Verlangt das Ticket nur eine Prüfung eines bereits bestehenden Stands (z.B. "testen, ob X funktioniert") und gibt es dafür nichts zu ändern: Liefere trotzdem keine leere Antwort und keine Klärung nur deswegen, dass du selbst keine Befehle ausführen kannst – Scrumy führt npm ci/test/lint/build im Anschluss automatisch und echt aus (kein Modellurteil) und dokumentiert das Ergebnis selbst. Das ist kein Grund für KLÄRUNG.
+Verlangt das Ticket nur eine Prüfung eines bereits bestehenden Stands (z.B. "testen, ob X funktioniert"): Führe die Prüfung mit run_command wirklich aus und fasse das Ergebnis in "summary" zusammen, statt eine Klärung zu eröffnen. Nur wenn wirklich gar nichts zu tun ist, ruf finish ohne Dateiänderungen auf.
 
-Zu jeder Klärung gehören die Wege, zwischen denen entschieden wird: Schreibe sie ins Feld WEGE, zwei bis vier Stück, jeden in einer eigenen Zeile als „Kurzer Titel: was das konkret bedeutet, mit Für und Wider in einem Satz". Es sind die fachlichen Möglichkeiten, die DU siehst (welcher Server, welches Datenmodell, welche Bibliothek) – nicht „nochmal versuchen" oder „abbrechen", die kennt Scrumy selbst.
-
-Antworte genau in diesem Format, ohne Code-Fences und ohne Escaping. Wiederhole EDIT-Blöcke, wenn eine Datei mehrere getrennte Stellen ändert:
-
-COMMIT: Betreffzeile im Imperativ, max. 72 Zeichen
-ZUSAMMENFASSUNG: 2-4 Sätze für den Auftraggeber: was jetzt anders ist und warum
-OFFEN: offene Punkte oder Annahmen (weglassen, wenn es keine gibt)
-KLÄRUNG: eine einzelne Frage an den Auftraggeber (nur wenn du wirklich nicht entscheiden darfst, sonst weglassen)
-WEGE: erster Weg: was das heißt
-- zweiter Weg: was das heißt
---- EDIT: bestehender/pfad.ts ---
-<<< SEARCH
-exakt vorhandener, eindeutig vorkommender Ausschnitt
-=== REPLACE
-neuer Ausschnitt
->>> END EDIT
---- DATEI: nur/neue/datei.ts ---
-vollständiger Inhalt der neuen Datei
---- ENDE ---`,
+Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wesentliches offen lassen, das du nicht selbst entscheiden darfst (Fachlogik, Datenhaltung, Kosten, Rechte): Erfinde nichts. Setze um, was zweifelsfrei ist, und stelle die Frage im "finish"-Parameter "clarification" – der Auftraggeber entscheidet, und das Team arbeitet danach mit dem Beschluss weiter. Gib dazu in "clarificationOptions" zwei bis vier fachliche Wege an (Titel + kurze Erklärung mit Für und Wider) – die Möglichkeiten, die DU siehst (welcher Server, welches Datenmodell, welche Bibliothek), nicht „nochmal versuchen" oder „abbrechen", die kennt Scrumy selbst.`,
+      maxTokensPerTurn: 4000,
     });
   } catch (error) {
     if (
@@ -625,7 +512,7 @@ vollständiger Inhalt der neuen Datei
     throw error;
   }
 
-  // Der Umsetzungs-Aufruf eben kann (Timeout 900s) minutenlang gedauert haben.
+  // Der Umsetzungs-Loop eben kann (Budget 900s) minutenlang gedauert haben.
   // In der Zwischenzeit kann ein Klärungsbeschluss dieses Ticket längst
   // geschlossen haben (effect "close" in clarificationDecision.ts – bewusst
   // OHNE erneutes Einreihen, siehe Kommentar dort). Ohne diesen Re-Check
@@ -640,31 +527,20 @@ vollständiger Inhalt der neuen Datei
     return;
   }
 
-  const result = parseImplementation(implementation.text);
-  const materialized = await materializeChanges(dir, result, previouslyRejectedPaths);
-  const { accepted: safeFiles, rejected: unsafe } = partitionSafeChanges(dir, materialized.files);
-  const files = safeFiles.filter((file) => !isProtected(file.path));
-  const rejected = [
-    ...materialized.rejected,
-    ...unsafe,
-    ...safeFiles
-      .filter((file) => isProtected(file.path))
-      .map((file) => ({ path: file.path, reason: "Auftragsunterlage – wird nicht von Umsetzern geändert" })),
-  ];
-  const summary = result.summary || "Ohne Zusammenfassung.";
-  const notes = result.notes;
+  const files = loopResult.files;
+  const rejected = loopResult.rejected;
+  const summary = loopResult.summary || "Ohne Zusammenfassung.";
+  const notes = loopResult.notes;
   // Auch wenn ein Teil der Änderungen committet wird, muss der Rest, den QA
   // vielleicht vermisst, im Ergebnis stehen bleiben – sonst hat der nächste
   // Anlauf keine Ahnung, welche Datei am Ende doch nicht angefasst wurde.
   const rejectedSuffix = rejected.length > 0 ? `\n\n${formatRejectedFiles(rejected)}` : "";
-  // Eine Frage an den Auftraggeber muss eine Frage sein. Ein Rest aus einem
-  // Formatfehler des Modells darf kein Ticket blockieren, bis ihn jemand
-  // wegklickt – deshalb die Mindestlaenge.
-  const raisedQuestion = result.clarification.length >= 15 ? result.clarification : "";
+  // Bereits im Loop geprüft (Mindestlänge, siehe worker/agentToolLoop.ts).
+  const raisedQuestion = loopResult.clarification;
   // Die Wege, die der Umsetzer selbst sieht. Sie sind die einzigen fachlichen
   // Vorschlaege, die es sofort gibt – die ausgearbeitete Vorlage des Scrum
   // Masters kommt erst einen Modellaufruf spaeter.
-  const raisedOptions = raisedQuestion ? optionsFromAgent(result.clarificationOptions) : [];
+  const raisedOptions = loopResult.clarificationOptions;
 
   if (rejected.length > 0) {
     await logActivity({
@@ -828,8 +704,11 @@ vollständiger Inhalt der neuen Datei
     return;
   }
 
-  const written = await writeFiles(dir, files);
-  const subject = (result.commitMessage.split("\n")[0] || ticket.title).slice(0, 120);
+  // Dateien liegen bereits auf der Platte (jedes Werkzeug im Loop schreibt
+  // sofort) – "git add -A" in commitAll erfasst sie unabhängig davon, wie
+  // viele einzelne Werkzeugaufrufe dazu geführt haben.
+  const written = files;
+  const subject = (loopResult.commitMessage.split("\n")[0] || ticket.title).slice(0, 120);
   const commit = await commitAll(dir, {
     authorName: implementer.name,
     message:

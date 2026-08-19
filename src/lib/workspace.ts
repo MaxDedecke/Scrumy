@@ -215,6 +215,18 @@ export async function commitAll(
   return { sha, shortSha: sha.slice(0, 8), changedFiles };
 }
 
+/// Verwirft alles, was seit dem letzten Commit im Arbeitsverzeichnis liegt –
+/// verfolgte Dateien werden zurückgesetzt, unverfolgte (neu angelegte)
+/// entfernt. Gegenstück zu einem abgebrochenen Tool-Loop (siehe
+/// worker/agentToolLoop.ts): Bricht die Umsetzung ohne `finish`-Aufruf ab
+/// (Turn- oder Zeitlimit erreicht), sollen angefangene Schreibvorgänge nicht
+/// als halb fertiger Stand liegen bleiben, auf dem der naechste Anlauf
+/// versehentlich aufbaut.
+export async function discardUncommittedChanges(dir: string): Promise<void> {
+  await git(dir, ["checkout", "--", "."]);
+  await git(dir, ["clean", "-fd"]);
+}
+
 function slugForEmail(name: string): string {
   const slug = name
     .toLowerCase()
@@ -390,6 +402,25 @@ export async function relevantRepoFiles(dir: string, query: string, maxFiles = 1
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .slice(0, maxFiles)
     .map((entry) => entry.file);
+}
+
+/// Volltextsuche fürs `search_files`-Werkzeug (worker/agentTools.ts): der
+/// Agent sucht sich seinen Kontext selbst zusammen, statt ihn vorab
+/// eingebettet zu bekommen. `git grep` durchsucht auch grosse Repositories,
+/// ohne den Inhalt vorher nach Node zu laden.
+export async function searchRepo(dir: string, query: string, maxLines = 60): Promise<string> {
+  const trimmed = query.trim();
+  if (!trimmed) return "(leere Suchanfrage)";
+  try {
+    const raw = await git(dir, ["grep", "-n", "-I", "-i", "--", trimmed]);
+    const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+    if (lines.length === 0) return "(keine Treffer)";
+    const shown = lines.slice(0, maxLines);
+    return shown.join("\n") + (lines.length > shown.length ? `\n… ${lines.length - shown.length} weitere Treffer` : "");
+  } catch {
+    // `git grep` liefert bei keinem Treffer Exit-Code 1 – kein Fehler.
+    return "(keine Treffer)";
+  }
 }
 
 export async function readRelevantSourceContext(
