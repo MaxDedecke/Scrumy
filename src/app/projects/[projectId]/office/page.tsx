@@ -16,7 +16,7 @@ import { AgentWorkspacePanel } from "@/components/AgentWorkspacePanel";
 import { ClarificationChoice } from "@/components/ClarificationChoice";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { IconSubmit } from "@/components/IconSubmit";
-import { Panel, PanelEmpty, PanelGrid, PanelStrip } from "@/components/Panel";
+import { Panel, PanelEmpty, PanelGrid } from "@/components/Panel";
 import { TeamChatPanel } from "@/components/TeamChatPanel";
 import { ArchiveIcon, ArrowRightIcon, BanIcon, ForwardIcon, SendIcon } from "@/components/icons";
 import { decideReview, delegateReview } from "@/lib/actions/team";
@@ -121,10 +121,6 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
     if (run.agentId && !lastRunByAgent.has(run.agentId)) lastRunByAgent.set(run.agentId, run);
   }
 
-  // Nur eine projektweite Klärung hält die ganze Mannschaft an; ein blockiertes
-  // Ticket lässt den Sprint weiterlaufen.
-  const blockingClarification = clarifications.find((entry) => entry.scope === "PROJECT");
-
   const agentEntries = project.agents.map(({ agent }) => {
     const running = runningByAgent.get(agent.id);
     const last = lastRunByAgent.get(agent.id);
@@ -150,7 +146,6 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
   const started = project.status === "ACTIVE" || project.status === "PAUSED";
   const doneTickets = sprint?.tickets.filter((ticket) => ticket.status === "DONE").length ?? 0;
   const totalTickets = sprint?.tickets.length ?? 0;
-  const busy = runningRuns.length > 0;
   const waitingCount = clarifications.length + pendingReviews.length;
 
   if (!started) {
@@ -293,35 +288,12 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
     <p className="px-4 py-3 text-sm text-ink-3">Noch nichts passiert.</p>
   );
 
-  // Der "arbeitet gerade"-Fall braucht hier keinen eigenen Satz mehr – er
-  // sitzt als Spinner neben dem Projektnamen im Seitenkopf (layout.tsx) und
-  // gilt tab-übergreifend statt nur im Büro. "Pausiert" steht schon als Pill
-  // im Seitenkopf, eine eigene Zeile dafür ist doppelt – hier bleibt nur, was
-  // sonst nirgends steht: eine offene Klärung oder der Autopilot-Zustand.
-  const stripMessage = blockingClarification ? (
-    <>
-      <span className="font-medium text-ink">Das Team wartet auf deine Entscheidung.</span>{" "}
-      Solange die Grundsatzfrage offen ist, nimmt niemand einen neuen Schritt an.
-    </>
-  ) : clarifications.length > 0 ? (
-    <>
-      {clarifications.length} Klärung{clarifications.length === 1 ? "" : "en"} offen – die betroffenen
-      Tickets liegen, der Rest läuft weiter.
-    </>
-  ) : project.status === "PAUSED" || busy ? null : project.autopilot ? (
-    "Niemand arbeitet gerade. Der nächste Schritt kommt automatisch."
-  ) : (
-    "Autopilot ist aus – das Team wartet auf den nächsten Anstoß."
-  );
-
+  // Der "arbeitet gerade"-Fall, offene Klärungen und der Autopilot-Zustand
+  // haben hier keine eigene Textzeile mehr – sie stehen jetzt klein im
+  // Seitenkopf (layout.tsx), tab-übergreifend statt nur im Büro, und nehmen
+  // den Karten hier keinen Platz mehr weg.
   return (
     <>
-      {stripMessage && (
-        <PanelStrip>
-          <p className="card px-4 py-2.5 text-sm text-ink-2">{stripMessage}</p>
-        </PanelStrip>
-      )}
-
       <PanelGrid className="lg:grid-cols-3 lg:grid-rows-[minmax(0,6fr)_minmax(0,4fr)]">
         <AgentWorkspacePanel className="lg:col-span-2" agents={agentEntries} />
 

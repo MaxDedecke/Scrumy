@@ -32,7 +32,9 @@ export default async function ProjectLayout({
   // Läuft parallel zum Projekt-Fetch: die Kopfzeile ist auf jedem Tab
   // sichtbar, der "Team arbeitet"-Spinner also unabhängig davon, welche
   // Unterseite gerade offen ist (siehe office/page.tsx für die Details).
-  const [project, runningCount] = await Promise.all([
+  // Die offenen Klärungen kommen aus demselben Grund hier statt im Büro-Tab
+  // rein: der Statustext daneben soll tab-übergreifend sichtbar sein.
+  const [project, runningCount, openClarifications] = await Promise.all([
     prisma.project.findUnique({
       where: { id: projectId },
       select: {
@@ -47,12 +49,41 @@ export default async function ProjectLayout({
       },
     }),
     prisma.agentRun.count({ where: { projectId, status: "RUNNING" } }),
+    prisma.clarification.findMany({ where: { projectId, status: "OPEN" }, select: { scope: true } }),
   ]);
   if (!project) notFound();
 
   // Nur ein Projekt gleichzeitig live – fuer die deaktivierte Play-Taste bei
   // allen ANDEREN Projekten, siehe LiveAppControls.
   const otherLiveProject = await getOtherLiveProject(project.id);
+
+  // Früher eine eigene Textkarte oben im Büro-Tab ("PanelStrip") – nahm dort
+  // Platz weg, der den Karten fehlte. Jetzt eine knappe, tab-übergreifende
+  // Kurzfassung direkt im Seitenkopf; die volle Formulierung steht als
+  // Tooltip (title) dahinter.
+  const blockingClarification = openClarifications.some((entry) => entry.scope === "PROJECT");
+  const statusMessage = blockingClarification
+    ? {
+        text: "Wartet auf deine Entscheidung",
+        title:
+          "Das Team wartet auf deine Entscheidung. Solange die Grundsatzfrage offen ist, nimmt niemand einen neuen Schritt an.",
+      }
+    : openClarifications.length > 0
+      ? {
+          text: `${openClarifications.length} Klärung${openClarifications.length === 1 ? "" : "en"} offen`,
+          title: `${openClarifications.length} Klärung${openClarifications.length === 1 ? "" : "en"} offen – die betroffenen Tickets liegen, der Rest läuft weiter.`,
+        }
+      : project.status === "PAUSED" || runningCount > 0
+        ? null
+        : project.autopilot
+          ? {
+              text: "Nächster Schritt automatisch",
+              title: "Niemand arbeitet gerade. Der nächste Schritt kommt automatisch.",
+            }
+          : {
+              text: "Autopilot aus",
+              title: "Autopilot ist aus – das Team wartet auf den nächsten Anstoß.",
+            };
 
   return (
     <main className={pageFixedClass}>
@@ -74,6 +105,11 @@ export default async function ProjectLayout({
                 className="inline-flex shrink-0"
               >
                 <SpinnerIcon className="h-4 w-4 text-good motion-safe:animate-spin" />
+              </span>
+            )}
+            {statusMessage && (
+              <span title={statusMessage.title} className="shrink-0 truncate text-xs text-ink-3">
+                {statusMessage.text}
               </span>
             )}
             <span className={`${PROJECT_STATUS_PILL[project.status]} pill-dot`}>
