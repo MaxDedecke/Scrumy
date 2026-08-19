@@ -353,6 +353,7 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   requirements_approved: "Anforderungen freigegeben",
   requirements_reopened: "Anforderungs-Freigabe zurückgezogen",
   po_sweep_completed: "Klarheits-Check",
+  po_sweep_resumed: "Arbeit wieder angestoßen",
   tickets_reclaimed: "Zurückgestellte Tickets wieder aufgenommen",
   support_request_converted: "Kundenanfrage in Ticket überführt",
 };

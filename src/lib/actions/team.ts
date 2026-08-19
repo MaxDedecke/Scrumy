@@ -13,6 +13,7 @@ import { scheduleNextStep } from "@/lib/nextStep";
 import { revalidateProject } from "@/lib/actions/revalidate";
 import { resolveReview } from "@/lib/reviewDecision";
 import { enqueueAgentJob } from "../../../worker/queue";
+import { reconcileStaleLocksNow } from "../../../worker/reconcile";
 
 function str(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
@@ -146,12 +147,24 @@ export async function nudgeTeam(formData: FormData): Promise<ActionResult> {
   if (!project) return fail("Projekt nicht gefunden.");
   if (project.status !== "ACTIVE") return fail("Das Projekt ist nicht aktiv – erst fortsetzen.");
 
+  // Erst aufräumen, dann erst nachsehen, ob wirklich noch jemand arbeitet –
+  // sonst täuscht genau der Zustand, den wir gerade auflösen wollen, die
+  // Prüfung direkt darunter: Ein AgentRun, der mit einem abgestürzten Worker
+  // gestorben ist, steht ohne dieses Aufräumen für immer auf RUNNING, und
+  // "das Team arbeitet gerade" wäre schlicht falsch (siehe worker/reconcile.ts,
+  // beobachtet im iPhoto-Projekt).
+  const cleaned = await reconcileStaleLocksNow();
+
   const running = await prisma.agentRun.findFirst({ where: { projectId, status: "RUNNING" } });
   if (running) return note("Das Team arbeitet gerade – der nächste Schritt kommt von allein.");
 
   const message = await scheduleNextStep(projectId);
   revalidateProject(projectId);
-  return ok(message);
+  const cleanupNote =
+    cleaned.unlockedPools > 0 || cleaned.abandonedRuns > 0
+      ? ` (davor eine hängende Job-Sperre eines abgestürzten Workers gelöst)`
+      : "";
+  return ok(`${message}${cleanupNote}`);
 }
 
 /// Der Auftraggeber stößt den Product Owner von Hand an, das Projekt auf
@@ -165,6 +178,12 @@ export async function nudgeProductOwner(formData: FormData): Promise<ActionResul
 
   const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
   if (!productOwner) return fail("Diesem Projekt ist kein Product Owner zugeordnet – erst das Team starten.");
+
+  // Dieselbe Vorab-Aufräumung wie bei nudgeTeam (s.o.): poSweep selbst stößt
+  // am Ende zwar auch die Wiederaufnahme an (worker/tasks/poSweep.ts), aber
+  // eine tote Job-Sperre blockiert die Warteschlange des betroffenen Agenten
+  // unabhängig davon – die muss weg, bevor überhaupt wieder etwas läuft.
+  await reconcileStaleLocksNow();
 
   await enqueueAgentJob("poSweep", {
     agentId: productOwner.id,

@@ -9,13 +9,22 @@
 // widersprüchliche Beschlüsse, …), ohne dass er den Finger genau draufhalten
 // kann.
 //
-// Der Product Owner selbst löst nichts direkt auf – er liest Beschlussregister,
-// offene Klärungen und Board wie ein Kollege, der neu draufschaut, und meldet,
-// was er findet, GENAUSO wie jede andere Klärung auch (`openClarification`):
-// mit Vorbereitung durch den Scrum Master und Prüfung durch ihn selbst danach
-// (clarificationPrep/-Triage). So landet nur, was wirklich einen Blick
-// braucht, am Ende beim Menschen – der Rest entscheidet das Team unterwegs
-// selbst, wie bei jeder anderen Klärung.
+// Der Product Owner löst inhaltlich nichts direkt auf – er liest
+// Beschlussregister, offene Klärungen und Board wie ein Kollege, der neu
+// draufschaut, und meldet, was er an UNKLAREM findet, GENAUSO wie jede andere
+// Klärung auch (`openClarification`): mit Vorbereitung durch den Scrum Master
+// und Prüfung durch ihn selbst danach (clarificationPrep/-Triage). So landet
+// nur, was wirklich einen Blick braucht, am Ende beim Menschen – der Rest
+// entscheidet das Team unterwegs selbst, wie bei jeder anderen Klärung.
+//
+// Unklarheit ist aber nicht der einzige Grund, warum ein Projekt steht: eine
+// Job-Sperre eines abgestürzten Workers (siehe worker/reconcile.ts) oder eine
+// andere Lücke in der Ablaufkette kann das Team lahmlegen, OHNE dass irgendwo
+// eine Klärung offen ist – reine Diagnose findet das nicht, weil nichts
+// fachlich unklar ist. Deshalb stößt dieser Task am Ende zusätzlich denselben
+// Schritt an wie der „Macht weiter"-Knopf (`scheduleNextStep`) – das
+// „Anstupsen" des Product Owners darf nicht nur reden, sondern muss eine
+// tatsächlich liegengebliebene Arbeit auch wieder in Gang setzen.
 import type { Task } from "graphile-worker";
 import { prisma } from "@/lib/prisma";
 import { extractJsonObject } from "@/lib/llm";
@@ -25,6 +34,7 @@ import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { openClarification } from "../clarification";
 import type { PoSweepPayload } from "../taskTypes";
 import type { ClarificationScope } from "@/generated/prisma/client";
+import { scheduleNextStep } from "@/lib/nextStep";
 
 /// Mehr Fundstellen als das würden das Büro fluten statt Klarheit zu schaffen –
 /// wirklich Dringendes fällt so oder so zuerst auf.
@@ -156,6 +166,29 @@ Antworte nur mit diesem JSON-Objekt:
       action: "po_sweep_completed",
       detail: `Konnte das Projekt nicht prüfen (${message.slice(0, 200)}).`,
     });
+  }
+
+  // Diagnose allein bewegt nichts – siehe Kommentar am Dateikopf. Läuft
+  // unabhängig davon, ob der Klarheits-Check oben geklappt hat: Scheitert
+  // der Modellaufruf (z.B. Anbieter überlastet), soll das Team trotzdem
+  // nicht stehen bleiben. Arbeitet gerade schon jemand, ist hier nichts zu
+  // tun – die Prüfung ist nur, um im Log nicht staendig ein folgenloses
+  // "nächster Schritt: läuft schon" zu vermelden.
+  const alreadyRunning = await prisma.agentRun.findFirst({ where: { projectId, status: "RUNNING" } });
+  if (!alreadyRunning) {
+    try {
+      const resumeMessage = await scheduleNextStep(projectId);
+      await logActivity({
+        projectId,
+        agentId: agent.id,
+        actor: agent.name,
+        action: "po_sweep_resumed",
+        detail: resumeMessage.slice(0, 600),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      helpers.logger.error(`Wiederaufnahme durch ${role} ist fehlgeschlagen: ${message}`);
+    }
   }
 };
 

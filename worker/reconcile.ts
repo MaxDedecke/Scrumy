@@ -21,6 +21,20 @@ import { openClarification } from "./clarification";
 /// Umsetzungsschritte, siehe worker/tasks/ticketWork.ts).
 const STALE_AFTER_MS = 60 * 60 * 1000;
 
+/// Schwelle für die interaktive Variante unten (`reconcileStaleLocksNow`) –
+/// deutlich enger als `STALE_AFTER_MS`, bewusst mit einem kleinen Risiko
+/// falscher Treffer: Ein Ticket, das legitim laenger als 20 Minuten braucht
+/// (Umsetzung + QA-Review + automatische Pruefung mehrerer Check-Ziele),
+/// existiert, ist aber selten. Trifft die Schwelle trotzdem daneben und ein
+/// zweiter Job startet neben einem noch laufenden, ist das seit dem
+/// Workspace-Lock (worker/workspaceLock.ts) nur noch verschwendete statt
+/// zerstoerender Arbeit – die beiden teilen sich das Arbeitsverzeichnis nicht
+/// mehr gleichzeitig. Nur fuer den Menschen gedacht, der aktiv nachschaut
+/// (siehe nudgeTeam/nudgeProductOwner in src/lib/actions/team.ts); der
+/// unbeaufsichtigte stuendliche Lauf bleibt bei der vorsichtigeren
+/// `STALE_AFTER_MS`.
+const INTERACTIVE_STALE_AFTER_MS = 20 * 60 * 1000;
+
 /// Zweite Sicherung fuer geloeschte Projekte: Arbeitsverzeichnisse ohne
 /// Projektzeile wegwerfen.
 ///
@@ -73,8 +87,8 @@ export async function reconcileOrphanWorkspaces(): Promise<number> {
   return orphans.length;
 }
 
-export async function reconcileStaleRuns(): Promise<number> {
-  const cutoff = new Date(Date.now() - STALE_AFTER_MS);
+export async function reconcileStaleRuns(staleAfterMs: number = STALE_AFTER_MS): Promise<number> {
+  const cutoff = new Date(Date.now() - staleAfterMs);
 
   const stale = await prisma.agentRun.findMany({
     where: { status: "RUNNING", startedAt: { lt: cutoff } },
@@ -138,4 +152,20 @@ export async function reconcileStaleRuns(): Promise<number> {
   }
 
   return stale.length;
+}
+
+/// Interaktives Gegenstück zum stündlichen Aufräumen oben – aufgerufen genau
+/// in dem Moment, in dem ein Mensch von Hand nachschaut ("Macht weiter"/"PO
+/// anstupsen", siehe src/lib/actions/team.ts), statt erst bis zu einer Stunde
+/// auf den nächsten planmäßigen Durchlauf zu warten. Nutzt die engere
+/// `INTERACTIVE_STALE_AFTER_MS`-Schwelle (siehe Kommentar dort) – genau
+/// dieses Zusammenspiel hat iPhoto lahmgelegt: ein Container-Neustart mitten
+/// im Ticket-Job hinterließ eine tote Sperre, die die ganze Warteschlange
+/// dieses Agenten blockierte, und weder „Macht weiter" noch „PO anstupsen"
+/// konnten das vorher beheben – beide reihen nur Jobs ein, keiner löst
+/// Sperren.
+export async function reconcileStaleLocksNow(): Promise<{ unlockedPools: number; abandonedRuns: number }> {
+  const unlockedPools = await unlockStaleJobs(INTERACTIVE_STALE_AFTER_MS);
+  const abandonedRuns = await reconcileStaleRuns(INTERACTIVE_STALE_AFTER_MS);
+  return { unlockedPools, abandonedRuns };
 }
