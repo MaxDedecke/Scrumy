@@ -428,6 +428,21 @@ model Ticket {
   result          String?
   /// Story Points aus der Sprint-Planung.
   estimate        Int?
+  /// Wie oft schon versucht wurde, dieses Ticket umzusetzen – ueber alle Jobs
+  /// hinweg gezaehlt. Bis hierher lebte der Zaehler nur im Job-Payload: Er
+  /// zaehlte innerhalb einer Nacharbeits-Kette korrekt hoch, begann aber bei
+  /// jedem Nachziehen aus dem Sprint (continueSprint) wieder bei 1 – die
+  /// Obergrenze griff dadurch nie, und dasselbe Ticket lief in Dauerschleife.
+  attempts        Int             @default(0)
+  /// Wie viele Anlaeufe dieses Ticket insgesamt bekommt. Ist das Budget
+  /// aufgebraucht, zieht der Sprint es nicht mehr nach, sondern legt es dem
+  /// Auftraggeber vor; erst ein menschliches "nochmal versuchen" legt neue
+  /// Anlaeufe drauf (siehe src/lib/clarificationDecision.ts).
+  attemptBudget   Int             @default(6)
+  /// Kurzprotokoll der bisherigen Anlaeufe: was jeder angefasst und gelesen
+  /// hat und woran er gescheitert ist. Geht in den Prompt des naechsten
+  /// Anlaufs, damit der nicht bei null anfaengt (siehe ticketWork.ts).
+  attemptLog      String?
   type            TicketType      @default(FEATURE)
   status          TicketStatus    @default(BACKLOG)
   priority        Priority        @default(MEDIUM)

@@ -8,7 +8,7 @@
 // ist dieser eine Weg für beide Seiten.
 import { prisma } from "@/lib/prisma";
 import { scheduleNextStep } from "@/lib/nextStep";
-import type { ClarificationEffect } from "@/lib/clarificationOptions";
+import { TICKET_ATTEMPT_GRANT, type ClarificationEffect } from "@/lib/clarificationOptions";
 import { enqueueAgentJob } from "../../worker/queue";
 
 /// Um wie viele Sprints das Budget waechst, wenn weitergearbeitet werden darf
@@ -22,13 +22,18 @@ export interface ResolveClarificationInput {
   effect: ClarificationEffect;
   /// "Mensch" oder z.B. "Pia Ostermann (Product Owner)".
   decidedBy: string;
+  /// Hat ein Mensch entschieden? Entscheidet darueber, ob ein
+  /// "nochmal versuchen" dem Ticket wirklich neue Anlaeufe bewilligt. Ein
+  /// Agent, der sich selbst weitere Versuche genehmigt, hebelt die Obergrenze
+  /// aus, die ihn gerade gestoppt hat – genau das war die Dauerschleife.
+  byHuman: boolean;
 }
 
 /// Haelt einen Beschluss fest und setzt seine Wirkung in Gang. Genutzt sowohl
 /// vom Menschen im Büro (`decideClarification`) als auch vom Product Owner,
 /// wenn er eine Klärung selbst entscheidet.
 export async function resolveClarification(input: ResolveClarificationInput): Promise<string> {
-  const { clarificationId, decision, effect, decidedBy } = input;
+  const { clarificationId, decision, effect, decidedBy, byHuman } = input;
 
   const clarification = await prisma.clarification.findUniqueOrThrow({
     where: { id: clarificationId },
@@ -72,7 +77,7 @@ export async function resolveClarification(input: ResolveClarificationInput): Pr
     });
   }
 
-  return applyEffect(effect, clarification.id, clarification.projectId);
+  return applyEffect(effect, clarification.id, clarification.projectId, byHuman);
 }
 
 /// Was ein Beschluss in der Arbeit bewirkt. Ohne diesen Schritt waere eine
@@ -81,6 +86,7 @@ async function applyEffect(
   effect: ClarificationEffect,
   clarificationId: string,
   projectId: string,
+  byHuman: boolean,
 ): Promise<string> {
   const clarification = await prisma.clarification.findUniqueOrThrow({ where: { id: clarificationId } });
 
@@ -150,6 +156,19 @@ async function applyEffect(
     });
     const next = await resume(clarification.resumeTask, clarification.resumePayload, projectId);
     return `Budget steht jetzt bei ${project.sprintBudget} Sprints. ${next}`;
+  }
+
+  // "Nochmal versuchen" ist nur dann wirklich ein neuer Anlauf, wenn das
+  // Ticket dafuer auch Budget hat (siehe `Ticket.attemptBudget`). Aufstocken
+  // darf allein der Mensch: Er hat den Beschluss gefasst und traegt die
+  // Kosten des naechsten Versuchs.
+  if (effect === "resume" && byHuman && clarification.ticketId) {
+    const ticket = await prisma.ticket.update({
+      where: { id: clarification.ticketId },
+      data: { attemptBudget: { increment: TICKET_ATTEMPT_GRANT } },
+    });
+    const next = await resume(clarification.resumeTask, clarification.resumePayload, projectId);
+    return `„${ticket.title}" hat ${TICKET_ATTEMPT_GRANT} weitere Anläufe (insgesamt ${ticket.attemptBudget}). ${next}`;
   }
 
   return resume(clarification.resumeTask, clarification.resumePayload, projectId);

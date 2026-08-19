@@ -60,6 +60,7 @@ export async function decideClarification(formData: FormData): Promise<ActionRes
     decision,
     effect,
     decidedBy: "Mensch",
+    byHuman: true,
   });
   revalidateProject(projectId);
   return ok(`Beschluss festgehalten. ${outcome}`);
@@ -84,6 +85,9 @@ async function delegateClarification(
       decision: `${recommended.label} – auf deinen Wunsch entschieden`,
       effect: recommended.effect,
       decidedBy: "Team (auf deinen Wunsch)",
+      // Der Weg kommt vom Team, der Klick vom Menschen – fuer das Anlauf-Budget
+      // zaehlt der Klick.
+      byHuman: true,
     });
     revalidateProject(clarification.projectId);
     return ok(`An das Team delegiert. ${outcome}`);

@@ -23,13 +23,69 @@ import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { continueSprint, loadWorkingProject } from "../orchestration";
 import { openClarification } from "../clarification";
 import { enqueueAgentJob } from "../queue";
-import { runImplementationLoop } from "../agentToolLoop";
+import { runImplementationLoop, type AttemptTrace } from "../agentToolLoop";
 import type { TicketWorkPayload } from "../taskTypes";
 
-/// Nach so vielen Anläufen hört das Team auf, ein Ticket allein lösen zu
-/// wollen, und holt den Menschen dazu – wie ein Kollege, der nach dem zweiten
-/// Versuch fragt statt weiter zu probieren.
+/// Nach so vielen Anläufen IN FOLGE hört das Team auf, ein Ticket allein lösen
+/// zu wollen, und holt den Menschen dazu – wie ein Kollege, der nach dem
+/// zweiten Versuch fragt statt weiter zu probieren. Zählt innerhalb einer
+/// Nacharbeits-Kette (Job-Payload) und beginnt nach jedem Beschluss neu; die
+/// Obergrenze über das ganze Ticketleben ist `Ticket.attemptBudget`.
 const MAX_ATTEMPTS = 2;
+
+/// So viele Anläufe bleiben im Kurzprotokoll des Tickets stehen. Der nächste
+/// Anlauf soll den Weg der letzten Versuche kennen – nicht die ganze
+/// Leidensgeschichte durchs Kontextfenster schleppen.
+const ATTEMPT_LOG_KEEP = 4;
+const ATTEMPT_LOG_SEPARATOR = "\n\n---\n\n";
+
+/// Schreibt fest, was ein Anlauf getan hat. Das ist die Antwort auf den
+/// teuersten Fehler des bisherigen Ablaufs: Jeder neue Anlauf bekam exakt
+/// denselben Prompt wie der erste und fing bei null an – dieselben Dateien
+/// gelesen, dieselbe Sackgasse, dieselbe Begründung. Ein Mensch macht da
+/// weiter, wo er aufgehört hat; dafür muss irgendwo stehen, wo das war.
+async function recordAttempt(input: {
+  ticketId: string;
+  attempt: number;
+  agentName: string;
+  outcome: string;
+  trace?: AttemptTrace;
+}): Promise<void> {
+  const { trace } = input;
+  const lines = [`### Anlauf ${input.attempt} – ${input.agentName}`, `Ergebnis: ${input.outcome}`];
+  if (trace) {
+    if (trace.wrote.length > 0) lines.push(`Geschrieben: ${trace.wrote.join(", ")}`);
+    if (trace.read.length > 0) lines.push(`Gelesen: ${trace.read.slice(0, 15).join(", ")}`);
+    if (trace.searched.length > 0) lines.push(`Gesucht nach: ${trace.searched.slice(0, 10).join(", ")}`);
+    if (trace.commands.length > 0) lines.push(`Ausgeführt: ${trace.commands.slice(0, 8).join(" · ")}`);
+    if (trace.lastText) lines.push(`Zuletzt gesagt: „${trace.lastText.slice(0, 400)}"`);
+    lines.push(`(${trace.turns} Arbeitsschritte)`);
+  }
+
+  const current = await prisma.ticket.findUnique({ where: { id: input.ticketId }, select: { attemptLog: true } });
+  const entries = current?.attemptLog ? current.attemptLog.split(ATTEMPT_LOG_SEPARATOR) : [];
+  entries.push(lines.join("\n"));
+  await prisma.ticket.update({
+    where: { id: input.ticketId },
+    data: { attemptLog: entries.slice(-ATTEMPT_LOG_KEEP).join(ATTEMPT_LOG_SEPARATOR) },
+  });
+}
+
+/// Das Kurzprotokoll als Prompt-Abschnitt. Beim ersten Anlauf leer – da gibt es
+/// nichts zu wiederholen.
+function attemptHistorySection(attemptLog: string | null, reason: string, attempt: number): string {
+  if (attempt <= 1 || !attemptLog?.trim()) return "";
+  return `## Was frühere Anläufe an diesem Ticket schon probiert haben
+Das hier ist Anlauf ${attempt}. Die vorigen sind gescheitert oder ohne Änderung geblieben. Lies das, bevor du anfängst, und geh nicht denselben Weg noch einmal.
+
+${attemptLog.trim()}
+
+Auslöser für diesen Anlauf: ${reason}
+
+Kommst du wieder zu dem Schluss, dass nichts zu tun ist, ist das nach ${attempt - 1} Anläufen keine brauchbare Antwort mehr. Geh dann die Akzeptanzkriterien einzeln durch und belege mit read_file/run_command, woran du siehst, dass jedes einzelne erfüllt ist – oder setze um, was fehlt.
+
+`;
+}
 
 function clipForPrompt(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
@@ -373,6 +429,19 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
 
   const implementer = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } });
 
+  // --- 0a. Anlauf-Budget --------------------------------------------------
+  // Die einzige Stelle, an der eine Dauerschleife wirklich endet. `attempt`
+  // aus dem Payload zaehlt nur innerhalb einer Nacharbeits-Kette und begann
+  // bei jedem Nachziehen aus dem Sprint wieder bei 1 – ein Ticket kam so auf
+  // 16 Anlaeufe, waehrend MAX_ATTEMPTS auf 2 stand. Massgeblich ist deshalb
+  // der Zaehler am Ticket selbst.
+  if (ticket.attempts >= ticket.attemptBudget) {
+    helpers.logger.info(`Ticket ${ticket.title}: Anlauf-Budget aufgebraucht (${ticket.attempts}) – kein weiterer Versuch.`);
+    if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+    return;
+  }
+  const totalAttempt = ticket.attempts + 1;
+
   // --- 0. Billige Vorpruefung: ist das Ticket schon erfuellt? ---------------
   // Nur beim allerersten Blick auf das Ticket sinnvoll ("hat ein früheres
   // Ticket das nebenbei schon erledigt?") – bei einem Retry/Rework wissen wir
@@ -380,8 +449,11 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
   // gerade erst festgestellt, dass es NICHT erfüllt ist. Ohne dieses Gate lief
   // die Prüfung bei einem haengenden Ticket bei jedem einzelnen Anlauf erneut
   // – bei einem beobachteten Dauerschleifen-Fall 27 Mal für dasselbe Ticket,
-  // gut 7 der insgesamt ca. 51 Modell-Minuten reine Verschwendung.
-  if (attempt === 1 && !ticket.isCritical && /##\s*Akzeptanzkriterien/i.test(ticket.description ?? "")) {
+  // gut 7 der insgesamt ca. 51 Modell-Minuten reine Verschwendung. Das Gate
+  // haengt bewusst am Ticket-Zaehler, nicht am Payload: Der sprang beim
+  // Nachziehen aus dem Sprint auf 1 zurueck und liess die Vorpruefung fuer
+  // dasselbe Ticket erneut 12 Mal laufen.
+  if (totalAttempt === 1 && !ticket.isCritical && /##\s*Akzeptanzkriterien/i.test(ticket.description ?? "")) {
     const already = await checkAlreadySatisfied({ agent: implementer, projectId, ticket, dir });
     if (already?.satisfied) {
       await prisma.ticket.update({
@@ -405,14 +477,22 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
     `## Ticket\n${ticket.title}\nTyp: ${TICKET_TYPE_LABEL[ticket.type]} · Priorität: ${PRIORITY_LABEL[ticket.priority]}` +
     `${ticket.isCritical ? " · kritisch (braucht menschliche Freigabe)" : ""}\n\n${clipForPrompt(ticket.description ?? "", 6000)}`;
 
-  await prisma.ticket.update({ where: { id: ticketId }, data: { status: "IN_PROGRESS" } });
+  // Der Zaehler steigt hier, nicht erst am Ende: Auch ein Anlauf, der gleich
+  // abstuerzt, hat einen Versuch verbraucht – sonst zaehlt ausgerechnet die
+  // Schleife nicht mit, die man begrenzen will.
+  await prisma.ticket.update({
+    where: { id: ticketId },
+    data: { status: "IN_PROGRESS", attempts: totalAttempt },
+  });
   await logActivity({
     projectId,
     ticketId,
     actor: implementer.name,
     agentId: implementer.id,
     action: attempt === 1 ? "ticket_started" : "ticket_reworked",
-    detail: attempt === 1 ? `„${ticket.title}" übernommen` : `„${ticket.title}" – Nacharbeit nach QA-Review (Anlauf ${attempt})`,
+    detail:
+      (attempt === 1 ? `„${ticket.title}" übernommen` : `„${ticket.title}" – Nacharbeit nach QA-Review`) +
+      ` (Anlauf ${totalAttempt} von ${ticket.attemptBudget})`,
   });
 
   const focus = `${ticket.title}\n${ticket.description ?? ""}`;
@@ -485,7 +565,7 @@ Du bist ${implementer.name} und setzt das Ticket im Repository um, mit echten We
 
 ${ticketHead}
 
-## Umsetzungsplan
+${attemptHistorySection(ticket.attemptLog, reason, totalAttempt)}## Umsetzungsplan
 ${planForPrompt}
 
 ## Repository-Überblick
@@ -519,6 +599,13 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
     // drauf, statt dass der Job spurlos verschwindet.
     const message = error instanceof Error ? error.message : String(error);
     helpers.logger.error(`Ticket ${ticket.title}: Umsetzungsloop abgestürzt – ${message}`);
+    await recordAttempt({
+      ticketId,
+      attempt: totalAttempt,
+      agentName: implementer.name,
+      outcome: `abgestürzt: ${message.slice(0, 200)}`,
+      trace: (error as { attemptTrace?: AttemptTrace }).attemptTrace,
+    });
     await requestHumanReview(
       projectId,
       ticketId,
@@ -529,6 +616,21 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
     if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
     return;
   }
+
+  // Was dieser Anlauf getan hat, gehoert ins Ticket, BEVOR irgendein Zweig
+  // aussteigt – auch ein abgebrochener Anlauf (Turn-/Zeitlimit, Arbeitsstand
+  // verworfen) ist fuer den naechsten die wichtigste Information, die es gibt.
+  await recordAttempt({
+    ticketId,
+    attempt: totalAttempt,
+    agentName: implementer.name,
+    outcome: !loopResult.finished
+      ? "abgebrochen (Turn-/Zeitlimit erreicht), Arbeitsstand verworfen"
+      : loopResult.files.length === 0
+        ? `keine Dateiänderung. Begründung: ${loopResult.summary || "(keine)"}`
+        : `geändert: ${loopResult.files.join(", ")}. ${loopResult.summary}`,
+    trace: loopResult.trace,
+  });
 
   // Der Umsetzungs-Loop eben kann (Budget 900s) minutenlang gedauert haben.
   // In der Zwischenzeit kann ein Klärungsbeschluss dieses Ticket längst

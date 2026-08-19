@@ -13,6 +13,7 @@ import type { AgentRole, Project } from "@/generated/prisma/client";
 import { enqueueAgentJob } from "./queue";
 import { logActivity } from "./agentRun";
 import { blockedTicketIds, openClarification, projectBlocker, sprintBlocker } from "./clarification";
+import { TICKET_ATTEMPT_GRANT } from "@/lib/clarificationOptions";
 
 /// Vorgabe fuer das Sprint-Budget eines Projekts (`Project.sprintBudget`).
 /// Ohne Obergrenze wuerde das Team unbegrenzt weiterbauen und Modellkosten
@@ -80,7 +81,7 @@ export async function handOverTo<TIdentifier extends keyof GraphileWorker.Tasks>
 /// Beschluss, das Team zieht solange das naechste.
 export async function nextOpenTicket(sprintId: string) {
   const blocked = await blockedTicketIds(sprintId);
-  return prisma.ticket.findFirst({
+  const candidates = await prisma.ticket.findMany({
     where: {
       sprintId,
       status: { in: ["BACKLOG", "IN_PROGRESS"] },
@@ -88,6 +89,51 @@ export async function nextOpenTicket(sprintId: string) {
     },
     orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
   });
+  // Ein Ticket, das sein Anlauf-Budget verbraucht hat, darf hier nicht mehr
+  // herauskommen – genau daran hing die Dauerschleife: Der Anlauf-Zaehler lag
+  // im Job-Payload, und dieses Nachziehen legte ihn bei jeder Runde wieder auf
+  // 1. Ein Sprint zog dasselbe Ticket dadurch beliebig oft neu, obwohl der
+  // Umsetzer laengst bei "Anlauf 16" war. Zwei Spalten vergleicht Prisma nicht
+  // in `where`; bei einer Handvoll Tickets je Sprint ist das hier billiger als
+  // ein Roh-SQL.
+  return candidates.find((ticket) => ticket.attempts < ticket.attemptBudget) ?? null;
+}
+
+/// Sagt Bescheid, wenn ein Ticket nur noch am aufgebrauchten Budget haengt.
+/// Ohne diesen Weg verschwaende sich das Ticket lautlos: `nextOpenTicket`
+/// ueberspringt es, der Sprint laeuft weiter, und niemand erfaehrt, dass etwas
+/// liegen bleibt. Die Klaerung geht bewusst OHNE Agenda und ohne
+/// Product-Owner-Triage direkt an den Auftraggeber (`prepare: false`) – neue
+/// Anlaeufe bewilligt nur ein Mensch (siehe src/lib/clarificationDecision.ts),
+/// ein Agent, der hier "nochmal versuchen" beschliesst, hat nichts entschieden.
+export async function reportStalledTickets(sprintId: string): Promise<void> {
+  const stalled = await prisma.ticket.findMany({
+    where: { sprintId, status: { in: ["BACKLOG", "IN_PROGRESS"] } },
+  });
+  for (const ticket of stalled) {
+    if (ticket.attempts < ticket.attemptBudget) continue;
+    await openClarification({
+      projectId: ticket.projectId,
+      scope: "TICKET",
+      trigger: "attempt_budget",
+      ticketId: ticket.id,
+      sprintId: ticket.sprintId,
+      question: `„${ticket.title}": ${ticket.attempts} Anläufe verbraucht, ohne fertig zu werden. Wie soll es weitergehen?`,
+      context:
+        `Das Team hat dieses Ticket ${ticket.attempts} Mal angefasst und ist nicht durchgekommen. ` +
+        `Weitere Anläufe laufen ohne neue Entscheidung erfahrungsgemäß in dieselbe Sackgasse.\n\n` +
+        `Was die letzten Anläufe getan haben:\n${ticket.attemptLog ?? "(nicht protokolliert)"}`,
+      options: [
+        {
+          key: "resume",
+          label: "Nochmal versuchen",
+          detail: `Das Ticket bekommt ${TICKET_ATTEMPT_GRANT} weitere Anläufe. Sinnvoll nur zusammen mit einem Hinweis, was diesmal anders laufen soll.`,
+          effect: "resume",
+        },
+      ],
+      prepare: false,
+    });
+  }
 }
 
 /// Nach jedem Ticket: entweder das naechste ziehen oder den Sprint zum Review
@@ -104,6 +150,8 @@ export async function continueSprint(projectId: string, sprintId: string): Promi
     });
     return;
   }
+
+  await reportStalledTickets(sprintId);
 
   const ticket = await nextOpenTicket(sprintId);
 

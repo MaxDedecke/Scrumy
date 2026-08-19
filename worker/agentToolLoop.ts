@@ -29,6 +29,28 @@ const LOOP_BUDGET_MS = 900_000;
 /// Budget einer einzigen Bash-Kette opfern.
 const BASH_TIME_BUDGET_MS = 600_000;
 
+/// Was ein Anlauf getan hat – rein zur Diagnose, unabhaengig davon, ob er
+/// erfolgreich war. Ein gescheiterter Anlauf liefert keine `files` (sein
+/// Arbeitsstand wird verworfen), sein Weg ist fuer den naechsten Anlauf aber
+/// das Wertvollste ueberhaupt: Ohne ihn liest der naechste dieselben Dateien
+/// noch einmal und landet in derselben Sackgasse (siehe
+/// worker/tasks/ticketWork.ts, "Bisherige Anlaeufe").
+export interface AttemptTrace {
+  /** Wie viele Modell-Turns der Anlauf gebraucht hat. */
+  turns: number;
+  /** Dateien, die der Anlauf gelesen hat (in Lesereihenfolge, ohne Dubletten). */
+  read: string[];
+  /** Suchbegriffe aus search_files. */
+  searched: string[];
+  /** Ausgefuehrte Shell-Befehle. */
+  commands: string[];
+  /** Erfolgreich geschriebene Pfade – auch bei einem abgebrochenen Anlauf, wo
+   *  sie anschliessend verworfen werden. */
+  wrote: string[];
+  /** Letzte Wortmeldung des Modells, gekuerzt – meist seine Begruendung. */
+  lastText: string;
+}
+
 export interface ImplementationLoopResult {
   /** Relative Pfade, die tatsaechlich (erfolgreich) geschrieben/geaendert wurden. */
   files: string[];
@@ -41,18 +63,9 @@ export interface ImplementationLoopResult {
   /** false, wenn der Loop ohne "finish" abgebrochen ist (Turn-/Zeitlimit). */
   finished: boolean;
   commitMessage: string;
+  /** Immer gefuellt, auch bei einem abgebrochenen Anlauf. */
+  trace: AttemptTrace;
 }
-
-const EMPTY_RESULT: ImplementationLoopResult = {
-  files: [],
-  rejected: [],
-  summary: "",
-  notes: "",
-  clarification: "",
-  clarificationOptions: [],
-  finished: false,
-  commitMessage: "",
-};
 
 export async function runImplementationLoop({
   agent,
@@ -90,6 +103,23 @@ export async function runImplementationLoop({
   const deadline = Date.now() + LOOP_BUDGET_MS;
   let loggedPrompt = initialPrompt;
 
+  // Mitschrift des Anlaufs (siehe AttemptTrace). Sets statt Arrays: Dass eine
+  // Datei dreimal gelesen wurde, hilft dem naechsten Anlauf nicht – dass sie
+  // ueberhaupt gelesen wurde, schon.
+  const readFiles = new Set<string>();
+  const searched = new Set<string>();
+  const commands: string[] = [];
+  let turnsUsed = 0;
+  let lastText = "";
+  const trace = (): AttemptTrace => ({
+    turns: turnsUsed,
+    read: [...readFiles],
+    searched: [...searched],
+    commands,
+    wrote: [...touchedFiles],
+    lastText: lastText.slice(0, 600),
+  });
+
   try {
     for (let turn = 1; turn <= MAX_TOOL_TURNS; turn++) {
       const remaining = deadline - Date.now();
@@ -109,6 +139,9 @@ export async function runImplementationLoop({
         maxTokens: maxTokensPerTurn,
         timeoutMs: Math.min(300_000, remaining),
       });
+
+      turnsUsed = turn;
+      if (turnResult.text.trim()) lastText = turnResult.text.trim();
 
       const assistantBlocks: ContentBlock[] = [];
       if (turnResult.text.trim()) assistantBlocks.push({ type: "text", text: turnResult.text });
@@ -144,12 +177,16 @@ export async function runImplementationLoop({
           clarificationOptions: clarification ? optionsFromAgent(finishCall.input.clarificationOptions) : [],
           finished: true,
           commitMessage: String(finishCall.input.commitMessage ?? "").trim().slice(0, 120) || "Ticket umgesetzt",
+          trace: trace(),
         };
       }
 
       const toolResultBlocks: ContentBlock[] = [];
       for (const call of turnResult.toolCalls) {
         const execResult = await executeTool(call.name, call.input, ctx);
+        if (call.name === "read_file") readFiles.add(String(call.input.path ?? ""));
+        if (call.name === "search_files") searched.add(String(call.input.query ?? ""));
+        if (call.name === "run_command") commands.push(String(call.input.command ?? "").slice(0, 120));
         if (call.name === "write_file" || call.name === "edit_file") {
           const relPath = String(call.input.path ?? "");
           if (relPath) {
@@ -175,6 +212,9 @@ export async function runImplementationLoop({
     // Ausgangslage. Der eigentliche Fehler zaehlt trotzdem als Fehlschlag des
     // Ticket-Jobs – deshalb wird er nach dem Aufräumen weitergereicht.
     await discardUncommittedChanges(dir).catch(() => {});
+    // Der Weg bis zum Absturz ist fuer den naechsten Anlauf genauso wertvoll
+    // wie bei einem regulaeren Fehlschlag – ticketWork liest ihn hier ab.
+    (error as { attemptTrace?: AttemptTrace }).attemptTrace = trace();
     throw error;
   }
 
@@ -183,5 +223,15 @@ export async function runImplementationLoop({
   // ticketWork.ts. Angefangene, nicht committete Schreibvorgänge nicht liegen
   // lassen, sonst baut der naechste Anlauf versehentlich darauf auf.
   await discardUncommittedChanges(dir);
-  return EMPTY_RESULT;
+  return {
+    files: [],
+    rejected: [],
+    summary: "",
+    notes: "",
+    clarification: "",
+    clarificationOptions: [],
+    finished: false,
+    commitMessage: "",
+    trace: trace(),
+  };
 }

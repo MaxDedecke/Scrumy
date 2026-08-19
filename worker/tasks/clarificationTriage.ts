@@ -156,7 +156,10 @@ Antworte nur mit diesem JSON-Objekt:
       // `resolveClarification` haelt den Beschluss bereits im Protokoll fest
       // (Frage + gewaehlter Weg) – ein zweiter Eintrag waere nur Wiederholung.
       const decision = `${resolved.label}${reasoning ? ` – ${reasoning}` : ""}${forceDecide ? " · auf deinen Wunsch entschieden" : ""}`;
-      await resolveClarification({ clarificationId, decision, effect: resolved.effect, decidedBy: role });
+      // byHuman: false – der Product Owner darf entscheiden, aber keine neuen
+      // Anlaeufe fuer ein festgefahrenes Ticket bewilligen (siehe
+      // src/lib/clarificationDecision.ts).
+      await resolveClarification({ clarificationId, decision, effect: resolved.effect, decidedBy: role, byHuman: false });
       return;
     }
 

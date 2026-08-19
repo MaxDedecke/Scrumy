@@ -8,6 +8,12 @@
 // `effect` ist der Grund, warum ein Beschluss mehr ist als eine Notiz: Er sagt,
 // was mit der eingefrorenen Arbeit passiert.
 
+/// Wie viele zusaetzliche Anlaeufe ein Ticket bekommt, wenn ein Mensch
+/// „nochmal versuchen" beschliesst (siehe `Ticket.attemptBudget`). Bewusst
+/// hier: Der Worker legt das Budget an, die Server-Action stockt es auf, und
+/// beide Seiten sollen dieselbe Zahl meinen.
+export const TICKET_ATTEMPT_GRANT = 3;
+
 export type ClarificationEffect =
   /** Eingefrorenen Schritt wieder einreihen (bzw. den nächsten fälligen). */
   | "resume"
