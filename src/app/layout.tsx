@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import "./globals.css";
 import { prisma } from "@/lib/prisma";
 import { Sidebar } from "@/components/Sidebar";
 import { SidebarToggle } from "@/components/SidebarToggle";
+import { SettingsToggle } from "@/components/SettingsToggle";
 import { ToastProvider } from "@/components/Toast";
-import { SearchIcon, SettingsIcon } from "@/components/icons";
+import { SearchIcon } from "@/components/icons";
 
 export const metadata: Metadata = {
   title: "Scrumy",
@@ -49,14 +49,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
 
               <div className="flex-1" />
 
-              <Link
-                href="/settings/llm-profiles"
-                aria-label="Einstellungen"
-                title="Einstellungen"
-                className="shrink-0 rounded-lg p-2 text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
-              >
-                <SettingsIcon className="h-5 w-5" />
-              </Link>
+              <SettingsToggle />
             </div>
           </header>
 
