@@ -9,6 +9,7 @@ import {
   commitAll,
   configureRepoRemote,
   ensureRepo,
+  gitCredentialEnvName,
   pushRepo,
   writeFiles,
   WorkspaceError,
@@ -115,5 +116,11 @@ test("Remote-Repositories werden geklont und Team-Commits gepusht", async (t) =>
       if (previousToken === undefined) delete process.env.GITHUB_TOKEN;
       else process.env.GITHUB_TOKEN = previousToken;
     }
+  });
+
+  await t.test("jedes Projekt kann eine eigene Token-Variable referenzieren", () => {
+    assert.equal(gitCredentialEnvName("env:KUNDE_A_GITHUB_TOKEN"), "KUNDE_A_GITHUB_TOKEN");
+    assert.equal(gitCredentialEnvName("env:KUNDE_B_GITHUB_TOKEN"), "KUNDE_B_GITHUB_TOKEN");
+    assert.throws(() => gitCredentialEnvName("vault://kunde-a/token"), WorkspaceError);
   });
 });

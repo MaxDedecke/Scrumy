@@ -142,6 +142,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Reicht neben den bekannten Standardvariablen auch projektspezifische
+    # Token-Namen wie KUNDE_A_GITHUB_TOKEN an den Worker durch. `environment`
+    # unten hat Vorrang und behaelt die containerinternen DB-/Pfadangaben.
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql://scrumy:scrumy@db:5432/scrumy?schema=public
       NODE_ENV: production

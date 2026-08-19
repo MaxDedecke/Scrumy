@@ -88,20 +88,23 @@ function githubHttpsRemote(remoteUrl: string): boolean {
   }
 }
 
-function remoteToken(remote: RemoteRepositoryOptions): string | undefined {
-  const credentialRef = remote.credentialRef?.trim();
-  let envName: string | null = null;
-  if (credentialRef) {
-    const match = /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(credentialRef);
-    if (!match) {
-      throw new WorkspaceError(
-        `Credential-Referenz „${credentialRef}" wird noch nicht unterstuetzt. Verwende env:GITHUB_TOKEN.`,
-      );
-    }
-    envName = match[1];
-  } else if (githubHttpsRemote(remote.remoteUrl)) {
-    envName = "GITHUB_TOKEN";
+/// Liefert den Namen einer referenzierten Umgebungsvariable, ohne ihren Wert
+/// zu lesen. Getrennt exportiert, damit die Connector-Maske dieselbe Syntax
+/// validiert wie spaeter der Worker.
+export function gitCredentialEnvName(credentialRef?: string | null): string | null {
+  const normalized = credentialRef?.trim();
+  if (!normalized) return null;
+  const match = /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(normalized);
+  if (!match) {
+    throw new WorkspaceError(
+      `Credential-Referenz „${normalized}" wird noch nicht unterstuetzt. Verwende env:GITHUB_TOKEN oder env:KUNDE_PROJEKT_GITHUB_TOKEN.`,
+    );
   }
+  return match[1];
+}
+
+function remoteToken(remote: RemoteRepositoryOptions): string | undefined {
+  const envName = gitCredentialEnvName(remote.credentialRef) || (githubHttpsRemote(remote.remoteUrl) ? "GITHUB_TOKEN" : null);
 
   if (!envName) return undefined;
   const token = process.env[envName]?.trim();

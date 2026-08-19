@@ -228,12 +228,15 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                       {JSON.stringify(connector.config)}
                     </p>
                   )}
+                  {connector.credentialRef && (
+                    <p className="mt-0.5 truncate font-mono text-xs text-ink-4">
+                      Zugang: {connector.credentialRef}
+                    </p>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <ActionForm action={updateConnectorStatus} className="flex items-center gap-2">
                     <input type="hidden" name="id" value={connector.id} />
-                    <input type="hidden" name="organizationId" value={project.organizationId} />
-                    <input type="hidden" name="projectId" value={project.id} />
                     <select
                       name="status"
                       defaultValue={connector.status}
@@ -250,8 +253,6 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                   </ActionForm>
                   <ActionForm action={deleteConnector}>
                     <input type="hidden" name="id" value={connector.id} />
-                    <input type="hidden" name="organizationId" value={project.organizationId} />
-                    <input type="hidden" name="projectId" value={project.id} />
                     <ConfirmButton
                       confirmText={`Connector "${connector.name}" löschen?`}
                       title={`Connector „${connector.name}" löschen`}
@@ -296,8 +297,9 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                 <input
                   name="credentialRef"
                   className={inputClass}
-                  placeholder="GitHub: env:GITHUB_TOKEN; sonst vault://…"
+                  placeholder="z.B. env:KUNDE_A_GITHUB_TOKEN"
                 />
+                <p className="mt-1 text-xs text-ink-4">Der Variablenname steht hier, der Token ausschließlich in der .env-Datei.</p>
               </div>
               <div className="sm:col-span-2">
                 <label className={labelClass}>Config (JSON, optional)</label>

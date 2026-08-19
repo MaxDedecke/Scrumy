@@ -62,8 +62,9 @@ deployt werden.
   im Projekt-Repo. Kundenweit (`projectId` leer, z.B. das eine Jira-Postfach) oder
   projektspezifisch (z.B. genau 1 Repo). `config` enthält nur nicht-geheime
   Verbindungsdaten; Zugangsdaten liegen über `credentialRef` in der Umgebung
-  (`env:GITHUB_TOKEN`), nicht in der DB. Konfiguriert wird das je Projekt unter
-  "Team & Konnektoren".
+  (z.B. `env:KUNDE_A_GITHUB_TOKEN`), nicht in der DB. Konfiguriert wird das je
+  Projekt unter "Team & Konnektoren". Pro Projekt ist höchstens ein aktiver
+  Git-Connector erlaubt.
 - **LlmProfile** – **global, nicht pro Kunde** – ein Cloud-Modell oder ein lokaler
   Ollama-Container, den Agenten zugewiesen werden. Verwaltung unter
   `/settings/llm-profiles`.
@@ -189,10 +190,18 @@ Optional kann unter „Team & Konnektoren“ ein projektspezifischer, aktiver
 {"repoUrl":"https://github.com/organisation/repository.git","defaultBranch":"main"}
 ```
 
-Als Credential-Referenz wird `env:GITHUB_TOKEN` verwendet. Die URL im
-Projektfeld hat Vorrang vor einer URL im Connector. Für das Demo-Projekt kann
-`DEMO_REPO_URL` gesetzt werden; ohne diese Variable bleibt der Seed bewusst
-lokal und pusht nirgendwohin.
+Ohne Credential-Referenz verwendet ein GitHub-Remote `env:GITHUB_TOKEN` als
+Fallback. Für getrennte Zugänge bekommen die Projekte eigene Variablen, etwa
+`KUNDE_A_GITHUB_TOKEN` und `KUNDE_B_GITHUB_TOKEN`, und der jeweilige Connector
+verweist auf `env:KUNDE_A_GITHUB_TOKEN` bzw. `env:KUNDE_B_GITHUB_TOKEN`. Der
+Worker übernimmt beliebige neue Variablennamen aus `.env`; die Compose-Datei
+muss dafür nicht erweitert werden. Nach einer Änderung an `.env` reicht es,
+den Worker neu zu erstellen.
+
+Die URL im Projektfeld hat Vorrang vor einer URL im Connector. Pro Projekt ist
+höchstens ein aktiver Git-Connector zulässig; weitere können als inaktive
+Historie bestehen bleiben. Für das Demo-Projekt kann `DEMO_REPO_URL` gesetzt
+werden; ohne diese Variable bleibt der Seed bewusst lokal und pusht nirgendwohin.
 
 ## RunPod: eigenes Modell statt Cloud-Anbieter
 

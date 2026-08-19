@@ -327,7 +327,9 @@ model AgentAssignment {
 /// bleibt bei kundenweiten Connectoren (z.B. das eine Jira-Postfach) leer.
 /// `config` enthaelt nicht-geheime Verbindungsdaten (Base-URL, Projekt-Key,
 /// Repo-URL, Branch, ...); Zugangsdaten liegen bewusst nicht in der DB, sondern
-/// werden ueber `credentialRef` auf einen Secret-Store/env verwiesen.
+/// werden ueber `credentialRef` auf eine Worker-Umgebungsvariable verwiesen.
+/// Bei Git gilt fachlich: genau ein aktiver, projektspezifischer Connector je
+/// Projekt (zusaetzlich per partiellem Unique-Index in der Migration erzwungen).
 model Connector {
   id             String            @id @default(cuid())
   organizationId String
