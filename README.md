@@ -155,6 +155,87 @@ Danach einmalig seeden (falls gewünscht):
 docker compose exec app npx tsx prisma/seed.ts
 ```
 
+`scrumy_scrumy_db_data` und `scrumy_scrumy_workspaces` sind als `external`
+eingetragen (siehe Kommentar in `docker-compose.yml`) und müssen auf einem
+neuen Host einmalig existieren, bevor `docker compose up` funktioniert:
+
+```bash
+docker volume create scrumy_scrumy_db_data
+docker volume create scrumy_scrumy_workspaces
+```
+
+## RunPod: eigenes Modell statt Cloud-Anbieter
+
+Für Testläufe mit einem selbst gehosteten Modell – z.B. um in einer
+abgerechneten GPU-Stunde zu sehen, was ein Team mit einem bestimmten Modell in
+der Zeit schafft. Zwei unabhängige Wege, **Scrumy selbst läuft dabei immer
+hier/auf dem gewohnten Host** – nur das Modell kommt von RunPod:
+
+### Weg 1: einen bereits laufenden RunPod-Endpoint einbinden (empfohlen)
+
+Wenn schon eine URL + Auth-Token für einen laufenden RunPod-Pod oder
+-Serverless-Endpoint existiert, reicht ein LLM-Profil – **kein** Deployment
+von Scrumy selbst nötig:
+
+- `/settings/llm-profiles` → neues Profil.
+- **Anbieter: „OpenAI-kompatibel“** (`GENERIC_OPENAI_COMPAT`) – **nicht**
+  „Ollama“. Der `OLLAMA`-Anbieter in diesem Dropdown ruft Ollamas *natives*
+  `/api/chat` auf und hängt nie einen Auth-Header an (siehe `src/lib/llm.ts`);
+  ein Token-geschützter Endpoint braucht den OpenAI-kompatiblen Pfad
+  (`/v1/chat/completions` + `Authorization: Bearer …`), den `OLLAMA` gar nicht
+  anspricht. Genau dieser Pfad ist es auch, den RunPods eigene
+  OpenAI-kompatible Schnittstelle erwartet.
+- **Base-URL**: die RunPod-URL **inklusive** `/v1`, z.B.
+  `https://api.runpod.ai/v2/<endpoint-id>/openai/v1` (Serverless-Endpoint) oder
+  die Proxy-URL des Pods, je nachdem was RunPod ausgegeben hat. Ohne
+  abschließenden Slash – Scrumy hängt `/chat/completions` direkt an.
+- **API-Key-Referenz**: `env:LLM_API_KEY` und den Token in `.env` als
+  `LLM_API_KEY=…` setzen (Container bekommen die Variable schon durchgereicht,
+  siehe `docker-compose.yml`) – landet dann nicht im Klartext in der DB.
+  Alternativ den Token direkt ins Feld einfügen, dann aber wie beschriftet
+  bewusst im Klartext in der DB.
+- **Modell**: exakt der Modellname, wie ihn der RunPod-Endpoint erwartet.
+
+Danach das Profil einem oder mehreren Agenten zuweisen (Projekt →
+„Team & Konnektoren“) – fertig.
+
+### Weg 2: Scrumy selbst auf einem RunPod-GPU-Pod betreiben, mit eigenem Ollama-Container
+
+Alternative, falls Scrumy nicht hier, sondern direkt auf dem GPU-Pod laufen
+soll (z.B. um Cloud-Kosten für ein Modell zu vermeiden, statt einen fremden
+Endpoint zu mieten).
+
+**Voraussetzung:** ein GPU-Pod-Template, das Docker *innerhalb* des Pods
+erlaubt (Docker-in-Docker/privilegiert, mit `nvidia-container-toolkit`). Das
+ist keine Ollama-spezifische Anforderung – `app` und `worker` brauchen den
+Docker-Socket schon für Vorschau-Container und automatische Tests (siehe
+`docker-compose.yml`). Beim Pod-Erstellen Port `3001` (Scrumy-UI) freigeben,
+`11434` (Ollama) optional für direkten Zugriff von außen.
+
+```bash
+git clone <dieses Repo> && cd Scrumy
+./docker/runpod-bootstrap.sh
+```
+
+Das Skript legt die externen Volumes an, baut den Vorschau/Test-Runner, startet
+den vollen Stack **inklusive** `ollama` (`--profile ollama`, standardmäßig
+**nicht** Teil von `docker compose up` – siehe Kommentar am Service, eine
+GPU-Reservierung würde jeden Start ohne GPU sonst scheitern lassen, dieser Weg
+bleibt also rein optional und ändert am normalen Betrieb nichts) und wartet,
+bis das in `OLLAMA_MODEL` konfigurierte Modell fertig gepullt ist
+(Standard `llama3.1:8b`, siehe `.env.example` – bei mehr VRAM ruhig größer).
+
+Danach: `docker compose exec app npm run db:seed` für einen Demo-Kunden mit
+Beispielprojekt (ein Agent ist darin schon dem lokalen Ollama-Profil
+zugewiesen), oder ohne Seed einen eigenen Kunden/Projekt anlegen und unter
+`/settings/llm-profiles` das Profil „Lokaler Ollama-Container“ prüfen bzw.
+Agenten manuell zuweisen. Modellname im Profil muss zu `OLLAMA_MODEL` passen –
+der Seed übernimmt das automatisch, ein manuell angelegtes Profil nicht.
+
+Am Ende der Stunde einfach den Pod in RunPod terminieren (dort läuft die
+Abrechnung) – `docker compose down -v` davor nur, falls Volumes/Modell-Cache
+explizit mit weg sollen.
+
 ## Worker (Job-Queue)
 
 Damit sich pro Projekt beliebig viele Agenten anlegen lassen, ohne dass Ausführung

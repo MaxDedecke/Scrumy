@@ -70,6 +70,52 @@ services:
       - default
       - scrumy_preview
 
+  # Lokal gehostetes Modell fuer OLLAMA-LlmProfile (siehe src/lib/llm.ts,
+  # Default-Base-URL http://ollama:11434 - genau dieser Servicename) statt
+  # Cloud-Anbieter. Bewusst hinter einem eigenen Profile ("ollama"), NICHT im
+  # Default-"docker compose up": auf einer GPU-losen Maschine (z.B. dieser
+  # Dev-Host) wuerde die "deploy.resources"-GPU-Reservierung den Start
+  # verweigern. Start explizit mit:
+  #   docker compose --profile ollama up -d
+  # Gedacht v.a. fuer einen RunPod-GPU-Pod (siehe README, Abschnitt
+  # "RunPod-Deployment") mit eigenem Modell statt Cloud-Kosten.
+  #
+  # Kein "external"-Volume wie db_data/workspaces oben: der Modell-Cache ist
+  # reproduzierbar (erneuter Pull) und keine Kundendaten - ein neu erzeugtes
+  # Volume nach Projektname-Wechsel ist hier kein Datenverlust-Risiko.
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    profiles: ["ollama"]
+    environment:
+      # Ueberschreibbar in .env - siehe .env.example. Klein genug, um auf
+      # einer einzelnen GPU schnell zu pullen; bei mehr VRAM gerne groesser.
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Eigener Entrypoint statt des Image-Standards ("ollama serve"): pullt
+    # OLLAMA_MODEL einmalig beim Start automatisch, damit nach "docker compose
+    # --profile ollama up -d" nicht erst noch manuell "ollama pull" noetig
+    # ist - bei einer abgerechneten GPU-Stunde soll moeglichst wenig davon
+    # fuers Setup drauf gehen. Erneuter Start pullt nicht neu (Ollama prueft
+    # selbst, ob das Modell schon lokal liegt).
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 3
+        ollama pull "$$OLLAMA_MODEL" || true
+        wait
+
   # Fuehrt die eigentliche Agenten-Arbeit aus (Job-Queue via graphile-worker),
   # komplett getrennt vom Next.js-App-Container. Skaliert horizontal unabhaengig
   # von "app" ueber die Anzahl Replicas, z.B.:
@@ -144,6 +190,9 @@ volumes:
   scrumy_workspaces:
     external: true
     name: scrumy_scrumy_workspaces
+  # NICHT external (siehe Kommentar am "ollama"-Service oben) - Compose legt
+  # es beim ersten Start selbst an.
+  ollama_data:
 
 networks:
   # Eigenes Netz fuer die Frontend-Vorschau: nur "app" und die Vorschau-

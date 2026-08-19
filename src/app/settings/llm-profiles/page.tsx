@@ -74,12 +74,12 @@ export default async function LlmProfilesSettingsPage() {
                   />
                 </div>
                 <div>
-                  <label className={labelClass}>Base-URL (für Ollama/self-hosted)</label>
+                  <label className={labelClass}>Base-URL (für Ollama/self-hosted/OpenAI-kompatibel)</label>
                   <input
                     name="baseUrl"
                     defaultValue={profile.baseUrl ?? ""}
                     className={inputClass}
-                    placeholder="http://ollama:11434"
+                    placeholder="http://ollama:11434 oder https://…/v1"
                   />
                 </div>
                 <div className="sm:col-span-2">
@@ -88,7 +88,7 @@ export default async function LlmProfilesSettingsPage() {
                     name="apiKeyRef"
                     defaultValue={profile.apiKeyRef ?? ""}
                     className={inputClass}
-                    placeholder="vault://scrumy/anthropic-api-key"
+                    placeholder="env:LLM_API_KEY"
                   />
                 </div>
                 <label className="flex items-center gap-2 text-sm text-ink-2 sm:col-span-2">
@@ -141,12 +141,12 @@ export default async function LlmProfilesSettingsPage() {
             <input name="model" required className={inputClass} placeholder="z.B. claude-sonnet-5" />
           </div>
           <div>
-            <label className={labelClass}>Base-URL (für Ollama/self-hosted)</label>
-            <input name="baseUrl" className={inputClass} placeholder="http://ollama:11434" />
+            <label className={labelClass}>Base-URL (für Ollama/self-hosted/OpenAI-kompatibel)</label>
+            <input name="baseUrl" className={inputClass} placeholder="http://ollama:11434 oder https://…/v1" />
           </div>
           <div className="sm:col-span-2">
             <label className={labelClass}>API-Key-Referenz (nie der Key selbst)</label>
-            <input name="apiKeyRef" className={inputClass} placeholder="vault://scrumy/…" />
+            <input name="apiKeyRef" className={inputClass} placeholder="env:LLM_API_KEY" />
           </div>
           <label className="flex items-center gap-2 text-sm text-ink-2 sm:col-span-2">
             <input type="checkbox" name="isDefault" className="accent-accent-solid" />

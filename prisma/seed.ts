@@ -27,7 +27,10 @@ async function main() {
       data: {
         name: "Lokaler Ollama-Container",
         provider: "OLLAMA",
-        model: "llama3.1:70b",
+        // Muss zum tatsaechlich gepullten Modell passen (siehe "ollama"-Service
+        // in docker-compose.yml und OLLAMA_MODEL in .env.example) - sonst
+        // 404 beim ersten Agentenaufruf.
+        model: process.env.OLLAMA_MODEL?.trim() || "llama3.1:8b",
         baseUrl: "http://ollama:11434",
       },
     }),
