@@ -248,7 +248,16 @@ interface OpenAiToolCall {
 /// Unsere normalisierten Nachrichten auf den OpenAI-Vertrag abgebildet: ein
 /// `tool_use`-Block wird zu `tool_calls` auf einer Assistant-Nachricht, ein
 /// `tool_result`-Block zu einer eigenen Nachricht mit `role: "tool"`.
-function toOpenAiMessages(system: string, messages: ChatMessage[]) {
+/// `argumentsAsObject`: Die echte OpenAI-API verlangt `tool_calls[].function.arguments`
+/// als JSON-**String** – das ist der Default hier (für OPENAI/GENERIC_OPENAI_COMPAT).
+/// Ollamas eigenes, nicht standardkonformes `/api/chat` will dagegen ein rohes
+/// **Objekt**: Kommt ein String rein, versucht Ollamas Parser ihn beim Aufbau des
+/// Prompts trotzdem wie ein Objekt zu lesen und stolpert über escapte
+/// Anführungszeichen/Klammern im Inhalt ("Value looks like object, but can't find
+/// closing '}' symbol") – reproduziert direkt gegen den Runpod-Endpunkt. Betraf nur
+/// den neuen Mehrschritt-Tool-Loop (`agentToolLoop.ts`), weil erst der einen
+/// vorigen Tool-Aufruf in der Historie zurückschickt.
+function toOpenAiMessages(system: string, messages: ChatMessage[], argumentsAsObject = false) {
   const out: Record<string, unknown>[] = [{ role: "system", content: system }];
 
   for (const message of messages) {
@@ -268,7 +277,7 @@ function toOpenAiMessages(system: string, messages: ChatMessage[]) {
         tool_calls: toolUses.map((block) => ({
           id: block.id,
           type: "function",
-          function: { name: block.name, arguments: JSON.stringify(block.input) },
+          function: { name: block.name, arguments: argumentsAsObject ? block.input : JSON.stringify(block.input) },
         })),
       });
     } else if (textParts.length > 0) {
@@ -320,7 +329,7 @@ async function chatTurnOllama(
     {
       model: profile.model,
       stream: false,
-      messages: toOpenAiMessages(system, messages),
+      messages: toOpenAiMessages(system, messages, true),
       ...(tools && tools.length > 0
         ? { tools: tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } })) }
         : {}),
