@@ -34,12 +34,13 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
             <div className="flex h-14 items-center gap-5 px-5">
               <Link
                 href="/"
-                className="flex shrink-0 items-center gap-2.5 text-sm font-semibold tracking-tight text-ink"
+                aria-label="Scrumy"
+                title="Scrumy"
+                className="flex shrink-0 items-center text-sm font-semibold tracking-tight text-ink"
               >
                 <span className="flex h-7 w-7 items-center justify-center text-brand">
                   <ScrumyMark className="h-6 w-6 -rotate-6" />
                 </span>
-                Scrumy
               </Link>
 
               <form action="/search" className="w-full max-w-sm">

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useRef, useState, useSyncExternalStore } from "react";
-import { ChevronRightIcon, EllipsisIcon, PanelLeftIcon } from "@/components/icons";
+import { ChevronRightIcon, EllipsisIcon, PanelLeftIcon, ScrumyMark } from "@/components/icons";
 
 type SidebarProject = { id: string; name: string };
 type SidebarOrganization = { id: string; name: string; projects: SidebarProject[] };
@@ -150,6 +150,22 @@ export function Sidebar({ organizations }: { organizations: SidebarOrganization[
           )}
         </nav>
       )}
+
+      {/* Schriftzug ist aus der Header-Leiste hierher gewandert – dort steht
+          nur noch das Logo. */}
+      <Link
+        href="/"
+        aria-label="Scrumy"
+        title="Scrumy"
+        className={`flex shrink-0 items-center gap-2.5 border-t border-hairline py-3 text-sm font-semibold tracking-tight text-ink-2 transition-colors hover:text-ink ${
+          collapsed ? "justify-center px-2" : "px-4"
+        }`}
+      >
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center text-brand">
+          <ScrumyMark className="h-5 w-5 -rotate-6" />
+        </span>
+        {!collapsed && "Scrumy"}
+      </Link>
     </aside>
   );
 }
