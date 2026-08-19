@@ -1,13 +1,13 @@
 import { ActionForm } from "@/components/ActionForm";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { IconSubmit } from "@/components/IconSubmit";
-import { BoltIcon, ForwardIcon, PauseIcon, PlayIcon } from "@/components/icons";
-import { nudgeTeam, pauseTeam, resumeTeam, setAutopilot } from "@/lib/actions/team";
+import { BoltIcon, ForwardIcon, PauseIcon, PlayIcon, SearchIcon } from "@/components/icons";
+import { nudgeProductOwner, nudgeTeam, pauseTeam, resumeTeam, setAutopilot } from "@/lib/actions/team";
 import { iconButtonClass, iconButtonOnClass } from "@/lib/ui";
 import type { ProjectStatus } from "@/generated/prisma/client";
 
-// Die Steuerung des Teams – anhalten, fortsetzen, anstoßen, Autopilot – als
-// Icon-Gruppe im Seitenkopf, direkt neben dem Projektnamen.
+// Die Steuerung des Teams – anhalten, fortsetzen, anstoßen, Klarheits-Check,
+// Autopilot – als Icon-Gruppe im Seitenkopf, direkt neben dem Projektnamen.
 //
 // Vorher war das ein Kartenblock „Steuerung" im Team-Büro, also nur dort und
 // erst nach dem Scrollen erreichbar. Wer im Board sieht, dass etwas schiefläuft,
@@ -60,6 +60,13 @@ export function TeamControls({
           </IconSubmit>
         </ActionForm>
       )}
+
+      <ActionForm action={nudgeProductOwner}>
+        <input type="hidden" name="projectId" value={projectId} />
+        <IconSubmit title="Product Owner bitten, das Projekt auf unklare oder undefinierte Stellen zu prüfen">
+          <SearchIcon className="h-3.5 w-3.5" />
+        </IconSubmit>
+      </ActionForm>
 
       <ActionForm action={setAutopilot}>
         <input type="hidden" name="projectId" value={projectId} />

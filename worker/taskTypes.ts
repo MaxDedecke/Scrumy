@@ -77,6 +77,14 @@ export interface ReviewTriagePayload {
   forceDecide?: boolean;
 }
 
+/** Auftraggeber stößt den Product Owner von Hand an: Projekt auf unklare oder
+ *  undefinierte Zustände prüfen und Ordnung schaffen (siehe worker/tasks/poSweep.ts). */
+export interface PoSweepPayload {
+  agentId: string;
+  projectId: string;
+  reason: string;
+}
+
 declare global {
   // Von graphile-worker vorgegebener Mechanismus fuer typisierte Task-Payloads
   // (Declaration Merging), kein selbst gewaehltes Namespace-Pattern.
@@ -91,6 +99,7 @@ declare global {
       clarificationPrep: ClarificationPrepPayload;
       clarificationTriage: ClarificationTriagePayload;
       reviewTriage: ReviewTriagePayload;
+      poSweep: PoSweepPayload;
     }
   }
 }

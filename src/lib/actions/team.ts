@@ -154,6 +154,28 @@ export async function nudgeTeam(formData: FormData): Promise<ActionResult> {
   return ok(message);
 }
 
+/// Der Auftraggeber stößt den Product Owner von Hand an, das Projekt auf
+/// unklare oder undefinierte Zustände zu prüfen (siehe worker/tasks/poSweep.ts)
+/// – gedacht für den Moment, in dem im Büro der Eindruck entsteht, irgendwo
+/// sei etwas liegen geblieben, ohne dass sich das an einer konkreten Sackgasse
+/// festmachen lässt. Läuft unabhängig vom nächsten fälligen Arbeitsschritt.
+export async function nudgeProductOwner(formData: FormData): Promise<ActionResult> {
+  const projectId = str(formData, "projectId");
+  if (!projectId) return fail("Kein Projekt angegeben.");
+
+  const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
+  if (!productOwner) return fail("Diesem Projekt ist kein Product Owner zugeordnet – erst das Team starten.");
+
+  await enqueueAgentJob("poSweep", {
+    agentId: productOwner.id,
+    projectId,
+    reason: "Auftraggeber bittet um Klarheit im Projekt",
+  });
+
+  revalidateProject(projectId);
+  return ok(`${productOwner.name} geht das Projekt durch und meldet sich im Büro, sobald etwas gefunden ist.`);
+}
+
 /// Rueckfrage ans Team – die Antwort schreibt der Scrum-Master-Agent, sobald
 /// der Worker sie abgearbeitet hat.
 export async function askTeam(formData: FormData): Promise<ActionResult> {

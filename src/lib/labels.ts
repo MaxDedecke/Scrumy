@@ -348,4 +348,5 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   requirements_generated: "Anforderungen generiert",
   requirements_approved: "Anforderungen freigegeben",
   requirements_reopened: "Anforderungs-Freigabe zurückgezogen",
+  po_sweep_completed: "Klarheits-Check",
 };

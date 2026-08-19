@@ -24,6 +24,7 @@ import teamInquiry from "./teamInquiry";
 import clarificationPrep from "./clarificationPrep";
 import clarificationTriage from "./clarificationTriage";
 import reviewTriage from "./reviewTriage";
+import poSweep from "./poSweep";
 
 /// Woran der Mensch im Buero erkennt, welcher Schritt gescheitert ist.
 const STEP_LABEL: Record<string, string> = {
@@ -143,4 +144,8 @@ export const taskList: TaskList = {
   clarificationPrep: clarificationPrep as Task,
   clarificationTriage: clarificationTriage as Task,
   reviewTriage: reviewTriage as Task,
+  // Bewusst ohne Umschlag: Ein von Hand angestoßener Klarheits-Check ist kein
+  // Glied der Arbeitskette – scheitert er, gibt es keinen eingefrorenen
+  // Schritt, den eine Klärung wieder aufnehmen müsste.
+  poSweep: poSweep as Task,
 };
