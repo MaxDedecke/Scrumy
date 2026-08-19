@@ -439,7 +439,14 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
   const implementer = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } });
 
   // --- 0. Billige Vorpruefung: ist das Ticket schon erfuellt? ---------------
-  if (!ticket.isCritical && /##\s*Akzeptanzkriterien/i.test(ticket.description ?? "")) {
+  // Nur beim allerersten Blick auf das Ticket sinnvoll ("hat ein früheres
+  // Ticket das nebenbei schon erledigt?") – bei einem Retry/Rework wissen wir
+  // es bereits: der vorige Anlauf selbst (QA-Review oder ein leerer Diff) hat
+  // gerade erst festgestellt, dass es NICHT erfüllt ist. Ohne dieses Gate lief
+  // die Prüfung bei einem haengenden Ticket bei jedem einzelnen Anlauf erneut
+  // – bei einem beobachteten Dauerschleifen-Fall 27 Mal für dasselbe Ticket,
+  // gut 7 der insgesamt ca. 51 Modell-Minuten reine Verschwendung.
+  if (attempt === 1 && !ticket.isCritical && /##\s*Akzeptanzkriterien/i.test(ticket.description ?? "")) {
     const already = await checkAlreadySatisfied({ agent: implementer, projectId, ticket, dir });
     if (already?.satisfied) {
       await prisma.ticket.update({

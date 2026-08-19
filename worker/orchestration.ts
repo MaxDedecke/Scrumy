@@ -125,26 +125,32 @@ export async function continueSprint(projectId: string, sprintId: string): Promi
     return;
   }
 
-  // Bleiben nur noch Tickets mit offener Klaerung uebrig, ist der Sprint nicht
-  // fertig, sondern blockiert. Ihn jetzt zum Review zu geben, wuerde offene
-  // Arbeit als erledigt ausweisen – das Team wartet stattdessen auf die
-  // Beschluesse und macht danach genau hier weiter.
-  const blocked = await blockedTicketIds(sprintId);
-  if (blocked.length > 0) {
-    // Alles ausser DONE zaehlt als wartend: Ein Ticket, dessen Umsetzer
-    // einberufen hat, steht auf „In Review" und ist trotzdem nicht fertig.
-    const waiting = await prisma.ticket.count({
-      where: { sprintId, id: { in: blocked }, status: { not: "DONE" } },
-    });
-    if (waiting > 0) {
-      await logActivity({
-        projectId,
-        actor: "Scrumy",
-        action: "team_waiting",
-        detail: `${waiting} Ticket(s) warten auf einen Beschluss – der Sprint bleibt so lange offen.`,
-      });
-      return;
-    }
+  // Kein Ticket mehr abholbar (BACKLOG/IN_PROGRESS, unblockiert) heisst noch
+  // nicht "fertig". Massgeblich ist einzig der Ticket-Status: Ein Ticket kann
+  // auf IN_REVIEW stehen, ohne dass gerade eine offene Klaerung dranhaengt –
+  // z.B. in der kurzen Luecke zwischen "Klaerung entschieden" und "Nacharbeits-
+  // Job vom Worker abgeholt", oder waehrend es auf eine menschliche Freigabe
+  // (ReviewApproval) wartet. Frueher wurde hier nur auf offene Klaerungen
+  // geprueft – das erklaerte den Sprint faelschlich fuer fertig, sobald genau
+  // diese Luecke zufaellig mit dem Check zusammenfiel (Sprint schloss mit
+  // "3/4 Tickets", das vierte lief in Wahrheit noch). Jetzt zaehlt: erst wenn
+  // WIRKLICH jedes Ticket DONE ist, geht es zum Review.
+  const notDone = await prisma.ticket.findMany({
+    where: { sprintId, status: { not: "DONE" } },
+    select: { id: true },
+  });
+  if (notDone.length > 0) {
+    const blocked = new Set(await blockedTicketIds(sprintId));
+    const blockedCount = notDone.filter((entry) => blocked.has(entry.id)).length;
+    const runningCount = notDone.length - blockedCount;
+    const detail =
+      blockedCount > 0 && runningCount > 0
+        ? `${blockedCount} Ticket(s) warten auf einen Beschluss, ${runningCount} weitere(s) laufen noch – der Sprint bleibt so lange offen.`
+        : blockedCount > 0
+          ? `${blockedCount} Ticket(s) warten auf einen Beschluss – der Sprint bleibt so lange offen.`
+          : `${runningCount} Ticket(s) laufen noch – der Sprint bleibt so lange offen.`;
+    await logActivity({ projectId, actor: "Scrumy", action: "team_waiting", detail });
+    return;
   }
 
   await handOverTo("SCRUM_MASTER", "sprintReview", projectId, {

@@ -31,6 +31,18 @@ import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import type { ClarificationTriagePayload } from "../taskTypes";
 
+/// Ab so vielen bereits entschiedenen Klärungen für dasselbe Ticket gilt jeder
+/// weitere Anlauf als festgefahren, nicht mehr als normale Nacharbeit. Ohne
+/// diese Grenze sagt der Product Owner bei einer immer gleich scheiternden
+/// Umsetzung ("keine Änderung geliefert", derselbe SEARCH-Block passt wieder
+/// nicht) zuverlässig "technisch, reversibel, nochmal versuchen" – Klärung um
+/// Klärung, ohne dass sich je etwas ändert. Beobachteter Fall: 17 Klärungen,
+/// 78 Modell-Aufrufe, ~50 Modell-Minuten für ein einziges Ticket. Über der
+/// Grenze bekommt der Auftraggeber die Sache ungefragt vorgelegt, mit dem
+/// Hinweis, wie oft es schon versucht wurde – statt eines weiteren "kritisch:
+/// false".
+const REPEAT_ESCALATION_THRESHOLD = 3;
+
 const clarificationTriage: Task<"clarificationTriage"> = async (payload: ClarificationTriagePayload, helpers) => {
   const { agentId, projectId, clarificationId, forceDecide } = payload;
 
@@ -44,6 +56,32 @@ const clarificationTriage: Task<"clarificationTriage"> = async (payload: Clarifi
 
   const agent = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } });
   const role = `${agent.name} (${AGENT_ROLE_LABEL[agent.role]})`;
+
+  // `forceDecide` bleibt bewusst ausgenommen: Hat der Auftraggeber selbst
+  // "Team soll entscheiden" gewählt, will er gerade KEINE weitere Vorlage.
+  if (!forceDecide && clarification.ticketId) {
+    const priorDecisions = await prisma.clarification.count({
+      where: { ticketId: clarification.ticketId, status: { in: ["DECIDED", "WITHDRAWN"] } },
+    });
+    if (priorDecisions >= REPEAT_ESCALATION_THRESHOLD) {
+      const note =
+        `Für dieses Ticket wurden schon ${priorDecisions} Klärungen entschieden, ohne dass es fertig wurde – ` +
+        `ein weiteres automatisches "nochmal versuchen" würde vermutlich genauso wenig ändern. Das braucht jetzt einen echten Blick.`;
+      await prisma.clarification.updateMany({
+        where: { id: clarificationId, status: "OPEN" },
+        data: { agenda: [`**${role}:** ${note}`, clarification.agenda].filter(Boolean).join("\n\n") },
+      });
+      await logActivity({
+        projectId,
+        ticketId: clarification.ticketId,
+        agentId: agent.id,
+        actor: agent.name,
+        action: "clarification_escalated",
+        detail: note,
+      });
+      return;
+    }
+  }
 
   try {
     const context = await buildProjectContext(projectId, { includeRepo: false });

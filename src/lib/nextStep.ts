@@ -70,11 +70,16 @@ export async function scheduleNextStep(projectId: string): Promise<string> {
     return `${assignee.name} übernimmt „${openTicket.title}".`;
   }
 
-  const stillBlocked = sprint.tickets.some(
-    (ticket) => blockedIds.has(ticket.id) && ticket.status !== "DONE",
-  );
-  if (stillBlocked) {
-    return "Die übrigen Tickets des Sprints warten auf einen Beschluss – der Sprint bleibt so lange offen.";
+  // Kein abholbares Ticket heisst noch nicht "fertig" – massgeblich ist
+  // einzig der Ticket-Status. Ein Ticket auf IN_REVIEW ohne gerade offene
+  // Klärung (z.B. in der Lücke zwischen "Klärung entschieden" und "Job vom
+  // Worker abgeholt", oder während einer menschlichen Freigabe/ReviewApproval)
+  // zählte hier vorher als erledigt und der Sprint wurde faelschlich
+  // abgeschlossen – siehe dieselbe Korrektur in worker/orchestration.ts
+  // (continueSprint), die dieselbe Prüfung für den automatischen Ablauf macht.
+  const stillNotDone = sprint.tickets.some((ticket) => ticket.status !== "DONE");
+  if (stillNotDone) {
+    return "Die übrigen Tickets des Sprints laufen noch oder warten auf einen Beschluss – der Sprint bleibt so lange offen.";
   }
 
   const scrumMaster = await agentForRole(projectId, "SCRUM_MASTER");

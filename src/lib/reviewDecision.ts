@@ -10,6 +10,7 @@
 import { prisma } from "@/lib/prisma";
 import { agentForRole } from "@/lib/team";
 import { enqueueAgentJob } from "../../worker/queue";
+import { continueSprint } from "../../worker/orchestration";
 import type { ReviewDecision } from "@/generated/prisma/client";
 
 export interface ResolveReviewInput {
@@ -86,5 +87,13 @@ export async function resolveReview(input: ResolveReviewInput): Promise<string> 
     return `„${ticket.title}" zur Nachbesserung zurückgegeben.`;
   }
 
+  // APPROVED heisst: dieses Ticket ist fertig, aber das Team macht davon noch
+  // nicht von selbst weiter – anders als beim eigenen Review-Abschluss in
+  // ticketWork.ts (dort folgt auf "status: DONE" immer ein continueSprint)
+  // fehlte dieser Schritt hier bislang komplett. Ohne ihn blieb das Team nach
+  // einer menschlichen/PO-Freigabe stehen, bis irgendein anderer Vorgang
+  // zufällig continueSprint auslöste – z.B. beim letzten Ticket eines Sprints
+  // gar nicht mehr, der Sprint wurde nie abgeschlossen.
+  if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
   return `„${ticket.title}" freigegeben.`;
 }
