@@ -6,7 +6,6 @@ import {
   CLARIFICATION_SCOPE_LABEL,
   CLARIFICATION_SCOPE_PILL,
   CLARIFICATION_TRIGGER_LABEL,
-  INQUIRY_STATUS_LABEL,
   PRIORITY_LABEL,
   SPRINT_STATUS_LABEL,
   SPRINT_STATUS_PILL,
@@ -18,8 +17,9 @@ import { ClarificationChoice } from "@/components/ClarificationChoice";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { IconSubmit } from "@/components/IconSubmit";
 import { Panel, PanelEmpty, PanelGrid, PanelStrip } from "@/components/Panel";
+import { TeamChatPanel } from "@/components/TeamChatPanel";
 import { ArchiveIcon, ArrowRightIcon, BanIcon, ForwardIcon, SendIcon } from "@/components/icons";
-import { askTeam, decideReview, delegateReview } from "@/lib/actions/team";
+import { decideReview, delegateReview } from "@/lib/actions/team";
 import {
   decideClarification,
   forwardClarification,
@@ -39,18 +39,19 @@ import {
 // Wer arbeitet gerade woran, wie weit ist der Sprint, was wartet auf ihn – und
 // die Möglichkeit, dem Team direkt eine Frage zu stellen.
 //
-// Raster statt Liste: „Wer gerade woran arbeitet" nimmt als Büroplan die volle
-// Breite der ersten Zeile ein (der Blick, der zuerst zählt), darunter stehen
-// Sprint, Aktuelle Themen und Protokoll zu dritt nebeneinander. Gescrollt wird
-// innerhalb der Panels, nicht auf der Seite. Die Steuerung des Teams liegt als
-// Icon-Gruppe im Seitenkopf (siehe src/components/TeamControls.tsx), der
-// "Team arbeitet"-Zustand als Spinner direkt neben dem Projektnamen (siehe
+// Raster statt Liste: Die erste Zeile (60% der Höhe) gehört dem Büroplan
+// „Wer gerade woran arbeitet" (2/3 Breite) und der Chat-Karte „Rückfragen ans
+// Team" (1/3 Breite) daneben. Die zweite Zeile (40%) trägt Sprint, Aktuelle
+// Themen und Protokoll zu dritt nebeneinander. Gescrollt wird innerhalb der
+// Panels, nicht auf der Seite. Die Steuerung des Teams liegt als Icon-Gruppe
+// im Seitenkopf (siehe src/components/TeamControls.tsx), der "Team
+// arbeitet"-Zustand als Spinner direkt neben dem Projektnamen (siehe
 // layout.tsx) – tab-übergreifend, statt nur hier als Textzeile.
 //
 // Jedes Panel lässt sich einklappen (Icon neben dem Titel, siehe
-// src/components/Panel.tsx); da alle drei der zweiten Zeile eigene
-// Rasterzellen sind statt gestapelter Nachbarn, wirkt sich das Einklappen
-// nur noch auf das jeweilige Panel selbst aus.
+// src/components/Panel.tsx); da alle fünf Panels eigene Rasterzellen sind
+// statt gestapelter Nachbarn, wirkt sich das Einklappen nur noch auf das
+// jeweilige Panel selbst aus.
 export const dynamic = "force-dynamic";
 
 // Kompakte Icon-Buttons für die eingeklappte Ansicht von „Aktuelle Themen":
@@ -136,6 +137,15 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
       last: last ? { headline: last.headline, startedAt: last.startedAt } : null,
     };
   });
+
+  const inquiryEntries = inquiries.map((inquiry) => ({
+    id: inquiry.id,
+    question: inquiry.question,
+    answer: inquiry.answer,
+    status: inquiry.status,
+    createdAt: inquiry.createdAt,
+    answeredByName: inquiry.answeredBy?.name ?? null,
+  }));
 
   const started = project.status === "ACTIVE" || project.status === "PAUSED";
   const doneTickets = sprint?.tickets.filter((ticket) => ticket.status === "DONE").length ?? 0;
@@ -285,8 +295,9 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
 
   // Der "arbeitet gerade"-Fall braucht hier keinen eigenen Satz mehr – er
   // sitzt als Spinner neben dem Projektnamen im Seitenkopf (layout.tsx) und
-  // gilt tab-übergreifend statt nur im Büro. Die restlichen Zustände bleiben,
-  // was am ehesten aussteht, bekommt weiterhin diesen Streifen.
+  // gilt tab-übergreifend statt nur im Büro. "Pausiert" steht schon als Pill
+  // im Seitenkopf, eine eigene Zeile dafür ist doppelt – hier bleibt nur, was
+  // sonst nirgends steht: eine offene Klärung oder der Autopilot-Zustand.
   const stripMessage = blockingClarification ? (
     <>
       <span className="font-medium text-ink">Das Team wartet auf deine Entscheidung.</span>{" "}
@@ -297,9 +308,7 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
       {clarifications.length} Klärung{clarifications.length === 1 ? "" : "en"} offen – die betroffenen
       Tickets liegen, der Rest läuft weiter.
     </>
-  ) : project.status === "PAUSED" ? (
-    "Die Arbeit ruht – niemand im Team nimmt gerade etwas Neues an."
-  ) : busy ? null : project.autopilot ? (
+  ) : project.status === "PAUSED" || busy ? null : project.autopilot ? (
     "Niemand arbeitet gerade. Der nächste Schritt kommt automatisch."
   ) : (
     "Autopilot ist aus – das Team wartet auf den nächsten Anstoß."
@@ -313,50 +322,10 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
         </PanelStrip>
       )}
 
-      <PanelGrid className="lg:grid-cols-3 lg:grid-rows-[minmax(0,4fr)_minmax(0,6fr)]">
-        <AgentWorkspacePanel
-          className="lg:col-span-3"
-          agents={agentEntries}
-          footer={
-            <ActionForm action={askTeam} className="flex items-end gap-2">
-              <input type="hidden" name="projectId" value={project.id} />
-              <textarea
-                name="question"
-                rows={1}
-                required
-                placeholder="Rückfrage ans Team – z.B. „Was blockiert euch?“"
-                className={`${inputClass} min-h-9 resize-none py-2`}
-              />
-              <IconSubmit title="Frage an das Team schicken" className={iconButtonClass}>
-                <SendIcon className="h-4 w-4" />
-              </IconSubmit>
-            </ActionForm>
-          }
-        >
-          {inquiries.length > 0 && (
-            <div className="border-t border-hairline">
-              <h3 className="section-title px-4 pb-1 pt-3">Rückfragen</h3>
-              <ul className="divide-y divide-hairline">
-                {inquiries.map((inquiry) => (
-                  <li key={inquiry.id} className="px-4 py-2.5">
-                    <p className="text-sm font-medium text-ink">{inquiry.question}</p>
-                    <p className="mt-0.5 text-xs text-ink-4">
-                      {formatTime(inquiry.createdAt)}
-                      {inquiry.answeredBy ? ` · Antwort von ${inquiry.answeredBy.name}` : ""}
-                    </p>
-                    {inquiry.answer ? (
-                      <pre className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-ink-2">
-                        {inquiry.answer}
-                      </pre>
-                    ) : (
-                      <p className="mt-1.5 text-sm text-ink-3">{INQUIRY_STATUS_LABEL[inquiry.status]} …</p>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </AgentWorkspacePanel>
+      <PanelGrid className="lg:grid-cols-3 lg:grid-rows-[minmax(0,6fr)_minmax(0,4fr)]">
+        <AgentWorkspacePanel className="lg:col-span-2" agents={agentEntries} />
+
+        <TeamChatPanel className="lg:col-span-1" projectId={project.id} inquiries={inquiryEntries} />
 
         <Panel
           title="Aktueller Sprint"

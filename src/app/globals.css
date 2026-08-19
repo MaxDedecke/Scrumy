@@ -249,32 +249,17 @@
     background: var(--color-hairline-strong);
   }
 
-  .office-pod + .office-pod {
-    margin-top: 1.75rem;
-  }
-
-  /* Hängeschild über einem Rollen-Cluster – trägt das Rollenlabel einmal für
-     die Gruppe, statt es auf jeder Karte zu wiederholen. */
-  .office-pod-sign {
-    position: relative;
-    width: max-content;
-    margin: 0 auto 1.375rem;
-  }
-
-  .office-pod-sign::before {
-    content: "";
-    position: absolute;
-    top: -0.625rem;
-    left: 50%;
-    width: 1px;
-    height: 0.625rem;
-    background: var(--color-hairline-strong);
-  }
-
+  /* Feste zwei Zeilen statt frei wachsender Reihen: die Spaltenzahl kommt
+     inline vom Panel (Math.ceil(Agentenzahl / 2)), hier steht nur noch die
+     Zeilenhöhe fest. Reicht die Breite nicht, scrollt der Tisch-Bereich
+     horizontal statt eine dritte Zeile anzufangen. */
   .office-desks {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row;
     gap: 1.125rem 0.875rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
   }
 
   .office-desk {

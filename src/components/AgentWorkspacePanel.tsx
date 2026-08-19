@@ -33,15 +33,10 @@ type ViewMode = "list" | "office";
 // konkurrieren, statt eine feste Aktion zu sein.
 export function AgentWorkspacePanel({
   agents,
-  footer,
-  children,
   className,
 }: {
   agents: AgentWorkspaceEntry[];
-  footer?: ReactNode;
-  /** Zusatzinhalt unter der Ansicht, z.B. Rückfragen – unabhängig vom Modus. */
-  children?: ReactNode;
-  /** z.B. `lg:col-span-3`, wenn das Panel eine ganze Rasterzeile einnimmt. */
+  /** z.B. `lg:col-span-2`, wenn das Panel nicht die ganze Rasterzeile einnimmt. */
   className?: string;
 }) {
   const [mode, setMode] = useState<ViewMode>("list");
@@ -57,7 +52,6 @@ export function AgentWorkspacePanel({
       count={agents.length}
       padded={false}
       className={className}
-      footer={footer}
       collapsible
       collapsedView={<p className="line-clamp-2 px-4 py-3 text-sm text-ink-2">{namesLine}</p>}
       action={
@@ -96,8 +90,6 @@ export function AgentWorkspacePanel({
       ) : (
         <AgentOfficeView agents={agents} />
       )}
-
-      {children}
     </Panel>
   );
 }
@@ -162,41 +154,34 @@ function agentDecor(id: string): Decor {
   return decors[hash(id) % decors.length];
 }
 
-// Der Büroplan: Agenten werden nach Rolle in Cluster ("Pods") mit Hängeschild
-// gruppiert – das Rollenlabel steht damit einmal pro Gruppe statt auf jeder
-// Karte. Jeder Tisch trägt drei Zustandssignale, die alleine (auch in
-// Graustufen über Position/Form) den Blick tragen: Monitor leuchtet + Stuhl
-// ist herangerückt = arbeitet; Monitor aus + Stuhl abgerückt = zuletzt aktiv;
+// Feste Pipeline-Reihenfolge (siehe AGENT_ROLE_LABEL) statt Auftrittsreihenfolge:
+// Agenten derselben Rolle landen im Raster nebeneinander, ohne dass es dafür
+// eine eigene Gruppen-Zeile braucht.
+const ROLE_ORDER = Object.keys(AGENT_ROLE_LABEL) as AgentRole[];
+
+// Der Büroplan: alle Tische in einem Raster mit fest zwei Zeilen – so viele
+// Spalten wie nötig, dazu horizontales Scrollen statt einer dritten Zeile.
+// Jeder Tisch trägt drei Zustandssignale, die alleine (auch in Graustufen
+// über Position/Form) den Blick tragen: Monitor leuchtet + Stuhl ist
+// herangerückt = arbeitet; Monitor aus + Stuhl abgerückt = zuletzt aktiv;
 // Monitor aus + Stuhl mittig, kein Deko-Item = noch nie etwas getan. Ein
 // festes Deko-Item pro Person (aus der ID abgeleitet) und Dampf an der Tasse
 // bei einer Pause sind reine Atmosphäre und nie das einzige Signal.
 function AgentOfficeView({ agents }: { agents: AgentWorkspaceEntry[] }) {
-  const pods = new Map<AgentRole, AgentWorkspaceEntry[]>();
-  for (const agent of agents) {
-    const bucket = pods.get(agent.role);
-    if (bucket) bucket.push(agent);
-    else pods.set(agent.role, [agent]);
-  }
-  // Feste Pipeline-Reihenfolge (siehe AGENT_ROLE_LABEL) statt Auftrittsreihenfolge,
-  // damit die Pods nicht springen, wenn sich Status/Sortierung der Agenten ändert.
-  const roles = Object.keys(AGENT_ROLE_LABEL) as AgentRole[];
+  const ordered = [...agents].sort(
+    (a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role),
+  );
+  // So viele Spalten, wie nötig sind, um bei zwei Zeilen alle unterzubringen –
+  // Reihenfolge bleibt links-nach-rechts, oben-nach-unten wie beim Lesen.
+  const columns = Math.max(1, Math.ceil(ordered.length / 2));
 
   return (
     <div className="office-room p-4">
-      {roles
-        .filter((role) => pods.has(role))
-        .map((role) => (
-          <div key={role} className="office-pod">
-            <div className="office-pod-sign rounded-md border border-hairline bg-surface-2 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-ink-3 uppercase">
-              {AGENT_ROLE_LABEL[role]}
-            </div>
-            <div className="office-desks">
-              {pods.get(role)!.map((agent) => (
-                <Desk key={agent.id} agent={agent} />
-              ))}
-            </div>
-          </div>
+      <div className="office-desks" style={{ gridTemplateColumns: `repeat(${columns}, minmax(6.75rem, 1fr))` }}>
+        {ordered.map((agent) => (
+          <Desk key={agent.id} agent={agent} />
         ))}
+      </div>
     </div>
   );
 }
@@ -241,6 +226,7 @@ function Desk({ agent }: { agent: AgentWorkspaceEntry }) {
       <span className="office-nameplate w-full truncate rounded-full px-2 py-0.5 text-center text-xs font-medium text-ink">
         {agent.name}
       </span>
+      <span className="w-full truncate text-center text-[10.5px] text-ink-3">{AGENT_ROLE_LABEL[agent.role]}</span>
     </div>
   );
 }
