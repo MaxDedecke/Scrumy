@@ -312,6 +312,8 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   repo_created: "Repository angelegt",
   repo_cloned: "Repository geklont",
   repo_reused: "Repository weiterverwendet",
+  repo_pushed: "Nach GitHub gepusht",
+  repo_push_failed: "Push nach GitHub fehlgeschlagen",
   kickoff_completed: "Auftrag verstanden",
   sprint_planned: "Sprint geplant",
   sprint_reviewed: "Sprint abgeschlossen",

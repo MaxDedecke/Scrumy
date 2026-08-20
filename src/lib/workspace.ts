@@ -189,15 +189,30 @@ async function currentBranch(dir: string): Promise<string> {
   }
 }
 
+export interface PushResult {
+  /** false, wenn kein Remote konfiguriert ist ODER origin schon auf dem
+   *  aktuellen Stand war ("Everything up-to-date") – beides kein Fehler,
+   *  aber auch keine meldenswerte Aktion für den Aufrufer (siehe
+   *  `prepareProjectRepository` in worker/projectRepository.ts). */
+  pushed: boolean;
+  commit?: string;
+}
+
 /// Pusht den aktuellen Stand, sofern `origin` konfiguriert ist. `--set-upstream`
 /// macht sowohl den ersten Push in ein leeres GitHub-Repo als auch alle
 /// folgenden Pushes deterministisch; Force-Pushes sind bewusst ausgeschlossen.
-export async function pushRepo(dir: string): Promise<void> {
+export async function pushRepo(dir: string): Promise<PushResult> {
   const remote = await storedRemoteOptions(dir);
-  if (!remote) return;
+  if (!remote) return { pushed: false };
   const localBranch = await currentBranch(dir);
   const remoteBranch = remote.defaultBranch || localBranch;
   const token = remoteToken(remote);
+
+  const head = (await git(dir, ["rev-parse", "HEAD"])).trim();
+  const previousRemoteSha = await git(dir, ["rev-parse", `refs/remotes/origin/${remoteBranch}`])
+    .then((sha) => sha.trim())
+    .catch(() => null); // noch kein Tracking-Ref – erster Push in dieses Remote/Branch
+
   try {
     await git(dir, ["push", "--set-upstream", "origin", `HEAD:refs/heads/${remoteBranch}`], token);
   } catch (error) {
@@ -206,6 +221,8 @@ export async function pushRepo(dir: string): Promise<void> {
       `Push nach origin/${remoteBranch} fehlgeschlagen. Prüfe Repository-URL, Schreibrecht und Branch-Schutz. ${detail}`,
     );
   }
+
+  return { pushed: previousRemoteSha !== head, commit: head };
 }
 
 export function workspaceRoot(): string {

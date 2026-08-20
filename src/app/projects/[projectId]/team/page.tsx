@@ -64,11 +64,18 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
 
   if (!project) notFound();
 
-  const [llmProfiles, connectors] = await Promise.all([
+  const [llmProfiles, connectors, lastRepoPush] = await Promise.all([
     prisma.llmProfile.findMany({ orderBy: { name: "asc" } }),
     prisma.connector.findMany({
       where: { organizationId: project.organizationId, OR: [{ projectId: null }, { projectId: project.id }] },
       orderBy: { createdAt: "asc" },
+    }),
+    // Letztes Push-Ereignis (siehe worker/projectRepository.ts) – ohne das war
+    // ein erfolgreicher wie ein fehlgeschlagener Push komplett unsichtbar,
+    // erst über einen manuellen Blick in DB/Repo zu erkennen.
+    prisma.activityLogEntry.findFirst({
+      where: { projectId: project.id, action: { in: ["repo_pushed", "repo_push_failed"] } },
+      orderBy: { createdAt: "desc" },
     }),
   ]);
 
@@ -207,6 +214,17 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
       </Panel>
 
       <Panel title="Connectoren" count={connectors.length} padded={false}>
+        {lastRepoPush && (
+          <p
+            className={`border-b border-hairline px-4 py-2 text-xs ${
+              lastRepoPush.action === "repo_push_failed" ? "text-red-600" : "text-ink-4"
+            }`}
+          >
+            {lastRepoPush.action === "repo_pushed" ? "✅ Zuletzt gepusht" : "⚠️ Push fehlgeschlagen"} am{" "}
+            {lastRepoPush.createdAt.toLocaleString("de-DE")}
+            {lastRepoPush.action === "repo_push_failed" && lastRepoPush.detail ? `: ${lastRepoPush.detail}` : ""}
+          </p>
+        )}
         {connectors.length === 0 ? (
           <PanelEmpty>Noch keine Connectoren eingerichtet.</PanelEmpty>
         ) : (
