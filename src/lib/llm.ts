@@ -661,11 +661,20 @@ async function chatTurnOpenAiCompat(
     choices?: { message?: { content?: string; tool_calls?: OpenAiToolCall[] }; finish_reason?: string }[];
     error?: { message?: string };
   };
+  // Wie bei Anthropic (siehe dortiger Kommentar): Reasoning-Modelle wie
+  // deepseek-v4-flash denken auch über den OpenAI-kompatiblen Endpunkt in
+  // dasselbe Budget hinein, das `max_tokens` setzt – ein knapper Aufrufer-Wert
+  // (z.B. 300 für einen kurzen JSON-Check) lässt dann die Antwort selbst mitten
+  // im JSON abreißen. Beobachtet im Drapbox-Projekt: `checkAlreadySatisfied`
+  // schlug deshalb reihenweise mit TOKEN_LIMIT fehl, bis die Klärung offen
+  // liegen blieb und das ganze Team stillstand.
+  const effectiveMaxTokens = Math.max(maxTokens, 16000);
+
   try {
     data = (await postJson(
       url,
       headers,
-      { model: profile.model, max_tokens: maxTokens, messages: openAiMessages, ...(openAiTools ? { tools: openAiTools } : {}) },
+      { model: profile.model, max_tokens: effectiveMaxTokens, messages: openAiMessages, ...(openAiTools ? { tools: openAiTools } : {}) },
       timeoutMs,
     )) as typeof data;
   } catch (error) {
@@ -677,7 +686,7 @@ async function chatTurnOpenAiCompat(
       data = (await postJson(
         url,
         headers,
-        { model: profile.model, max_completion_tokens: maxTokens, messages: openAiMessages, ...(openAiTools ? { tools: openAiTools } : {}) },
+        { model: profile.model, max_completion_tokens: effectiveMaxTokens, messages: openAiMessages, ...(openAiTools ? { tools: openAiTools } : {}) },
         timeoutMs,
       )) as typeof data;
     } else {
