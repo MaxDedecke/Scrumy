@@ -689,6 +689,39 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
       helpers.logger.info(`Ticket ${ticket.title} war zu groß und wurde automatisch zerlegt.`);
       return;
     }
+    const message = error instanceof Error ? error.message : String(error);
+
+    // Anbieter/Netzwerk-Fehler (siehe LlmError-Code "TRANSPORT" in
+    // src/lib/llm.ts – u.a. 429/502/503/504/524, `postJson` versucht es davor
+    // schon zweimal selbst erneut) sind kein Programmfehler und keine
+    // fachliche Sackgasse im Ticket, sondern ein Ausrutscher der Infrastruktur
+    // (beobachtet im Drapbox-Projekt: RunPod/Cloudflare-524 nach 125s). Den
+    // trotzdem sofort dem Menschen vorzulegen (wie im Absturz-Zweig unten)
+    // nimmt ein Ticket aus der automatischen Bearbeitung, obwohl vom
+    // Anlauf-Budget meist noch reichlich übrig ist. Stattdessen nur den
+    // Anlauf verbuchen und normal weitermachen – reicht das Budget nicht
+    // mehr, eröffnet `reportStalledTickets` (siehe continueSprint) ohnehin
+    // die passende Klärung.
+    if (error instanceof AgentRunError && error.code === "TRANSPORT") {
+      helpers.logger.warn(`Ticket ${ticket.title}: Anbieter/Netzwerk-Fehler – ${message}`);
+      await recordAttempt({
+        ticketId,
+        attempt: totalAttempt,
+        agentName: implementer.name,
+        outcome: `Anbieter/Netzwerk-Fehler, wird automatisch erneut versucht: ${message.slice(0, 200)}`,
+        trace: (error as { attemptTrace?: AttemptTrace }).attemptTrace,
+      });
+      await logActivity({
+        projectId,
+        ticketId,
+        actor: "Scrumy",
+        action: "step_failed",
+        detail: `„${ticket.title}" – Anbieter/Netzwerk-Fehler (Anlauf ${attempt}), wird automatisch erneut versucht: ${message.slice(0, 300)}`,
+      });
+      if (ticket.sprintId) await continueSprint(projectId, ticket.sprintId);
+      return;
+    }
+
     // Alles andere ist ein unerwarteter Absturz mitten im Werkzeug-Loop (z.B.
     // eine Git-Operation, deren Ausgabe ein Puffer-Limit reißt – beobachtet
     // im OnwPhoto-Projekt: node_modules ohne .gitignore committet, danach
@@ -697,7 +730,6 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
     // immer auf IN_PROGRESS stehen, ohne dass irgendwo ein Fehler sichtbar
     // wird. Lieber wie einen regulären Fehlschlag behandeln – Mensch schaut
     // drauf, statt dass der Job spurlos verschwindet.
-    const message = error instanceof Error ? error.message : String(error);
     helpers.logger.error(`Ticket ${ticket.title}: Umsetzungsloop abgestürzt – ${message}`);
     await recordAttempt({
       ticketId,

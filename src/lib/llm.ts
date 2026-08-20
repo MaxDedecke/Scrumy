@@ -122,33 +122,64 @@ function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+// Diese Statuscodes sind fast immer voruebergehend (Anbieter ueberlastet,
+// Gateway/Proxy hat rechtzeitig keine Antwort bekommen) – ein zweiter Versuch
+// mit kurzer Pause klaert das oft von selbst, ohne dass der Aufrufer (z.B.
+// worker/tasks/ticketWork.ts) das Ticket gleich als gescheitert behandeln
+// muss. 524 kam konkret im Drapbox-Projekt vor: RunPods Cloudflare-Proxy hat
+// die Verbindung nach seinem eigenen, festen ~100s-Fenster gekappt, lange
+// bevor der eigene `timeoutMs` unten ueberhaupt greift.
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504, 524]);
+
+// Zwei Wiederholungen mit fester, kurzer Pause – kein Backoff-Paket, siehe
+// Kommentar oben im Modul zu "ohne zusaetzliche Dependency". Mehr als zwei
+// Versuche verbrennen bei einem echt ueberlasteten Anbieter nur unnoetig
+// Zeit; bei einem einzelnen Ausrutscher (der beobachtete Fall) reicht einer.
+const RETRY_DELAYS_MS = [2000, 5000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function postJson(url: string, headers: HeadersInit, body: unknown, timeoutMs: number) {
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new LlmError(`Anbieter nicht erreichbar (${url}): ${reason}`, "TRANSPORT");
-  }
+  for (let attempt = 0; ; attempt++) {
+    const isLastAttempt = attempt === RETRY_DELAYS_MS.length;
 
-  const text = await response.text();
-  if (!response.ok) {
-    // Antwortkörper mitgeben – die Fehlermeldungen der Anbieter sind meist
-    // konkret (falsches Modell, Guthaben leer, Key ungültig). "TRANSPORT",
-    // weil das auch 429/5xx einschließt: rate-limitiert oder überlastet ist
-    // der Anbieter, nicht der bisherige Arbeitsstand des Agenten.
-    throw new LlmError(`Anbieter antwortete mit ${response.status}: ${text.slice(0, 500)}`, "TRANSPORT");
-  }
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (!isLastAttempt) {
+        await sleep(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      throw new LlmError(`Anbieter nicht erreichbar (${url}): ${reason}`, "TRANSPORT");
+    }
 
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw new LlmError(`Antwort des Anbieters war kein JSON: ${text.slice(0, 300)}`, "TRANSPORT");
+    const text = await response.text();
+    if (!response.ok) {
+      // Antwortkörper mitgeben – die Fehlermeldungen der Anbieter sind meist
+      // konkret (falsches Modell, Guthaben leer, Key ungültig). "TRANSPORT",
+      // weil das auch 429/5xx einschließt: rate-limitiert oder überlastet ist
+      // der Anbieter, nicht der bisherige Arbeitsstand des Agenten.
+      if (RETRYABLE_STATUSES.has(response.status) && !isLastAttempt) {
+        await sleep(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      throw new LlmError(`Anbieter antwortete mit ${response.status}: ${text.slice(0, 500)}`, "TRANSPORT");
+    }
+
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new LlmError(`Antwort des Anbieters war kein JSON: ${text.slice(0, 300)}`, "TRANSPORT");
+    }
   }
 }
 
