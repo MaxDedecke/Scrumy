@@ -60,6 +60,16 @@ export async function buildProjectContext(
       clip(releasedConcept?.content ?? project.concept?.content ?? "(kein Konzept hinterlegt)", compact ? 5000 : 12000),
   );
 
+  // Der letzte Sprint ist der Stichtag dafuer, was "neu" ist: Anforderungen,
+  // die danach dazukamen, hat noch keine Planung gesehen. Ohne diese Markierung
+  // liest der Product Owner eine Liste, die er groesstenteils laengst umgesetzt
+  // hat, und meldet den Backlog als leer – die nachgereichte Ausbaustufe des
+  // Auftraggebers faellt dabei durch.
+  const latestSprint = await prisma.sprint.findFirst({
+    where: { projectId },
+    orderBy: { number: "desc" },
+  });
+
   // Das Beschlussregister: Was der Auftraggeber in Klaerungen entschieden hat,
   // gehoert in JEDEN Prompt. Ohne das laeuft das Team in vier Wochen in
   // dieselbe Frage – und entscheidet sie dann womoeglich anders als er.
@@ -95,9 +105,12 @@ export async function buildProjectContext(
 
   let requirementChars = 0;
   const requirementBudget = compact ? 6000 : Number.POSITIVE_INFINITY;
+  const isNew = (createdAt: Date) => Boolean(latestSprint) && createdAt > latestSprint!.startedAt;
+  const newRequirementCount = project.requirements.filter((requirement) => isNew(requirement.createdAt)).length;
   const requirements = orderedRequirements
     .map((requirement, index) => {
-      const head = `${index + 1}. [${PRIORITY_LABEL[requirement.priority]}] ${requirement.title}`;
+      const marker = isNew(requirement.createdAt) ? `[NEU seit Sprint ${latestSprint!.number}] ` : "";
+      const head = `${index + 1}. ${marker}[${PRIORITY_LABEL[requirement.priority]}] ${requirement.title}`;
       const detail = requirement.description ? `\n   ${clip(requirement.description, compact ? 500 : 800)}` : "";
       const file = requirement.fileName ? `\n   (Anhang: ${requirement.fileName})` : "";
       return head + detail + file;
@@ -108,7 +121,13 @@ export async function buildProjectContext(
       return true;
     })
     .join("\n");
-  parts.push(`# Freigegebene Anforderungen\n${requirements || "(keine erfasst)"}`);
+  parts.push(
+    `# Freigegebene Anforderungen\n${requirements || "(keine erfasst)"}` +
+      (newRequirementCount > 0
+        ? `\n\n${newRequirementCount} mit [NEU seit Sprint ${latestSprint!.number}] markierte Anforderung${newRequirementCount === 1 ? " kam" : "en kamen"} erst nach Beginn des letzten Sprints dazu – ` +
+          `sie ${newRequirementCount === 1 ? "wurde" : "wurden"} noch von keiner Planung berücksichtigt und ${newRequirementCount === 1 ? "ist" : "sind"} offene Arbeit.`
+        : ""),
+  );
 
   // Im Compact-Modus geht es nicht um das ganze Beschlussregister, sondern um
   // das, was FUER DIESES TICKET gilt: sein eigener Verlauf (immer, egal wie
@@ -154,14 +173,12 @@ export async function buildProjectContext(
   }
 
   if (includeBoard) {
-    const [sprint, tickets] = await Promise.all([
-      prisma.sprint.findFirst({ where: { projectId }, orderBy: { number: "desc" } }),
-      prisma.ticket.findMany({
-        where: { projectId },
-        orderBy: { createdAt: "asc" },
-        include: { assignee: true, sprint: true },
-      }),
-    ]);
+    const sprint = latestSprint;
+    const tickets = await prisma.ticket.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "asc" },
+      include: { assignee: true, sprint: true },
+    });
 
     const board = tickets
       .map(

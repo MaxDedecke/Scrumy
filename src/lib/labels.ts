@@ -247,12 +247,14 @@ export const RUN_STATUS_PILL: Record<RunStatus, string> = {
 export const RUN_KIND_LABEL: Record<string, string> = {
   kickoff: "Auftrag verstehen",
   sprint_planning: "Sprint-Planung",
+  sprint_refinement: "Tickets zerlegt",
   ticket_plan: "Ticket-Planung",
   implementation: "Umsetzung",
   acceptance_precheck: "Vorprüfung",
   no_change_audit: "Nachprüfung ohne Änderung",
   review: "QA-Review",
   sprint_review: "Sprint-Review",
+  improvement_ideas: "Weiterentwicklung vorgeschlagen",
   inquiry: "Rückfrage beantwortet",
   clarification_prep: "Klärung vorbereitet",
   clarification_triage: "Klärung geprüft",
@@ -290,6 +292,7 @@ export const CLARIFICATION_TRIGGER_LABEL: Record<string, string> = {
   no_workspace: "Kein Arbeitsverzeichnis",
   backlog_empty: "Nichts mehr offen?",
   sprint_budget: "Sprint-Budget aufgebraucht",
+  extension_commissioned: "Ausbaustufe beauftragt",
 };
 
 export const INQUIRY_STATUS_LABEL: Record<InquiryStatus, string> = {
@@ -305,6 +308,7 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   team_paused: "Arbeit angehalten",
   team_resumed: "Arbeit fortgesetzt",
   team_waiting: "Team wartet",
+  extension_commissioned: "Ausbaustufe beauftragt",
   team_blocked: "Team blockiert",
   team_halted: "Team angehalten",
   autopilot_on: "Autopilot an",

@@ -16,7 +16,8 @@ import { extractJsonObject } from "@/lib/llm";
 import { commitAll, writeFiles } from "@/lib/workspace";
 import { agentForRole, roleForTicket } from "@/lib/team";
 import { PRIORITY_LABEL, SUPPORT_CHANNEL_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
-import type { Priority, Ticket, TicketType } from "@/generated/prisma/client";
+import type { Agent, Priority, Ticket, TicketType } from "@/generated/prisma/client";
+import type { ClarificationOption } from "@/lib/clarificationOptions";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { continueSprint, loadWorkingProject } from "../orchestration";
@@ -274,7 +275,7 @@ Ein Ticket ist ein EINZELNER, in einem Modellaufruf umsetzbarer und prüfbarer S
 
 Eine große Anwendung ist kein Grund für große Tickets: Plane nur den nächsten kleinen Schnitt; weitere Schnitte kommen in späteren Sprints.
 
-Wenn aus Konzept und Anforderungen nichts Wesentliches mehr offen ist, setze "done" auf true und lass "tickets" leer.${
+Wenn aus Konzept und Anforderungen nichts Wesentliches mehr offen ist, setze "done" auf true und lass "tickets" leer. Beschlüsse, die eine Weiterentwicklung beauftragen (Ausbaustufe, Feinschliff, Testabdeckung, Robustheit …), sind dabei offene Arbeit wie jede andere: Solange der Code sie nicht zeigt, ist "done" false und du planst genau sie.${
     pulled.length > 0
       ? ` Das gilt unabhängig von den zurückgestellten Tickets oben – die zählen so oder so als offene Arbeit.`
       : ""
@@ -384,6 +385,7 @@ Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwort
   if (done || (planned.length === 0 && pulled.length === 0)) {
     const detail = String(parsed.doneReason ?? "").trim() ||
       "Der Product Owner sieht keine offenen Arbeitspakete mehr aus Konzept und Anforderungen.";
+    const improvements = await improvementProposals({ agent, projectId, context, history });
     await prisma.project.update({ where: { id: projectId }, data: { autopilot: false } });
     await logActivity({
       projectId,
@@ -402,18 +404,28 @@ Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwort
       scope: "PROJECT",
       trigger: "backlog_empty",
       raisedById: agent.id,
-      question: `${agent.name} sieht aus Konzept und Anforderungen nichts Wesentliches mehr offen. Ist der Auftrag damit erfüllt?`,
-      context: detail,
+      question:
+        `${agent.name} sieht aus Konzept und Anforderungen nichts Wesentliches mehr offen. Soll das Team weiterentwickeln – ` +
+        `oder ist der Auftrag damit erfüllt?`,
+      context: improvements.context
+        ? `${detail}\n\n## Was ${agent.name} trotzdem noch besser machen würde\n${improvements.context}`
+        : detail,
+      // Die Vorschläge des Product Owners stehen VOR dem Anhalten: Ein Klick
+      // darauf ist der Beschluss, und weil sein Text als Beschluss ins
+      // Register wandert (siehe decideClarification), plant die nächste Runde
+      // genau das – ohne dass der Auftraggeber selbst formulieren muss, was
+      // noch fehlt.
       options: [
+        ...improvements.options,
         {
           key: "stop",
           label: "Ja, der Auftrag ist erfüllt",
-          detail: "Das Team hält an. Neue Arbeit kommt über Anforderungen oder Kundenanfragen.",
+          detail: "Das Team hält an. Neue Arbeit kommt über Anforderungen, eine Ausbaustufe oder Kundenanfragen.",
           effect: "stop",
         },
         {
           key: "resume",
-          label: "Nein, es fehlt noch etwas",
+          label: "Etwas anderes soll noch dazu",
           detail:
             "Schreib unten dazu, was fehlt – das Team plant dann einen weiteren Sprint und hat deinen Beschluss im Auftrag.",
           effect: "resume",
@@ -545,5 +557,112 @@ Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwort
   helpers.logger.info(`Sprint ${sprint.number} für Projekt ${projectId} geplant (${reason}).`);
   await continueSprint(projectId, sprint.id);
 };
+
+/// Wie viele Weiterentwicklungs-Vorschlaege der Product Owner hoechstens
+/// vorlegt. Mehr macht die Entscheidung nicht besser: Neben ihnen stehen in
+/// derselben Klaerung noch "Auftrag erfuellt", "etwas anderes" und das
+/// Textfeld fuer den eigenen Weg.
+const MAX_IMPROVEMENT_OPTIONS = 3;
+
+interface ImprovementProposals {
+  /// Fertige Klaerungs-Optionen, je ein Vorschlag. Ihr `label` ist bewusst ein
+  /// vollstaendiger Satz: Genau er landet als Beschluss im Register (siehe
+  /// decideClarification) und ist damit der Auftrag, aus dem die naechste
+  /// Sprint-Planung Tickets schneidet.
+  options: ClarificationOption[];
+  /// Dieselben Vorschlaege als Text fuer die Beleglage der Klaerung.
+  context: string;
+}
+
+/// Was der Product Owner vorschlaegt, wenn Konzept und Anforderungen
+/// abgearbeitet sind.
+///
+/// Ohne das endet ein Projekt an dieser Stelle mit einer leeren Frage ("fehlt
+/// noch was?"), auf die nur der Auftraggeber antworten kann – und meist nicht
+/// antwortet, weil ihm ohne Blick in den Code gar nichts einfaellt. Der
+/// Product Owner kennt Repo, Board und Sprint-Historie: Er soll hier von sich
+/// aus sagen, was noch schoener, robuster oder besser getestet sein koennte,
+/// auch wenn der Nutzen im Einzelfall klein ist. Die Entscheidung bleibt beim
+/// Menschen, aber er waehlt aus konkreten Vorschlaegen statt aus dem Nichts.
+///
+/// Faellt der Aufruf aus (Modell nicht erreichbar, kaputtes JSON), bleibt es
+/// bei der Frage ohne Vorschlaege – das Anhalten des Teams darf daran nicht
+/// scheitern.
+async function improvementProposals(input: {
+  agent: Agent;
+  projectId: string;
+  context: string;
+  history: string;
+}): Promise<ImprovementProposals> {
+  const { agent, projectId, context, history } = input;
+  try {
+    const { text } = await runAgent({
+      agent,
+      projectId,
+      kind: "improvement_ideas",
+      headline: "Prüft, was sich noch weiterentwickeln ließe",
+      maxTokens: 3000,
+      reasoningEffort: "low",
+      preferThroughput: true,
+      system: `${TEAM_GRUNDREGELN}
+
+Du bist ${agent.name}, Product Owner. Der beauftragte Umfang ist abgearbeitet und du überlegst, was das Team dem Auftraggeber als Weiterentwicklung anbieten sollte. Du antwortest ausschließlich mit einem JSON-Objekt.`,
+      prompt: `${context}
+
+# Bisherige Sprints
+${history || "(noch keine)"}
+
+Aus Konzept und Anforderungen ist nichts Wesentliches mehr offen. Bevor das Team anhält, sieh dir das Ergebnis noch einmal kritisch an – als anspruchsvoller Nutzer und als Kollege, der es in zwei Jahren noch warten muss.
+
+Nenne bis zu ${MAX_IMPROVEMENT_OPTIONS} Vorschläge, was jetzt noch besser sein könnte. Ausdrücklich erwünscht sind auch Dinge mit kleinem Nutzen: Feinschliff an der Oberfläche, fehlende Leer-/Lade-/Fehlerzustände, unrunde Abläufe, dünne Testabdeckung, fehlende Prüfungen an den Rändern, Robustheit, Bedienbarkeit auf kleinen Bildschirmen, Aufräumen im Code. Sag bei jedem Vorschlag ehrlich, wie groß der Nutzen wirklich ist – auch "eher Politur" ist eine gültige Antwort, der Auftraggeber entscheidet selbst, ob es ihm das wert ist.
+
+Halte dich an das, was du im Repository und in der Sprint-Historie wirklich siehst. Erfinde keine Lücke, die es nicht gibt, und schlage nichts vor, was laut Beschlussregister schon abgelehnt wurde. Siehst du wirklich nichts Sinnvolles mehr, gib eine leere Liste zurück.
+
+Antworte nur mit diesem JSON-Objekt:
+{
+  "vorschlaege": [
+    {
+      "titel": "ein vollständiger, für sich verständlicher Satz, was das Team bauen soll",
+      "nutzen": "was der Auftraggeber davon hat – und wie groß der Nutzen ehrlich eingeschätzt ist",
+      "aufwand": "klein | mittel | groß"
+    }
+  ]
+}`,
+    });
+
+    const parsed = extractJsonObject(text);
+    const raw = Array.isArray(parsed.vorschlaege) ? parsed.vorschlaege : [];
+    const proposals = raw
+      .map((entry) => {
+        const value = (entry ?? {}) as { titel?: unknown; nutzen?: unknown; aufwand?: unknown };
+        return {
+          titel: String(value.titel ?? "").trim(),
+          nutzen: String(value.nutzen ?? "").trim(),
+          aufwand: String(value.aufwand ?? "").trim(),
+        };
+      })
+      .filter((entry) => entry.titel.length > 0)
+      .slice(0, MAX_IMPROVEMENT_OPTIONS);
+
+    return {
+      options: proposals.map((entry, index) => ({
+        key: `improve_${index + 1}`,
+        label: `Weiterentwickeln: ${entry.titel}`,
+        detail: [entry.nutzen, entry.aufwand ? `Aufwand: ${entry.aufwand}` : ""].filter(Boolean).join(" · "),
+        effect: "resume" as const,
+      })),
+      context: proposals
+        .map(
+          (entry, index) =>
+            `${index + 1}. ${entry.titel}` +
+            (entry.nutzen ? `\n   Nutzen: ${entry.nutzen}` : "") +
+            (entry.aufwand ? `\n   Aufwand: ${entry.aufwand}` : ""),
+        )
+        .join("\n"),
+    };
+  } catch {
+    return { options: [], context: "" };
+  }
+}
 
 export default sprintPlanning;

@@ -23,7 +23,7 @@ import {
   reopenRequirements,
 } from "@/lib/actions/requirements";
 import { releaseConcept, reopenConcept, saveConceptDraft } from "@/lib/actions/concept";
-import { startTeam } from "@/lib/actions/team";
+import { commissionExtension, startTeam } from "@/lib/actions/team";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
@@ -342,20 +342,49 @@ export default async function ProjectDiscoveryPage({
         </div>
       </Panel>
 
-      <Panel title="Team starten" scroll={false}>
+      <Panel title={teamStarted ? "Weiterbauen" : "Team starten"} scroll={teamStarted}>
         {teamStarted ? (
-          <p className="text-sm text-ink-2">
-            {project.status === "PAUSED"
-              ? "Die Arbeit des Teams ruht gerade – "
-              : "Das Agenten-Team arbeitet bereits – "}
-            <Link
-              href={`/projects/${project.id}/office`}
-              className="font-medium text-accent underline underline-offset-2"
-            >
-              ins Team-Büro
-            </Link>{" "}
-            gehen und zusehen. Anforderungen und Konzept können hier weiter gepflegt werden.
-          </p>
+          <>
+            <p className="text-sm text-ink-2">
+              {project.status === "PAUSED"
+                ? "Die Arbeit des Teams ruht gerade – "
+                : "Das Agenten-Team arbeitet bereits – "}
+              <Link
+                href={`/projects/${project.id}/office`}
+                className="font-medium text-accent underline underline-offset-2"
+              >
+                ins Team-Büro
+              </Link>{" "}
+              gehen und zusehen.
+            </p>
+            <p className="mt-3 text-sm text-ink-2">
+              Ist der bisherige Auftrag abgearbeitet, hält das Team an und fragt nach. Mit einer Ausbaustufe
+              beauftragst du jederzeit selbst die nächste Runde: Sie wird als Beschluss festgehalten, liegt
+              damit jedem Agenten vor, und der Product Owner plant den nächsten Sprint daraus. Bis dahin
+              ergänzte Anforderungen gelten mit der Beauftragung als freigegeben.
+            </p>
+            <ActionForm action={commissionExtension} className="space-y-3 pt-4">
+              <input type="hidden" name="projectId" value={project.id} />
+              <div>
+                <label className={labelClass} htmlFor="extension-goal">
+                  Was soll als Nächstes dazukommen?
+                </label>
+                <textarea
+                  id="extension-goal"
+                  name="goal"
+                  rows={4}
+                  className={inputClass}
+                  placeholder="z.B. Mehrsprachigkeit für die Oberfläche, Export als CSV, Testabdeckung für die Rechnungslogik …"
+                />
+              </div>
+              <ConfirmButton
+                confirmText="Ausbaustufe beauftragen? Das Team nimmt die Arbeit wieder auf und plant den nächsten Sprint daraus."
+                className={buttonPrimaryClass}
+              >
+                Ausbaustufe beauftragen
+              </ConfirmButton>
+            </ActionForm>
+          </>
         ) : (
           <>
             <ul className="space-y-2.5">

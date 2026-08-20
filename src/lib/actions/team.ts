@@ -15,6 +15,11 @@ import { resolveReview } from "@/lib/reviewDecision";
 import { enqueueAgentJob } from "../../../worker/queue";
 import { reconcileStaleLocksNow } from "../../../worker/reconcile";
 
+/// Anlass-Kennung der Beschluesse, mit denen eine Ausbaustufe beauftragt wird.
+/// Ueber sie wird gezaehlt, die wievielte es ist – und sie taucht in der
+/// Klaerungsliste als eigener Anlass auf.
+const EXTENSION_TRIGGER = "extension_commissioned";
+
 function str(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
   return value.length > 0 ? value : null;
@@ -87,6 +92,103 @@ export async function startTeam(formData: FormData): Promise<ActionResult> {
   return ok(
     `Team gestartet. ${productOwner.name} richtet gerade das Repository ein und liest den Auftrag – im Team-Büro live mitzuverfolgen.`,
   );
+}
+
+/// Um wie viele Sprints das Budget mindestens ueber den aktuellen Stand hinaus
+/// reicht, wenn eine Ausbaustufe beauftragt wird. Dieselbe Schrittweite wie in
+/// worker/tasks/sprintPlanning.ts und src/lib/clarificationDecision.ts – wer
+/// gerade neue Arbeit beauftragt, soll nicht im naechsten Moment eine Klaerung
+/// zum aufgebrauchten Budget beantworten muessen.
+const SPRINT_BUDGET_STEP = 6;
+
+/// Ausbaustufe: neue Arbeit fuer ein Projekt, an dem das Team schon gebaut hat.
+///
+/// Bis hierher gab es dafuer nur einen Weg, und der war zufaellig: Genau in dem
+/// Moment, in dem der Product Owner den Backlog leer meldete, durfte der
+/// Auftraggeber in die Klaerung schreiben, was noch fehlt. War die Klaerung
+/// schon mit "Auftrag erfuellt" geschlossen oder lief das Team noch, blieb nur
+/// "Anforderung anlegen" – ohne dass irgendwer sie je aufgriff, denn das Team
+/// stand auf autopilot=false und niemand stiess einen Sprint an.
+///
+/// Diese Action ist der ausdrueckliche Auftrag "baut weiter": Sie haelt fest,
+/// WAS dazukommt (als Beschluss im Register, damit es in jedem weiteren Prompt
+/// steht), raeumt die alten "sind wir fertig?"-Klaerungen ab, gibt Budget und
+/// Autopilot frei und stoesst die naechste Sprint-Planung an.
+export async function commissionExtension(formData: FormData): Promise<ActionResult> {
+  const projectId = str(formData, "projectId");
+  const goal = str(formData, "goal");
+  if (!projectId) return fail("Kein Projekt angegeben.");
+  if (!goal) return fail("Bitte kurz beschreiben, was das Team als Nächstes bauen soll.");
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { id: true, status: true, sprintBudget: true, workspacePath: true },
+  });
+  if (!project) return fail("Projekt nicht gefunden.");
+  if (project.status === "ARCHIVED") return fail("Das Projekt ist archiviert.");
+  if (!project.workspacePath) {
+    return fail("Hier hat das Team noch nie gearbeitet – erst „Team starten“, danach gibt es Ausbaustufen.");
+  }
+
+  // Fuellt Rollen auf, die es beim ersten Kickoff dieses Projekts noch nicht
+  // gab (z.B. DESIGN) – eine Ausbaustufe ist der natuerliche Moment dafuer.
+  await ensureProjectTeam(projectId);
+
+  const sprintCount = await prisma.sprint.count({ where: { projectId } });
+  const stage = (await prisma.clarification.count({ where: { projectId, trigger: EXTENSION_TRIGGER } })) + 1;
+  const now = new Date();
+  const question = `Ausbaustufe ${stage}: Was soll das Team zusätzlich bauen?`;
+
+  await prisma.$transaction([
+    prisma.project.update({
+      where: { id: projectId },
+      data: {
+        status: "ACTIVE",
+        autopilot: true,
+        // Die aktuelle Anforderungsliste IST der Auftrag dieser Ausbaustufe:
+        // Wer sie beauftragt, gibt damit auch die Anforderungen frei, die er
+        // seit der letzten Freigabe ergaenzt hat.
+        requirementsApprovedAt: now,
+        sprintBudget: Math.max(project.sprintBudget, sprintCount + SPRINT_BUDGET_STEP),
+      },
+    }),
+    // Als bereits entschiedene Klaerung: Damit steht der Auftrag im
+    // Beschlussregister und liegt jedem Agenten in jedem Prompt vor – und er
+    // steht nach dem alten "der Auftrag ist erfuellt", das er ausdruecklich
+    // ueberholt.
+    prisma.clarification.create({
+      data: {
+        projectId,
+        scope: "PROJECT",
+        trigger: EXTENSION_TRIGGER,
+        question,
+        context: "Vom Auftraggeber beauftragte Ausbaustufe.",
+        status: "DECIDED",
+        decision: goal,
+        decidedBy: "Auftraggeber",
+        decidedAt: now,
+      },
+    }),
+    // Eine noch offene "sind wir fertig?"- oder Budget-Frage ist mit dem
+    // Auftrag beantwortet; sie stehenzulassen wuerde das Team weiter
+    // blockieren (offene PROJECT-Klaerungen halten die Arbeit an).
+    prisma.clarification.updateMany({
+      where: { projectId, status: "OPEN", trigger: { in: ["backlog_empty", "sprint_budget"] } },
+      data: { status: "DECIDED", decision: `Ausbaustufe ${stage} beauftragt: ${goal}`, decidedBy: "Auftraggeber", decidedAt: now },
+    }),
+    prisma.activityLogEntry.create({
+      data: {
+        projectId,
+        actor: "Mensch",
+        action: "extension_commissioned",
+        detail: `Ausbaustufe ${stage} beauftragt: ${goal.slice(0, 300)}`,
+      },
+    }),
+  ]);
+
+  const next = await scheduleNextStep(projectId);
+  revalidateProject(projectId);
+  return ok(`Ausbaustufe ${stage} beauftragt – sie steht ab sofort im Beschlussregister. ${next}`);
 }
 
 /// Not-Aus: Laufende Jobs brechen beim naechsten Schritt ab (jeder Task prueft
