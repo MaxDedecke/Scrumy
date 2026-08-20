@@ -576,6 +576,34 @@ export function parsePseudoToolCalls(text: string): { text: string; toolCalls: T
   return { text: cleaned, toolCalls };
 }
 
+/// Ergänzt vom Server bereits strukturiert gelieferte `tool_calls` um weitere
+/// Aufrufe, die das Modell zusätzlich nur als Klartext-JSON in `content`
+/// mitgeschickt hat – statt `parsePseudoToolCalls` nur dann laufen zu lassen,
+/// wenn der Server GAR KEINE strukturierten Aufrufe lieferte.
+///
+/// Konkreter Vorfall (Drapbox-Projekt, 20.08.2026): Der RunPod-Ollama-Server
+/// gab neben zwei echten `run_command`-Aufrufen einen erfundenen dritten
+/// strukturiert zurück (Name aus einer verschachtelten JSON-Zeichenkette im
+/// content gegriffen, ohne Argumente). Weil `toolCalls.length` dadurch schon
+/// > 0 war, blieb der Fallback bisher komplett aus – drei echte
+/// `write_file`-Aufrufe, die das Modell im selben `content` als sauberes
+/// JSON aufgeschrieben hatte (package.json, authModel.ts, authService.ts),
+/// wurden nie erkannt und nie ausgeführt. Das Ticket drehte sich dadurch
+/// Anlauf für Anlauf im Kreis: "package.json fehlt" -> Plan, sie zu
+/// erstellen -> Antwort mit dem Schreibaufruf im Text -> nie ausgeführt ->
+/// "package.json fehlt" von vorn.
+///
+/// Nimmt in Kauf, dass ein Aufruf doppelt ausgeführt wird, falls ein Server
+/// ihn sowohl strukturiert als auch als Text zurückgibt (bei `write_file`
+/// harmlos, bei `run_command` bestenfalls Zeitverschwendung) – seltener und
+/// billiger als der beobachtete Totalverlust echter Aufrufe.
+function mergeWithPseudoToolCalls(text: string, toolCalls: ToolCall[]): { text: string; toolCalls: ToolCall[] } {
+  if (!text.trim()) return { text, toolCalls };
+  const fallback = parsePseudoToolCalls(text);
+  if (fallback.toolCalls.length === 0) return { text, toolCalls };
+  return { text: fallback.text, toolCalls: [...toolCalls, ...fallback.toolCalls] };
+}
+
 async function chatTurnOllama(
   profile: ChatProfile,
   system: string,
@@ -600,13 +628,7 @@ async function chatTurnOllama(
 
   let text = pickString(data.message?.content) ?? "";
   let toolCalls = parseOpenAiToolCalls(data.message?.tool_calls);
-  if (toolCalls.length === 0 && text.trim()) {
-    const fallback = parsePseudoToolCalls(text);
-    if (fallback.toolCalls.length > 0) {
-      toolCalls = fallback.toolCalls;
-      text = fallback.text;
-    }
-  }
+  ({ text, toolCalls } = mergeWithPseudoToolCalls(text, toolCalls));
   if (!text.trim() && toolCalls.length === 0) {
     throw new LlmError("Ollama hat keinen Text zurückgegeben.");
   }
@@ -668,17 +690,14 @@ async function chatTurnOpenAiCompat(
   const choice = data.choices?.[0];
   let text = pickString(choice?.message?.content) ?? "";
   let toolCalls = parseOpenAiToolCalls(choice?.message?.tool_calls);
-  if (toolCalls.length === 0 && text.trim()) {
-    // Server hinter dem OpenAI-kompatiblen Endpunkt liefert Tool-Aufrufe
-    // manchmal nicht strukturiert (siehe Kommentar bei `parsePseudoToolCalls`)
-    // – häufig bei lokalen/selbstgehosteten Modellen wie Qwen ohne
-    // passenden Tool-Call-Parser auf dem Server.
-    const fallback = parsePseudoToolCalls(text);
-    if (fallback.toolCalls.length > 0) {
-      toolCalls = fallback.toolCalls;
-      text = fallback.text;
-    }
-  }
+  // Server hinter dem OpenAI-kompatiblen Endpunkt liefert Tool-Aufrufe
+  // manchmal nicht (vollständig) strukturiert (siehe Kommentar bei
+  // `mergeWithPseudoToolCalls`) – häufig bei lokalen/selbstgehosteten
+  // Modellen wie Qwen ohne passenden Tool-Call-Parser auf dem Server. Läuft
+  // bewusst auch dann noch, wenn schon strukturierte Aufrufe da sind: Ein
+  // Server kann einen echten Aufruf strukturiert und einen zweiten nur als
+  // Text im selben content liefern.
+  ({ text, toolCalls } = mergeWithPseudoToolCalls(text, toolCalls));
 
   if (choice?.finish_reason === "length") {
     throw new LlmError(
