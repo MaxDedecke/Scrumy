@@ -285,6 +285,10 @@ enum AgentRole {
   PLANNING
   BACKEND
   FRONTEND
+  /// Design-Konzept beim Kickoff, prüft danach jedes Frontend-Ticket dagegen
+  /// (zusätzlich zu QA) und gibt am Sprintende Feedback für den nächsten
+  /// Sprint (siehe worker/tasks/teamKickoff.ts, ticketWork.ts, sprintReview.ts).
+  DESIGN
   QA
   REVIEWER
   DEVOPS

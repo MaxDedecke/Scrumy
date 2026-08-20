@@ -88,6 +88,7 @@ export const AGENT_ROLE_LABEL: Record<AgentRole, string> = {
   PLANNING: "Planning",
   BACKEND: "Backend",
   FRONTEND: "Frontend",
+  DESIGN: "Design",
   QA: "QA",
   REVIEWER: "Reviewer",
   DEVOPS: "DevOps",
@@ -324,6 +325,10 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   code_committed: "Commit",
   review_approved: "QA freigegeben",
   review_rework: "QA: Nacharbeit",
+  design_concept_documented: "Design-Konzept festgelegt",
+  design_review_approved: "Design freigegeben",
+  design_review_rework: "Design: Nacharbeit",
+  design_feedback: "Design-Rückblick",
   human_review_requested: "Freigabe angefragt",
   // Text bewusst ohne "vom Menschen": Seit der Product Owner angefragte
   // Freigaben selbst entscheiden darf (siehe reviewTriage), steht neben dem

@@ -12,7 +12,7 @@
 import type { Task } from "graphile-worker";
 import { prisma } from "@/lib/prisma";
 import { extractJsonObject } from "@/lib/llm";
-import { commitAll, gitShow, readRelevantSourceContext, repoOverview, writeFiles } from "@/lib/workspace";
+import { commitAll, gitShow, readRelevantSourceContext, readRepoFile, repoOverview, writeFiles } from "@/lib/workspace";
 import { agentForRole, roleForTicket } from "@/lib/team";
 import { PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
 import { optionsFromAgent, type ClarificationOption } from "@/lib/clarificationOptions";
@@ -1232,6 +1232,34 @@ Antworte nur mit diesem JSON-Objekt:
     return;
   }
 
+  // Nach QA-Freigabe entscheidet bei kritischen/riskanten Tickets weiter der
+  // Mensch, sonst gilt das Ticket als fertig – gebündelt in einer Funktion,
+  // weil ab hier zwei Wege dorthin führen (direkt nach QA, oder erst nach
+  // einem zusätzlichen Design-Review).
+  const finalizeQaApproved = async () => {
+    if (ticket.isCritical || risk === "high") {
+      await requestHumanReview(
+        projectId,
+        ticketId,
+        ticket.title,
+        ticket.isCritical
+          ? `Kritisches Ticket – QA hat freigegeben: ${comment}`
+          : `QA stuft das Risiko als hoch ein: ${comment}`,
+        ticket.isCritical,
+      );
+    } else {
+      await prisma.ticket.update({ where: { id: ticketId }, data: { status: "DONE" } });
+      await logActivity({
+        projectId,
+        ticketId,
+        actor: reviewer.name,
+        agentId: reviewer.id,
+        action: "ticket_done",
+        detail: `„${ticket.title}" ist fertig`,
+      });
+    }
+  };
+
   if (verdict === "rework") {
     await prisma.ticket.update({
       where: { id: ticketId },
@@ -1244,26 +1272,49 @@ Antworte nur mit diesem JSON-Objekt:
       `QA sieht nach ${attempt} Anläufen weiter Mängel: ${comment}`,
       ticket.isCritical,
     );
-  } else if (ticket.isCritical || risk === "high") {
-    await requestHumanReview(
-      projectId,
-      ticketId,
-      ticket.title,
-      ticket.isCritical
-        ? `Kritisches Ticket – QA hat freigegeben: ${comment}`
-        : `QA stuft das Risiko als hoch ein: ${comment}`,
-      ticket.isCritical,
-    );
   } else {
-    await prisma.ticket.update({ where: { id: ticketId }, data: { status: "DONE" } });
-    await logActivity({
-      projectId,
-      ticketId,
-      actor: reviewer.name,
-      agentId: reviewer.id,
-      action: "ticket_done",
-      detail: `„${ticket.title}" ist fertig`,
-    });
+    // QA hat freigegeben. Bei Frontend-Tickets prüft zusätzlich Design gegen
+    // docs/design-konzept.md, bevor das Ticket als fertig gilt – erst danach
+    // greift dieselbe Kritisch/Risiko-Abwägung wie bisher.
+    const designVerdict =
+      implementer.role === "FRONTEND"
+        ? await runDesignReview({ projectId, dir, ticketId, ticketTitle: ticket.title, ticketHead, implementer, diff })
+        : null;
+
+    if (designVerdict?.verdict === "rework" && attempt < MAX_ATTEMPTS) {
+      await prisma.ticket.update({
+        where: { id: ticketId },
+        data: {
+          status: "IN_PROGRESS",
+          result: `${summary}\n\nDesign (${designVerdict.reviewerName}): ${designVerdict.comment}`,
+          plan: `${plan}\n\n## Nacharbeit nach Design-Review (${designVerdict.reviewerName})\n${designVerdict.comment}`,
+        },
+      });
+      await enqueueAgentJob("ticketWork", {
+        agentId: implementer.id,
+        projectId,
+        ticketId,
+        reason: `Nacharbeit nach Design-Review: ${designVerdict.comment.slice(0, 200)}`,
+        attempt: attempt + 1,
+      });
+      return;
+    }
+
+    if (designVerdict?.verdict === "rework") {
+      await prisma.ticket.update({
+        where: { id: ticketId },
+        data: { result: `${summary}\n\nDesign (${designVerdict.reviewerName}): ${designVerdict.comment}` },
+      });
+      await requestHumanReview(
+        projectId,
+        ticketId,
+        ticket.title,
+        `Design sieht nach ${attempt} Anläufen weiter Mängel: ${designVerdict.comment}`,
+        ticket.isCritical,
+      );
+    } else {
+      await finalizeQaApproved();
+    }
   }
 
   helpers.logger.info(`Ticket ${ticket.title} bearbeitet (${reason}).`);
@@ -1314,6 +1365,88 @@ function readVerdict(text: string): {
       options: [],
     };
   }
+}
+
+/// Liest das Verdikt des Design-Reviews. Anders als `readVerdict` kennt es nur
+/// approve/rework (keine "needs_decision") – die Design-Rolle prüft gegen ein
+/// festgelegtes Konzept, das lässt sich nicht an den Auftraggeber weiterreichen.
+/// Unlesbare Antworten gelten als Nacharbeit, aus demselben Grund wie bei QA:
+/// der Code ist schon committet, ein zweiter Blick kostet weniger als eine
+/// Freigabe, die niemand ausgesprochen hat.
+function readDesignVerdict(text: string): { verdict: "approve" | "rework"; comment: string } {
+  try {
+    const data = extractJsonObject(text);
+    const verdict = String(data.verdict ?? "").toLowerCase() === "approve" ? "approve" : "rework";
+    return { verdict, comment: String(data.comment ?? "").trim() || "(ohne Kommentar)" };
+  } catch {
+    const lower = text.toLowerCase();
+    const approved = lower.includes("approve") && !lower.includes("rework");
+    return { verdict: approved ? "approve" : "rework", comment: text.trim().slice(0, 2000) || "(unlesbare Antwort)" };
+  }
+}
+
+/// Zweite Prüfung nach QA, nur für Frontend-Tickets: Erfüllt die Umsetzung
+/// auch das Design-Konzept (`docs/design-konzept.md`, siehe teamKickoff.ts)?
+/// QA urteilt funktional, nicht über Farben/Abstände/Zustände – ohne diesen
+/// zweiten Blick sah ein "fertiges" Ticket am Ende trotzdem nach Rohentwurf
+/// aus. Gibt `null` zurück, wenn es keinen eigenen Design-Agenten gibt oder
+/// (noch) kein Design-Konzept im Repo liegt – dann bleibt es beim QA-Urteil,
+/// wie vor Einführung dieser Rolle.
+async function runDesignReview(input: {
+  projectId: string;
+  dir: string;
+  ticketId: string;
+  ticketTitle: string;
+  ticketHead: string;
+  implementer: Agent;
+  diff: string;
+}): Promise<{ verdict: "approve" | "rework"; comment: string; reviewerName: string } | null> {
+  const designer = await agentForRole(input.projectId, "DESIGN");
+  if (!designer || designer.role !== "DESIGN") return null;
+
+  const concept = await readRepoFile(input.dir, "docs/design-konzept.md");
+  if (!concept) return null;
+
+  const { text } = await runAgent({
+    agent: designer,
+    projectId: input.projectId,
+    ticketId: input.ticketId,
+    kind: "design_review",
+    headline: `Prüft „${input.ticketTitle}" gegen das Design-Konzept`,
+    maxTokens: 3000,
+    system: `${TEAM_GRUNDREGELN}
+
+Du bist ${designer.name} und verantwortest das Design-Konzept dieses Projekts. Du prüfst eine Frontend-Änderung von ${input.implementer.name} dagegen. Du antwortest ausschließlich mit einem JSON-Objekt.`,
+    prompt: `${input.ticketHead}
+
+## Design-Konzept des Projekts
+${clipForPrompt(concept, 8000)}
+
+## Änderung (Commit-Diff)
+${input.diff}
+
+Prüfe NUR die Design-/UX-Seite, nicht die fachliche Logik (das hat QA schon getan): Passt die Umsetzung zu Farb-/Typo-/Spacing-Skala, den festgelegten Komponenten, den Zuständen (leer/lädt/Fehler) und dem responsiven Verhalten aus dem Design-Konzept?
+
+Antworte nur mit diesem JSON-Objekt:
+{
+  "verdict": "approve" | "rework",
+  "comment": "Begründung in 2-4 Sätzen, konkret auf Dateien/Klassen bezogen"
+}
+
+"rework" nur bei echten, konkret benennbaren Abweichungen vom Design-Konzept – nicht für Geschmacksfragen, die das Konzept offen lässt.`,
+  });
+
+  const verdict = readDesignVerdict(text);
+  await logActivity({
+    projectId: input.projectId,
+    ticketId: input.ticketId,
+    actor: designer.name,
+    agentId: designer.id,
+    action: verdict.verdict === "rework" ? "design_review_rework" : "design_review_approved",
+    detail: `„${input.ticketTitle}": ${verdict.verdict === "rework" ? "Nacharbeit nötig" : "freigegeben"} – ${verdict.comment.slice(0, 300)}`,
+  });
+
+  return { ...verdict, reviewerName: designer.name };
 }
 
 /// Ticket bleibt in Review und wartet auf den Menschen. Die `ReviewApproval`

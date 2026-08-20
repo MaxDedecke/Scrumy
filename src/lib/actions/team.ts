@@ -43,6 +43,11 @@ export async function startTeam(formData: FormData): Promise<ActionResult> {
   // Fortsetzen, kein zweiter Kickoff – sonst schriebe das Team das
   // Projektverständnis neu und plante einen Sprint neben dem laufenden.
   if (project.workspacePath) {
+    // Fuellt fehlende Rollen auch bei einem laufenden Projekt auf – etwa wenn
+    // eine neue Standardrolle (z.B. DESIGN) erst nach dem ersten Kickoff
+    // dieses Projekts eingefuehrt wurde. Was schon besetzt ist, bleibt
+    // unangetastet.
+    await ensureProjectTeam(projectId);
     await prisma.$transaction([
       prisma.project.update({ where: { id: projectId }, data: { status: "ACTIVE" } }),
       prisma.activityLogEntry.create({

@@ -39,6 +39,7 @@ const AGENT_ROLES: AgentRole[] = [
   "PLANNING",
   "BACKEND",
   "FRONTEND",
+  "DESIGN",
   "QA",
   "REVIEWER",
   "DEVOPS",

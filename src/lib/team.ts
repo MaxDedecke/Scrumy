@@ -15,6 +15,7 @@ export const DEFAULT_TEAM: { name: string; role: AgentRole }[] = [
   { name: "Paul Neumann", role: "PLANNING" },
   { name: "Ben Ritter", role: "BACKEND" },
   { name: "Frida Lang", role: "FRONTEND" },
+  { name: "Nora Bergmann", role: "DESIGN" },
   { name: "Quinn Adler", role: "QA" },
   { name: "Rita Sommer", role: "REVIEWER" },
   { name: "Dennis Ohl", role: "DEVOPS" },
@@ -61,6 +62,12 @@ const ROLE_FALLBACK: Record<AgentRole, AgentRole[]> = {
   PLANNING: ["BACKEND", "PRODUCT_OWNER"],
   BACKEND: ["FRONTEND", "DEVOPS", "PLANNING"],
   FRONTEND: ["BACKEND", "DEVOPS", "PLANNING"],
+  // Bewusst kein Fallback: Ein Design-Review vom selben Agenten, der die
+  // Umsetzung gebaut hat, wäre kein zweiter Blick. Projekte ohne eigenen
+  // Design-Agenten überspringen das Design-Konzept und die Design-Reviews
+  // ganz (siehe die `.role === "DESIGN"`-Prüfungen an den Aufrufstellen),
+  // statt sie von jemand anderem in eigener Sache erledigen zu lassen.
+  DESIGN: [],
   QA: ["REVIEWER", "BACKEND"],
   REVIEWER: ["QA", "PLANNING"],
   DEVOPS: ["BACKEND", "PLANNING"],

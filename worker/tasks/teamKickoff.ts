@@ -11,6 +11,7 @@ import type { Task } from "graphile-worker";
 import { prisma } from "@/lib/prisma";
 import { PRIORITY_LABEL } from "@/lib/labels";
 import { commitAll, ensureRepo, writeFiles } from "@/lib/workspace";
+import { agentForRole } from "@/lib/team";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { handOverTo, loadWorkingProject } from "../orchestration";
@@ -143,6 +144,64 @@ Bleib bei dem, was in Konzept und Anforderungen steht. Keine Zeitschätzungen, k
       ? `${understandingCommit.shortSha} · Projektverständnis in docs/verstaendnis.md festgehalten`
       : "Projektverständnis erstellt (keine Änderung im Repository)",
   });
+
+  // --- 4. Design-Konzept ------------------------------------------------
+  // Gibt es einen eigenen Design-Agenten im Team, hält er vor dem ersten
+  // Sprint fest, wie das Projekt konkret aussehen soll – sonst bleibt der
+  // Design-Standard aus TEAM_GRUNDREGELN (Tailwind + shadcn/ui, Skalen,
+  // Zustände) abstrakt, und jedes Frontend-Ticket würde neu raten, welche
+  // Farben/Abstände gemeint sind. Das Dokument ist die Referenz, gegen die
+  // spätere Frontend-Tickets geprüft werden (siehe ticketWork.ts).
+  const designer = await agentForRole(projectId, "DESIGN");
+  if (designer && designer.role === "DESIGN") {
+    const { text: designText } = await runAgent({
+      agent: designer,
+      projectId,
+      kind: "design_concept",
+      headline: "Erarbeitet das Design-Konzept",
+      maxTokens: 5000,
+      system: `${TEAM_GRUNDREGELN}
+
+Du bist ${designer.name}, verantwortlich für das Design-Konzept des Projekts. Du legst vor dem ersten Sprint fest, wie die Anwendung konkret aussehen soll – die Referenz, an der sich jedes Frontend-Ticket später messen lässt.`,
+      prompt: `${context}
+
+## Projektverständnis (gerade von ${agent.name} geschrieben)
+${text}
+
+Schreibe das Dokument "Design-Konzept" als Markdown (ohne Code-Fence). Gliederung:
+
+# Design-Konzept
+## Look & Feel
+(Ton und Zielgruppe in 2-3 Sätzen – wonach soll die Anwendung sich anfühlen?)
+## Farbpalette
+(konkrete Werte für Primär-, Sekundär-, Neutral- und Status-Farben, als Tailwind-Tokens)
+## Typografie
+(Schriftfamilie, Größen-/Gewichts-Skala)
+## Spacing & Layout-Raster
+## Kernkomponenten
+(welche shadcn/ui-Komponenten das Projekt durchgängig nutzt, z.B. Button, Card, Dialog, Table, Form)
+## Zustände
+(wie leer/lädt/Fehler bei Ansichten mit Daten konkret aussehen)
+## Responsive-Verhalten
+
+Hat dieses Projekt laut Projektverständnis kein Frontend, schreibe stattdessen nur einen kurzen Absatz, warum kein Design-Konzept nötig ist – erfinde keine Ansichten, die nicht gebaut werden.`,
+    });
+
+    await writeFiles(dir, [{ path: "docs/design-konzept.md", content: designText }]);
+    const designCommit = await commitAll(dir, {
+      message: `Design-Konzept festgelegt\n\nAusgearbeitet von ${designer.name} (Design) auf Basis des Projektverständnisses.`,
+      authorName: designer.name,
+    });
+    await logActivity({
+      projectId,
+      actor: designer.name,
+      agentId: designer.id,
+      action: "design_concept_documented",
+      detail: designCommit
+        ? `${designCommit.shortSha} · Design-Konzept in docs/design-konzept.md festgehalten`
+        : "Design-Konzept erstellt (keine Änderung im Repository)",
+    });
+  }
 
   helpers.logger.info(`Kickoff für Projekt ${full.name} abgeschlossen (${reason}).`);
 
