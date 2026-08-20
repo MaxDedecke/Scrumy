@@ -60,10 +60,26 @@ export interface ToolCall {
   input: Record<string, unknown>;
 }
 
+/// Was der Anbieter über die Abrechnung dieses einen Aufrufs meldet. Nur
+/// Anthropic liefert die Cache-Zahlen; bei den anderen Anbietern bleibt das
+/// Feld leer (OpenAI und DeepSeek cachen serverseitig von selbst, ohne es
+/// aufzuschlüsseln).
+export interface TokenUsage {
+  /** Tokens, die voll bezahlt wurden – ohne die beiden Cache-Posten. */
+  inputTokens: number;
+  outputTokens: number;
+  /** Aus dem Cache gelesen (~10% des Eingabepreises). */
+  cacheReadTokens: number;
+  /** In den Cache geschrieben (~125% des Eingabepreises, einmalig). */
+  cacheWriteTokens: number;
+}
+
 export interface ChatTurnResult {
   text: string;
   toolCalls: ToolCall[];
   stopReason: string;
+  /** Nur gefüllt, wenn der Anbieter Verbrauchszahlen mitschickt. */
+  usage?: TokenUsage;
 }
 
 /// Nur für OpenRouter (GENERIC_OPENAI_COMPAT mit passender Base-URL) wirksam –
@@ -202,25 +218,87 @@ function nextToolCallId(): string {
 
 // --- Anthropic --------------------------------------------------------------
 
-function toAnthropicMessages(messages: ChatMessage[]) {
-  return messages.map((message) => ({
-    role: message.role,
-    content:
+/// Prompt-Caching (nur Anthropic, siehe `chatTurnAnthropic`).
+///
+/// Die eine Regel, aus der alles folgt: Der Cache greift ueber den PRAEFIX der
+/// Anfrage, gerendert in der Reihenfolge `tools` -> `system` -> `messages`.
+/// Ein einziges geaendertes Byte irgendwo im Praefix macht alles dahinter
+/// ungueltig. Ein `cache_control`-Markierer sagt: "bis hierher zwischen-
+/// speichern". Gelesene Tokens kosten ~10%, geschriebene einmalig ~125% des
+/// Eingabepreises – bei zwei Aufrufen mit gleichem Praefix rechnet es sich
+/// bereits.
+///
+/// Genau das ist der Zuschnitt des Werkzeug-Loops (worker/agentToolLoop.ts):
+/// Bis zu 32 Turns schicken jedes Mal dieselben Werkzeugschemata, denselben
+/// Systemprompt (TEAM_GRUNDREGELN, rund 4.000 Tokens) und denselben
+/// Anfangsprompt (Projektkontext, Ticket, Plan, Repo-Ueberblick) erneut – und
+/// obendrauf die inzwischen gewachsene Historie. Ohne Caching wird derselbe
+/// Vorspann bis zu 32 Mal voll bezahlt.
+///
+/// Anthropic erlaubt hoechstens VIER Markierer je Anfrage. Sie werden hier so
+/// verteilt:
+///   1. Ende des Systemprompts – deckt `tools` + `system` mit ab, weil beide
+///      davor gerendert werden. Stabil ueber alle Turns UND ueber alle
+///      Aufrufe desselben Agenten hinweg.
+///   2. Erste Nachricht (der Anfangsprompt) – waehrend eines Anlaufs
+///      unveraendert, und der mit Abstand groesste Einzelblock. Eigener
+///      Markierer, damit ein Turn auch dann noch einen Treffer landet, wenn
+///      die juengeren Eintraege waehrend eines langen `run_command` aus dem
+///      5-Minuten-Fenster gefallen sind.
+///   3./4. Die letzten beiden Nachrichten – der mitwachsende Teil. Turn N
+///      liest, was Turn N-1 geschrieben hat, und schreibt den neuen Rest
+///      dazu. Zwei statt einem Markierer, damit ein einzelner abgelaufener
+///      Eintrag nicht gleich die ganze Historie neu bezahlen laesst.
+///
+/// Ausdruecklich NICHT markiert wird ein einzelner Turn ohne Historie: Dessen
+/// Praefix wiederholt sich nie, ein Markierer wuerde nur den Schreibaufschlag
+/// kosten (siehe `chat`, wo nur der Systemprompt markiert wird).
+const CACHE_CONTROL = { type: "ephemeral" } as const;
+const MAX_CACHE_BREAKPOINTS = 4;
+
+/// Welche Nachrichten einen Markierer bekommen (Punkte 2-4 oben). Ein
+/// Markierer fuer den Systemprompt ist immer gesetzt, deshalb bleiben hier
+/// hoechstens drei.
+export function cacheableMessageIndices(messageCount: number): Set<number> {
+  // Eine einzelne Nachricht ist der varrierende Teil einer Frage-Antwort und
+  // wiederholt sich nicht – nur der Systemprompt davor lohnt.
+  if (messageCount < 2) return new Set();
+  const last = messageCount - 1;
+  // `last - 2` statt `last - 1`: Die Historie ist user/assistant/user/…, die
+  // vorletzte Nachricht gleicher Rolle ist der Stand des vorigen Turns.
+  const candidates = [0, last - 2, last].filter((index) => index >= 0);
+  return new Set(candidates.slice(-(MAX_CACHE_BREAKPOINTS - 1)));
+}
+
+function toAnthropicMessages(messages: ChatMessage[], cacheAt: Set<number> = new Set()) {
+  return messages.map((message, index) => {
+    // `cache_control` haengt immer an einem Content-BLOCK, nie an der
+    // Nachricht – ein als String uebergebener Inhalt wird dafuer in seinen
+    // gleichwertigen Textblock umgeschrieben.
+    const blocks =
       typeof message.content === "string"
-        ? message.content
+        ? [{ type: "text", text: message.content } as Record<string, unknown>]
         : message.content.map((block) => {
-            if (block.type === "text") return { type: "text", text: block.text };
+            if (block.type === "text") return { type: "text", text: block.text } as Record<string, unknown>;
             if (block.type === "tool_use") {
-              return { type: "tool_use", id: block.id, name: block.name, input: block.input };
+              return { type: "tool_use", id: block.id, name: block.name, input: block.input } as Record<string, unknown>;
             }
             return {
               type: "tool_result",
               tool_use_id: block.toolUseId,
               content: block.content,
               is_error: block.isError || undefined,
-            };
-          }),
-  }));
+            } as Record<string, unknown>;
+          });
+
+    // Der Markierer gehoert an den LETZTEN Block der Nachricht: Er bedeutet
+    // "Praefix bis einschliesslich hier", also muss die Nachricht vollstaendig
+    // davor liegen.
+    const lastBlock = blocks[blocks.length - 1];
+    if (cacheAt.has(index) && lastBlock) lastBlock.cache_control = CACHE_CONTROL;
+
+    return { role: message.role, content: blocks };
+  });
 }
 
 async function chatTurnAnthropic(
@@ -240,8 +318,12 @@ async function chatTurnAnthropic(
       // Bei aktuellen Modellen denkt das Modell standardmäßig mit, und
       // max_tokens deckelt Denken UND Antwort – deshalb großzügig.
       max_tokens: Math.max(maxTokens, 16000),
-      system,
-      messages: toAnthropicMessages(messages),
+      // Der Systemprompt als Block statt als String, damit der Cache-Markierer
+      // daran haengen kann (siehe Kommentar bei `toAnthropicMessages`). Er
+      // deckt die davor gerenderten Werkzeugschemata gleich mit ab. Ein leerer
+      // Textblock waere ein 400er, deshalb bei leerem Systemprompt gar keiner.
+      ...(system.trim() ? { system: [{ type: "text", text: system, cache_control: CACHE_CONTROL }] } : {}),
+      messages: toAnthropicMessages(messages, cacheableMessageIndices(messages.length)),
       ...(tools && tools.length > 0
         ? { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) }
         : {}),
@@ -250,6 +332,12 @@ async function chatTurnAnthropic(
   )) as {
     content?: { type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[];
     stop_reason?: string;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
   };
 
   if (data.stop_reason === "refusal") {
@@ -278,7 +366,17 @@ async function chatTurnAnthropic(
       `Das Modell hat keinen Text zurückgegeben${data.stop_reason ? ` (Abbruchgrund: ${data.stop_reason})` : ""}.`,
     );
   }
-  return { text, toolCalls, stopReason: data.stop_reason ?? "" };
+  return {
+    text,
+    toolCalls,
+    stopReason: data.stop_reason ?? "",
+    usage: {
+      inputTokens: data.usage?.input_tokens ?? 0,
+      outputTokens: data.usage?.output_tokens ?? 0,
+      cacheReadTokens: data.usage?.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: data.usage?.cache_creation_input_tokens ?? 0,
+    },
+  };
 }
 
 // --- OpenAI und OpenAI-kompatibel (OpenAI, GENERIC_OPENAI_COMPAT, Ollama) --
@@ -682,6 +780,16 @@ async function chatTurnOpenAiCompat(
   let data: {
     choices?: { message?: { content?: string; tool_calls?: OpenAiToolCall[] }; finish_reason?: string }[];
     error?: { message?: string };
+    // Anders als bei Anthropic gibt es hier nichts zu markieren: OpenAI und
+    // DeepSeek (auch ueber OpenRouter) speichern lange Praefixe von selbst
+    // zwischen, ohne Zutun des Aufrufers. Was fehlt, ist die Sicht darauf –
+    // deshalb wenigstens die Zahlen mitnehmen, damit sich beantworten laesst,
+    // ob es im laufenden Betrieb tatsaechlich greift.
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      prompt_tokens_details?: { cached_tokens?: number };
+    };
   };
   // Wie bei Anthropic (siehe dortiger Kommentar): Reasoning-Modelle wie
   // deepseek-v4-flash denken auch über den OpenAI-kompatiblen Endpunkt in
@@ -758,7 +866,27 @@ async function chatTurnOpenAiCompat(
       `Der Anbieter hat keinen Text zurückgegeben${reason ? ` (Abbruchgrund: ${reason})` : ""}.`,
     );
   }
-  return { text, toolCalls, stopReason: choice?.finish_reason ?? "" };
+  // `prompt_tokens` enthaelt hier – anders als Anthropics `input_tokens` – die
+  // aus dem Cache bedienten Tokens bereits mit. Fuer eine ueber alle Anbieter
+  // gleich lesbare Zahl wird der Cache-Anteil deshalb herausgerechnet.
+  const cachedTokens = data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
+  return {
+    text,
+    toolCalls,
+    stopReason: choice?.finish_reason ?? "",
+    ...(data.usage
+      ? {
+          usage: {
+            inputTokens: Math.max((data.usage.prompt_tokens ?? 0) - cachedTokens, 0),
+            outputTokens: data.usage.completion_tokens ?? 0,
+            cacheReadTokens: cachedTokens,
+            // Diese Anbieter weisen keinen Schreibposten aus – sie berechnen
+            // fuer das Anlegen eines Eintrags keinen Aufschlag.
+            cacheWriteTokens: 0,
+          },
+        }
+      : {}),
+  };
 }
 
 /// Ein Frage-Antwort-Aufruf gegen das Profil, mit optionalen Werkzeugen und
@@ -793,15 +921,34 @@ export async function chatTurn({
    *  auch spürbar langsamere/instabile Anbieter treffen kann. */
   preferThroughput?: boolean;
 }): Promise<ChatTurnResult> {
-  switch (profile.provider) {
-    case "ANTHROPIC":
-      return chatTurnAnthropic(profile, system, messages, tools, maxTokens, timeoutMs);
-    case "OLLAMA":
-      return chatTurnOllama(profile, system, messages, tools, timeoutMs);
-    case "OPENAI":
-    case "GENERIC_OPENAI_COMPAT":
-      return chatTurnOpenAiCompat(profile, system, messages, tools, maxTokens, timeoutMs, reasoningEffort, preferThroughput);
-  }
+  const result = await (() => {
+    switch (profile.provider) {
+      case "ANTHROPIC":
+        return chatTurnAnthropic(profile, system, messages, tools, maxTokens, timeoutMs);
+      case "OLLAMA":
+        return chatTurnOllama(profile, system, messages, tools, timeoutMs);
+      case "OPENAI":
+      case "GENERIC_OPENAI_COMPAT":
+        return chatTurnOpenAiCompat(profile, system, messages, tools, maxTokens, timeoutMs, reasoningEffort, preferThroughput);
+    }
+  })();
+
+  logTokenUsage(profile.model, result.usage);
+  return result;
+}
+
+/// Die einzige Stelle, an der sich nachsehen laesst, ob das Prompt-Caching
+/// wirklich greift – ohne sie ist der Unterschied zwischen "funktioniert" und
+/// "schreibt jedes Mal einen neuen Eintrag" auf der Rechnung nicht zu
+/// erkennen. Bleibt `cache_read` ueber mehrere Turns hinweg 0, hat etwas den
+/// Praefix veraendert (ein Zeitstempel im Systemprompt, eine andere
+/// Werkzeugreihenfolge, ein gewechseltes Modell).
+function logTokenUsage(model: string, usage?: TokenUsage): void {
+  if (!usage) return;
+  console.log(
+    `[llm] ${model} tokens: in=${usage.inputTokens} out=${usage.outputTokens} ` +
+      `cache_read=${usage.cacheReadTokens} cache_write=${usage.cacheWriteTokens}`,
+  );
 }
 
 /// Einfacher Frage-Antwort-Aufruf ohne Werkzeuge – dünner Wrapper um
