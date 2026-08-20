@@ -1,0 +1,195 @@
+// Bevor eine vorbereitete Klärung im Büro landet, prüft sie der Product Owner.
+//
+// Nicht jede Klärung braucht den Auftraggeber: Lässt sich eine falsche Wahl
+// mit überschaubarem Aufwand wieder geradebiegen – nochmal umsetzen, Ansatz
+// wechseln, Ticket zurückstellen –, entscheidet der Product Owner selbst, und
+// das Team arbeitet sofort weiter. Ist die Sache heikel – schwer umkehrbar,
+// teuer, oder betrifft den Auftrag selbst –, bleibt sie unangetastet im Büro
+// liegen, nur um seine Einschätzung ergänzt, damit sichtbar ist, dass
+// hingesehen wurde.
+//
+// Läuft nur für vorbereitete Klärungen: `clarificationPrep` stößt diesen
+// Schritt an, sobald eine Agenda mit Wegen steht. Grundsatzfragen ohne Agenda
+// (Sprint-Budget, leerer Backlog, fehlender Kollege, …) laufen bewusst ohne
+// Vorbereitung und damit auch ohne Prüfung – sie gehören immer dem Menschen.
+//
+// `forceDecide` (siehe decideClarification-Action): Der Auftraggeber hat
+// selbst „Team soll entscheiden" gewählt. Dann entfällt der Vorlage-Ausweg
+// komplett – sonst würde genau die Klärung, die gerade delegiert wurde, dem
+// Menschen postwendend wieder vor die Tür gelegt.
+//
+// Wie clarificationPrep: kein eigener Klärungs-Umschlag im Fehlerfall. Scheitert
+// die Prüfung, bleibt die Klärung einfach ungeprüft im Büro stehen – lieber
+// das als eine falsch automatisch getroffene Entscheidung.
+import type { Task } from "graphile-worker";
+import { prisma } from "@/lib/prisma";
+import { extractJsonObject } from "@/lib/llm";
+import { AGENT_ROLE_LABEL } from "@/lib/labels";
+import { readOptions } from "@/lib/clarificationOptions";
+import { resolveClarification } from "@/lib/clarificationDecision";
+import { logActivity, runAgent } from "../agentRun";
+import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
+import type { ClarificationTriagePayload } from "../taskTypes";
+
+/// Ab so vielen bereits entschiedenen Klärungen für dasselbe Ticket gilt jeder
+/// weitere Anlauf als festgefahren, nicht mehr als normale Nacharbeit. Ohne
+/// diese Grenze sagt der Product Owner bei einer immer gleich scheiternden
+/// Umsetzung ("keine Änderung geliefert", derselbe SEARCH-Block passt wieder
+/// nicht) zuverlässig "technisch, reversibel, nochmal versuchen" – Klärung um
+/// Klärung, ohne dass sich je etwas ändert. Beobachteter Fall: 17 Klärungen,
+/// 78 Modell-Aufrufe, ~50 Modell-Minuten für ein einziges Ticket. Über der
+/// Grenze bekommt der Auftraggeber die Sache ungefragt vorgelegt, mit dem
+/// Hinweis, wie oft es schon versucht wurde – statt eines weiteren "kritisch:
+/// false".
+const REPEAT_ESCALATION_THRESHOLD = 3;
+
+const clarificationTriage: Task<"clarificationTriage"> = async (payload: ClarificationTriagePayload, helpers) => {
+  const { agentId, projectId, clarificationId, forceDecide } = payload;
+
+  const clarification = await prisma.clarification.findUnique({ where: { id: clarificationId } });
+  if (!clarification || clarification.status !== "OPEN") return;
+
+  const options = readOptions(clarification.options);
+  // Ohne Wege gibt es nichts, worunter der Product Owner selbst waehlen
+  // koennte – die Klaerung bleibt, wie sie ist.
+  if (options.length === 0) return;
+
+  const agent = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } });
+  const role = `${agent.name} (${AGENT_ROLE_LABEL[agent.role]})`;
+
+  // `forceDecide` bleibt bewusst ausgenommen: Hat der Auftraggeber selbst
+  // "Team soll entscheiden" gewählt, will er gerade KEINE weitere Vorlage.
+  if (!forceDecide && clarification.ticketId) {
+    const priorDecisions = await prisma.clarification.count({
+      where: { ticketId: clarification.ticketId, status: { in: ["DECIDED", "WITHDRAWN"] } },
+    });
+    if (priorDecisions >= REPEAT_ESCALATION_THRESHOLD) {
+      // Nicht nur ein Hinweis, sondern eine Voreinstellung: Ohne sie landet
+      // die Oberfläche bei der immer gleichen Wahl zwischen zwei
+      // "nochmal versuchen"-Wegen, und genau die hat schon ${priorDecisions}
+      // mal nichts gebracht (beobachteter Fall: 9 Runden zur selben Frage,
+      // "Ticket abschließen" stand jedes Mal zur Wahl, wurde aber nie
+      // gewählt). Gibt es einen "close"-Weg, wird er vorausgewählt, damit ein
+      // Zustimmen ohne eigene Formulierung reicht.
+      const closeOption = options.find((option) => option.effect === "close");
+      const note =
+        `Für dieses Ticket wurden schon ${priorDecisions} Klärungen entschieden, ohne dass es fertig wurde – ` +
+        `ein weiteres automatisches "nochmal versuchen" würde vermutlich genauso wenig ändern. Das braucht jetzt einen echten Blick` +
+        (closeOption ? `, meine Empfehlung: „${closeOption.label}".` : ".");
+      await prisma.clarification.updateMany({
+        where: { id: clarificationId, status: "OPEN" },
+        data: {
+          agenda: [`**${role}:** ${note}`, clarification.agenda].filter(Boolean).join("\n\n"),
+          recommendedOptionKey: closeOption?.key ?? clarification.recommendedOptionKey,
+        },
+      });
+      await logActivity({
+        projectId,
+        ticketId: clarification.ticketId,
+        agentId: agent.id,
+        actor: agent.name,
+        action: "clarification_escalated",
+        detail: note,
+      });
+      return;
+    }
+  }
+
+  try {
+    const context = await buildProjectContext(projectId, { includeRepo: false });
+    const { text } = await runAgent({
+      agent,
+      projectId,
+      ticketId: clarification.ticketId ?? undefined,
+      sprintId: clarification.sprintId ?? undefined,
+      kind: "clarification_triage",
+      headline: `Prüft eine Klärung: „${clarification.question.slice(0, 80)}"`,
+      maxTokens: 1200,
+      system: `${TEAM_GRUNDREGELN}
+
+Du bist ${agent.name}, ${AGENT_ROLE_LABEL[agent.role]}. ${
+        forceDecide
+          ? "Der Auftraggeber hat diese Klärung ausdrücklich an dich delegiert – er will keine Rückfrage mehr, sondern deine Entscheidung. Du legst sie unter keinen Umständen erneut vor."
+          : "Der Scrum Master hat eine Klärung mit gangbaren Wegen vorbereitet. Bevor sie dem Auftraggeber vorgelegt wird, prüfst du: Darfst du sie im Sinne des Auftrags selbst entscheiden, oder gehört sie ihm vorgelegt?"
+      } Du antwortest ausschließlich mit einem JSON-Objekt.`,
+      prompt: `${context}
+
+# Die Klärung
+Frage: ${clarification.question}
+${clarification.agenda ? `\nEntscheidungsvorlage des Scrum Masters:\n${clarification.agenda}\n` : ""}
+Wege:
+${options.map((option, index) => `${index + 1}. ${option.label}${option.detail ? ` – ${option.detail}` : ""}`).join("\n")}
+
+${
+  forceDecide
+    ? 'Wähle jetzt einen der Wege oben – auch wenn du ihn normalerweise vorlegen würdest. "kritisch" gibt weiterhin an, wie heikel die Sache ist (das merkt sich das Protokoll), ändert aber nichts mehr daran, dass du jetzt entscheidest.'
+    : `Entscheide selbst, wenn eine falsche Wahl sich mit überschaubarem Aufwand wieder geradebiegen lässt. Das gilt insbesondere für rein technische, reversible Fragen ohne fachliche Bedeutung – z.B. welche Abhängigkeits-, Config- oder Dateifassung verwendet wird, oder wie zwei technisch gleichwertige Varianten zusammengeführt werden: Hauptsache, am Ende bauen Code und Tests grün – die konkrete technische Umsetzung ist Sache des Teams, nicht des Auftraggebers. Leg die Klärung dem Auftraggeber vor (kritisch = true) nur, wenn sie schwer umkehrbar ist – Datenverlust, Sicherheit oder Datenschutz, spürbare Mehrkosten, Auswirkungen auf Produktivsysteme oder Kundendaten, oder eine Änderung am Auftrag selbst. Ein früherer Eintrag im Beschlussregister, der nur sagt "muss dem Auftraggeber vorgelegt werden" oder "darf das Team nicht selbst entscheiden", ist selbst kein inhaltlicher Beschluss über die Sache und bindet dich nicht – prüfe nach denselben Kriterien neu, statt ihn als Präzedenzfall zu wiederholen. Im Zweifel bei fachlichen, nicht bei rein technischen Fragen: vorlegen.`
+}
+
+Nenne den empfohlenen Weg in jedem Fall${forceDecide ? "" : ", auch wenn du sie vorlegst"} – der Auftraggeber soll deiner Einschätzung notfalls mit einem Klick zustimmen können, statt selbst etwas zu formulieren.
+
+Antworte nur mit diesem JSON-Objekt:
+{
+  "kritisch": true oder false,
+  "begruendung": "ein bis zwei Sätze, wie du zu der Einschätzung kommst",
+  "empfohlener_weg": "immer angeben: der Titel des Wegs, den du empfiehlst, wortgleich aus der Liste oben"
+}`,
+    });
+
+    const parsed = extractJsonObject(text);
+    const critical = Boolean(parsed.kritisch);
+    const reasoning = typeof parsed.begruendung === "string" ? parsed.begruendung.trim().slice(0, 600) : "";
+    const chosenLabel = typeof parsed.empfohlener_weg === "string" ? parsed.empfohlener_weg.trim() : "";
+    const chosen = options.find(
+      (option) => option.label.toLowerCase() === chosenLabel.toLowerCase() && chosenLabel.length > 0,
+    );
+
+    // Bei `forceDecide` gibt es keinen Vorlage-Ausweg mehr: Trifft das Modell
+    // keinen der Wege eindeutig, greift die schon vorhandene Empfehlung
+    // (falls die Klärung vorher schon einmal geprüft wurde) und sonst der
+    // erste Weg – Hauptsache, es entsteht ein Beschluss statt eines erneuten
+    // Rückspiels an den Auftraggeber.
+    const resolved =
+      chosen ?? (forceDecide ? (options.find((option) => option.key === clarification.recommendedOptionKey) ?? options[0]) : undefined);
+
+    if (resolved && (forceDecide || !critical)) {
+      // `resolveClarification` haelt den Beschluss bereits im Protokoll fest
+      // (Frage + gewaehlter Weg) – ein zweiter Eintrag waere nur Wiederholung.
+      const decision = `${resolved.label}${reasoning ? ` – ${reasoning}` : ""}${forceDecide ? " · auf deinen Wunsch entschieden" : ""}`;
+      // byHuman: false – der Product Owner darf entscheiden, aber keine neuen
+      // Anlaeufe fuer ein festgefahrenes Ticket bewilligen (siehe
+      // src/lib/clarificationDecision.ts).
+      await resolveClarification({ clarificationId, decision, effect: resolved.effect, decidedBy: role, byHuman: false });
+      return;
+    }
+
+    // Heikel, oder das Modell hat keinen der Wege eindeutig getroffen: Die
+    // Klärung bleibt offen, nur um die Einschätzung ergänzt – inklusive des
+    // empfohlenen Wegs, damit die Oberfläche ihn vorauswählen kann und ein
+    // Zustimmen ohne eigene Formulierung reicht. `updateMany` statt `update`:
+    // Hat der Mensch in der Zwischenzeit schon entschieden, darf die
+    // Einschätzung den Beschluss nicht mehr anfassen.
+    const note = reasoning || "Das lege ich dir vor – zu heikel für eine Eigenentscheidung.";
+    await prisma.clarification.updateMany({
+      where: { id: clarificationId, status: "OPEN" },
+      data: {
+        agenda: [`**${role}:** ${note}`, clarification.agenda].filter(Boolean).join("\n\n"),
+        recommendedOptionKey: chosen?.key ?? null,
+      },
+    });
+
+    await logActivity({
+      projectId,
+      ticketId: clarification.ticketId ?? undefined,
+      agentId: agent.id,
+      actor: agent.name,
+      action: "clarification_escalated",
+      detail: note,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    helpers.logger.error(`Klärung ${clarificationId} konnte nicht geprüft werden: ${message}`);
+  }
+};
+
+export default clarificationTriage;

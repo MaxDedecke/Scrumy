@@ -228,12 +228,15 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                       {JSON.stringify(connector.config)}
                     </p>
                   )}
+                  {connector.credentialRef && (
+                    <p className="mt-0.5 truncate font-mono text-xs text-ink-4">
+                      Zugang: {connector.credentialRef}
+                    </p>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <ActionForm action={updateConnectorStatus} className="flex items-center gap-2">
                     <input type="hidden" name="id" value={connector.id} />
-                    <input type="hidden" name="organizationId" value={project.organizationId} />
-                    <input type="hidden" name="projectId" value={project.id} />
                     <select
                       name="status"
                       defaultValue={connector.status}
@@ -250,8 +253,6 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                   </ActionForm>
                   <ActionForm action={deleteConnector}>
                     <input type="hidden" name="id" value={connector.id} />
-                    <input type="hidden" name="organizationId" value={project.organizationId} />
-                    <input type="hidden" name="projectId" value={project.id} />
                     <ConfirmButton
                       confirmText={`Connector "${connector.name}" löschen?`}
                       title={`Connector „${connector.name}" löschen`}
@@ -296,8 +297,9 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                 <input
                   name="credentialRef"
                   className={inputClass}
-                  placeholder="vault://…, nie den Schlüssel selbst"
+                  placeholder="z.B. env:KUNDE_A_GITHUB_TOKEN"
                 />
+                <p className="mt-1 text-xs text-ink-4">Der Variablenname steht hier, der Token ausschließlich in der .env-Datei.</p>
               </div>
               <div className="sm:col-span-2">
                 <label className={labelClass}>Config (JSON, optional)</label>
@@ -337,7 +339,14 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
           </div>
           <div>
             <label className={labelClass}>Repository-URL</label>
-            <input name="repoUrl" defaultValue={project.repoUrl ?? ""} className={inputClass} />
+            <input
+              name="repoUrl"
+              type="url"
+              defaultValue={project.repoUrl ?? ""}
+              placeholder="https://github.com/organisation/repository.git"
+              className={inputClass}
+            />
+            <p className="mt-1 text-xs text-ink-4">HTTPS-Repo; Scrumy klont es und pusht jeden Team-Commit nach origin.</p>
           </div>
           <div>
             <label className={labelClass}>Beschreibung</label>
@@ -349,6 +358,22 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
             </button>
           </div>
         </ActionForm>
+
+        {/* Noch ohne Funktion: liveKeepData existiert in der DB, wird aber
+            aktuell nirgends gelesen (siehe prisma/schema.prisma) – Terminate
+            löscht die Datenbank-Daten der Live-Anwendung immer. Sichtbar
+            ausgegraut, damit klar ist, dass die Funktion kommt, statt sie
+            vorzutäuschen. */}
+        <div className="mt-4 border-t border-hairline pt-4">
+          <label className="flex items-center gap-2 text-sm text-ink-4">
+            <input type="checkbox" disabled className="accent-accent-solid" />
+            Daten der Live-Anwendung beim Beenden behalten
+            <span className="pill pill-neutral">Premium – demnächst verfügbar</span>
+          </label>
+          <p className="mt-1 text-xs text-ink-4">
+            Aktuell werden die Datenbank-Inhalte der Live-Anwendung beim Beenden immer gelöscht, um Speicher zu sparen.
+          </p>
+        </div>
 
         <ActionForm action={deleteProject} className="mt-4 border-t border-hairline pt-4">
           <input type="hidden" name="id" value={project.id} />

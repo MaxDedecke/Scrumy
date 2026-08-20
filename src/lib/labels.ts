@@ -11,8 +11,10 @@ import type {
   ConnectorStatus,
   LlmProvider,
   Priority,
+  PreviewStatus,
   ProjectStatus,
   RequirementSource,
+  ReviewDecision,
   SupportChannel,
   SupportRequestStatus,
   TicketStatus,
@@ -53,6 +55,18 @@ export const PRIORITY_PILL: Record<Priority, string> = {
   MEDIUM: "pill pill-info",
   HIGH: "pill pill-warning",
   URGENT: "pill pill-critical",
+};
+
+export const REVIEW_DECISION_LABEL: Record<ReviewDecision, string> = {
+  PENDING: "Ausstehend",
+  APPROVED: "Freigegeben",
+  REJECTED: "Nachbesserung",
+};
+
+export const REVIEW_DECISION_PILL: Record<ReviewDecision, string> = {
+  PENDING: "pill pill-warning pill-dot",
+  APPROVED: "pill pill-good",
+  REJECTED: "pill pill-critical",
 };
 
 export const AGENT_STATUS_LABEL: Record<AgentStatus, string> = {
@@ -139,6 +153,38 @@ export const PROJECT_STATUS_PILL: Record<ProjectStatus, string> = {
   ARCHIVED: "pill pill-neutral",
 };
 
+export const PREVIEW_STATUS_LABEL: Record<PreviewStatus, string> = {
+  STOPPED: "Gestoppt",
+  STARTING: "Startet …",
+  RUNNING: "Läuft",
+  ERROR: "Fehler",
+};
+
+export const PREVIEW_STATUS_PILL: Record<PreviewStatus, string> = {
+  STOPPED: "pill pill-neutral",
+  STARTING: "pill pill-info",
+  RUNNING: "pill pill-good",
+  ERROR: "pill pill-critical",
+};
+
+// Eigene Texte fuer die Live-Anwendung (auch wenn liveStatus denselben
+// PreviewStatus-Enum-Typ wie previewStatus wiederverwendet, siehe
+// prisma/schema.prisma) – "Live" statt "Läuft" grenzt sie im Kopf klar von
+// der Vorschau ab.
+export const LIVE_STATUS_LABEL: Record<PreviewStatus, string> = {
+  STOPPED: "Nicht live",
+  STARTING: "Live startet …",
+  RUNNING: "Live",
+  ERROR: "Fehler",
+};
+
+export const LIVE_STATUS_PILL: Record<PreviewStatus, string> = {
+  STOPPED: "pill pill-neutral",
+  STARTING: "pill pill-info",
+  RUNNING: "pill pill-good",
+  ERROR: "pill pill-critical",
+};
+
 export const REQUIREMENT_SOURCE_LABEL: Record<RequirementSource, string> = {
   MANUAL: "Manuell",
   UPLOAD: "Hochgeladen",
@@ -202,10 +248,15 @@ export const RUN_KIND_LABEL: Record<string, string> = {
   sprint_planning: "Sprint-Planung",
   ticket_plan: "Ticket-Planung",
   implementation: "Umsetzung",
+  acceptance_precheck: "Vorprüfung",
+  no_change_audit: "Nachprüfung ohne Änderung",
   review: "QA-Review",
   sprint_review: "Sprint-Review",
   inquiry: "Rückfrage beantwortet",
   clarification_prep: "Klärung vorbereitet",
+  clarification_triage: "Klärung geprüft",
+  review_triage: "Freigabe geprüft",
+  po_sweep: "Projekt aufgeräumt",
 };
 
 // Wie weit eine offene Klaerung die Arbeit anhaelt.
@@ -258,10 +309,12 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   autopilot_on: "Autopilot an",
   autopilot_off: "Autopilot aus",
   repo_created: "Repository angelegt",
+  repo_cloned: "Repository geklont",
   repo_reused: "Repository weiterverwendet",
   kickoff_completed: "Auftrag verstanden",
   sprint_planned: "Sprint geplant",
   sprint_reviewed: "Sprint abgeschlossen",
+  integration_check: "Integrationsprüfung (voller Stack)",
   backlog_empty: "Backlog leer",
   ticket_started: "Ticket übernommen",
   ticket_planned: "Ticket geplant",
@@ -272,17 +325,24 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   review_approved: "QA freigegeben",
   review_rework: "QA: Nacharbeit",
   human_review_requested: "Freigabe angefragt",
-  human_approved: "Vom Menschen freigegeben",
-  human_rejected: "Vom Menschen zurückgewiesen",
+  // Text bewusst ohne "vom Menschen": Seit der Product Owner angefragte
+  // Freigaben selbst entscheiden darf (siehe reviewTriage), steht neben dem
+  // Label immer schon der tatsächliche Entscheider (`entry.actor`).
+  human_approved: "Freigegeben",
+  human_rejected: "Nachbesserung angefordert",
+  review_escalated: "Als zu heikel eingestuft",
   inquiry_answered: "Rückfrage beantwortet",
   clarification_opened: "Klärung einberufen",
   clarification_raised: "Agent bittet um Entscheidung",
   clarification_prepared: "Entscheidungsvorlage erstellt",
   clarification_prep_failed: "Entscheidungsvorlage fehlgeschlagen",
   clarification_decided: "Beschluss gefasst",
+  clarification_escalated: "Als zu heikel eingestuft",
   clarification_withdrawn: "Klärung zurückgezogen",
   clarification_forwarded: "An den Kunden weitergeleitet",
   ticket_deferred: "Ticket zurückgestellt",
+  ticket_closed_by_decision: "Ticket durch Beschluss geschlossen",
+  ticket_split: "Ticket automatisch zerlegt",
   step_failed: "Schritt fehlgeschlagen",
   files_rejected: "Dateien abgelehnt",
   step_abandoned: "Abgebrochener Schritt aufgeräumt",
@@ -292,4 +352,8 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   requirements_generated: "Anforderungen generiert",
   requirements_approved: "Anforderungen freigegeben",
   requirements_reopened: "Anforderungs-Freigabe zurückgezogen",
+  po_sweep_completed: "Klarheits-Check",
+  po_sweep_resumed: "Arbeit wieder angestoßen",
+  tickets_reclaimed: "Zurückgestellte Tickets wieder aufgenommen",
+  support_request_converted: "Kundenanfrage in Ticket überführt",
 };

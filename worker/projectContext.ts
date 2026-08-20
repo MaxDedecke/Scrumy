@@ -16,7 +16,8 @@ Grundregeln:
 - Antworte immer auf Deutsch, sachlich und knapp, wie ein Kollege im Team.
 - Erfinde keine Tatsachen über den Projektstand. Was du nicht weißt, sagst du.
 - Halte dich an das freigegebene Konzept und die freigegebenen Anforderungen; sie sind der Auftrag.
-- Beschlüsse des Auftraggebers stehen über deiner eigenen Einschätzung und gelten weiter, auch wenn sie Wochen alt sind.
+- Beschlüsse des Auftraggebers stehen über deiner eigenen Einschätzung und gelten weiter, auch wenn sie Wochen alt sind. Ein Beschluss ist ein Arbeitsauftrag, keine bereits erledigte Tatsache: Wenn der Code noch nicht zeigt, was beschlossen wurde, setzt du ihn jetzt um – "die Entscheidung ist gefallen" ist kein Grund, nichts zu ändern, sondern der Grund, genau das zu bauen.
+- Architektur-Standard, kein Vorschlag: Die Software läuft als Docker-Compose-Umgebung mit einem eigenen Container je Dienst (Microservice-Zuschnitt statt Monolith, z.B. getrennte Container für Frontend, Backend/API und Datenbank). Als Datenbank ist ein eigener Postgres-Container der Standard-Dienst in diesem Zuschnitt – plane ihn bei jedem Projekt automatisch mit ein. Lass ihn nur weg, wenn das Projekt wirklich ohne Datenhaltung auskommt (seltener Ausnahmefall, z.B. ein zustandsloses Werkzeug ohne jede Persistenz); in dem Fall nenne im Projektverständnis kurz, warum keine Datenbank nötig ist. Gibt es ein Frontend, bekommt es einen eigenen Container in einem konventionellen Verzeichnis ('frontend/', 'web/', 'client/', 'app/', 'ui/' oder Projektwurzel) mit einem 'dev'-, 'start'- oder 'preview'-Skript in dessen package.json, das den Server wirklich startet – kein Platzhalter wie ein bloßes "echo ..." – daran erkennt und startet Scrumys Vorschau-Funktion es automatisch, und ein Platzhalter-Skript lässt sie mit "Server unerwartet beendet" fehlschlagen. Ergänze dort außerdem, wo das Framework es hergibt, ein echtes 'test'-, 'lint'- oder 'build'-Skript: nur darüber kann Scrumys automatische Prüfung nach jedem Ticket den Code wirklich ausführen statt QA nur aus dem Diff urteilen zu lassen. Weiche vom Zuschnitt (Container je Dienst, inkl. Datenbank) nur ab, wenn (a) Konzept, Anforderungen oder ein Beschluss des Auftraggebers ausdrücklich etwas anderes verlangen, (b) das Projekt kein Frontend hat (reiner Service/reine API – dann ist Docker optional), oder (c) bestehender Code importiert wird, der schon eine andere Struktur mitbringt. Sonst gilt dieser Zuschnitt, ohne dass ihn jemand extra anfordern muss. Die docker-compose.yml selbst liegt in der Repo-Wurzel und ist ausführbar, ohne dass irgendwer sie von Hand anpasst – Scrumys "Anwendung starten"-Funktion und die automatische Sprint-Integrationsprüfung führen genau diese Datei per "docker compose up" aus. Container kopieren ihren Code dafür beim Build (COPY im Dockerfile), statt ihn zur Laufzeit per Bind-Mount aus dem Projektverzeichnis einzuhängen – letzteres funktioniert in Scrumys Umgebung nicht zuverlässig. Veröffentliche ("ports:") nur den einen Dienst, den ein Mensch im Browser direkt öffnet (typischerweise das Frontend) – alle anderen (Backend/API, Datenbank) sprechen sich ausschließlich über den Compose-Servicenamen im internen Netz an (z.B. "http://backend:3000"), auch wenn ihr das der Übersichtlichkeit halber trotzdem fest verdrahtet. Ein zusätzlicher "ports:"-Eintrag für sie bringt nichts (kein Browser greift direkt darauf zu) und kann auf Scrumys Host mit dem festen Port eines ganz anderen, gleichzeitig laufenden Projekts kollidieren – der Start scheitert dann mit "port is already allocated".
 - Wo der Auftrag widersprüchlich oder lückenhaft ist, rate nicht: Sag es und lass entscheiden.
 - Was du tust, muss für den Auftraggeber nachvollziehbar sein: begründe Entscheidungen kurz.`;
 
@@ -28,9 +29,10 @@ function clip(text: string, maxChars: number): string {
 
 export async function buildProjectContext(
   projectId: string,
-  options: { includeRepo?: boolean; includeBoard?: boolean } = {},
+  options: { includeRepo?: boolean; includeBoard?: boolean; compact?: boolean; focus?: string; ticketId?: string } = {},
 ): Promise<string> {
-  const { includeRepo = true, includeBoard = true } = options;
+  const { includeRepo = true, includeBoard = true, compact = false, focus = "", ticketId } = options;
+  const focusTerms = focus.toLowerCase().split(/[^a-z0-9äöüß]+/).filter((term) => term.length >= 4);
 
   const project = await prisma.project.findUniqueOrThrow({
     where: { id: projectId },
@@ -52,7 +54,7 @@ export async function buildProjectContext(
   const releasedConcept = project.concept?.versions[0];
   parts.push(
     `# Freigegebenes Konzept${releasedConcept ? ` (Version ${releasedConcept.version})` : ""}\n` +
-      clip(releasedConcept?.content ?? project.concept?.content ?? "(kein Konzept hinterlegt)", 12000),
+      clip(releasedConcept?.content ?? project.concept?.content ?? "(kein Konzept hinterlegt)", compact ? 5000 : 12000),
   );
 
   // Das Beschlussregister: Was der Auftraggeber in Klaerungen entschieden hat,
@@ -62,29 +64,72 @@ export async function buildProjectContext(
     prisma.clarification.findMany({
       where: { projectId, status: "DECIDED" },
       orderBy: { decidedAt: "desc" },
-      take: 20,
+      // Im Compact-Modus wird unten nach Ticket-Bezug gefiltert (siehe
+      // relevantDecisions) – dafuer braucht es einen groesseren Kandidatenpool
+      // als die 6, die am Ende tatsaechlich in den Prompt kommen, sonst faellt
+      // ein aelterer, aber fuer GENAU DIESES Ticket relevanter Beschluss schon
+      // hier raus.
+      take: compact ? 40 : 20,
       include: { ticket: { select: { title: true } } },
     }),
     prisma.clarification.findMany({
       where: { projectId, status: "OPEN" },
       orderBy: { createdAt: "asc" },
+      ...(compact ? { take: 10 } : {}),
       include: { ticket: { select: { title: true } } },
     }),
   ]);
 
-  const requirements = project.requirements
+  const orderedRequirements = compact && focusTerms.length > 0
+    ? [...project.requirements].sort((a, b) => {
+        const score = (value: typeof a) => {
+          const text = `${value.title} ${value.description ?? ""}`.toLowerCase();
+          return focusTerms.reduce((sum, term) => sum + (text.includes(term) ? 1 : 0), 0);
+        };
+        return score(b) - score(a);
+      })
+    : project.requirements;
+
+  let requirementChars = 0;
+  const requirementBudget = compact ? 6000 : Number.POSITIVE_INFINITY;
+  const requirements = orderedRequirements
     .map((requirement, index) => {
       const head = `${index + 1}. [${PRIORITY_LABEL[requirement.priority]}] ${requirement.title}`;
-      const detail = requirement.description ? `\n   ${clip(requirement.description, 800)}` : "";
+      const detail = requirement.description ? `\n   ${clip(requirement.description, compact ? 500 : 800)}` : "";
       const file = requirement.fileName ? `\n   (Anhang: ${requirement.fileName})` : "";
       return head + detail + file;
+    })
+    .filter((entry) => {
+      if (requirementChars + entry.length > requirementBudget) return false;
+      requirementChars += entry.length;
+      return true;
     })
     .join("\n");
   parts.push(`# Freigegebene Anforderungen\n${requirements || "(keine erfasst)"}`);
 
-  if (decisions.length > 0) {
-    const register = decisions
-      .reverse()
+  // Im Compact-Modus geht es nicht um das ganze Beschlussregister, sondern um
+  // das, was FUER DIESES TICKET gilt: sein eigener Verlauf (immer, egal wie
+  // alt) sowie Beschluesse, deren Frage inhaltlich zum Ticket passt. Sonst
+  // schleppt jeder Ticket-Prompt projektweit die zuletzt getroffenen
+  // Beschluesse mit, auch wenn sie ein ganz anderes Ticket betreffen.
+  const relevantDecisions = compact && focusTerms.length > 0
+    ? [...decisions]
+        .sort((a, b) => {
+          const score = (entry: (typeof decisions)[number]) => {
+            if (ticketId && entry.ticketId === ticketId) return 1000;
+            const text = `${entry.ticket?.title ?? ""} ${entry.question} ${entry.decision ?? ""}`.toLowerCase();
+            return focusTerms.reduce((sum, term) => sum + (text.includes(term) ? 1 : 0), 0);
+          };
+          return score(b) - score(a);
+        })
+        .slice(0, 6)
+        // Danach wieder chronologisch (aeltester zuerst) fuer die Erzaehlung
+        // im Prompt – die Relevanz entschied nur, WELCHE reinkommen.
+        .sort((a, b) => (a.decidedAt ?? a.createdAt).getTime() - (b.decidedAt ?? b.createdAt).getTime())
+    : [...decisions].reverse();
+
+  if (relevantDecisions.length > 0) {
+    const register = relevantDecisions
       .map((entry) => {
         const when = (entry.decidedAt ?? entry.createdAt).toLocaleDateString("de-DE");
         const subject = entry.ticket ? ` (Ticket „${entry.ticket.title}")` : "";
@@ -92,7 +137,7 @@ export async function buildProjectContext(
       })
       .join("\n");
     parts.push(
-      `# Beschlüsse des Auftraggebers\nDiese Entscheidungen sind getroffen und gelten. Halte dich daran, auch wenn du es anders lösen würdest.\n${register}`,
+      `# Beschlüsse des Auftraggebers\nDiese Entscheidungen sind getroffen und gelten. Halte dich daran, auch wenn du es anders lösen würdest. Prüfe bei jedem, ob der aktuelle Code ihn schon umsetzt – wenn nicht, ist er offene Arbeit für dich, kein erledigter Fakt.\n${register}`,
     );
   }
 

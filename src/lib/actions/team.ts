@@ -11,7 +11,9 @@ import { fail, note, ok, type ActionResult } from "@/lib/actions/result";
 import { agentForRole, ensureProjectTeam } from "@/lib/team";
 import { scheduleNextStep } from "@/lib/nextStep";
 import { revalidateProject } from "@/lib/actions/revalidate";
+import { resolveReview } from "@/lib/reviewDecision";
 import { enqueueAgentJob } from "../../../worker/queue";
+import { reconcileStaleLocksNow } from "../../../worker/reconcile";
 
 function str(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
@@ -145,12 +147,52 @@ export async function nudgeTeam(formData: FormData): Promise<ActionResult> {
   if (!project) return fail("Projekt nicht gefunden.");
   if (project.status !== "ACTIVE") return fail("Das Projekt ist nicht aktiv – erst fortsetzen.");
 
+  // Erst aufräumen, dann erst nachsehen, ob wirklich noch jemand arbeitet –
+  // sonst täuscht genau der Zustand, den wir gerade auflösen wollen, die
+  // Prüfung direkt darunter: Ein AgentRun, der mit einem abgestürzten Worker
+  // gestorben ist, steht ohne dieses Aufräumen für immer auf RUNNING, und
+  // "das Team arbeitet gerade" wäre schlicht falsch (siehe worker/reconcile.ts,
+  // beobachtet im iPhoto-Projekt).
+  const cleaned = await reconcileStaleLocksNow();
+
   const running = await prisma.agentRun.findFirst({ where: { projectId, status: "RUNNING" } });
   if (running) return note("Das Team arbeitet gerade – der nächste Schritt kommt von allein.");
 
   const message = await scheduleNextStep(projectId);
   revalidateProject(projectId);
-  return ok(message);
+  const cleanupNote =
+    cleaned.unlockedPools > 0 || cleaned.abandonedRuns > 0
+      ? ` (davor eine hängende Job-Sperre eines abgestürzten Workers gelöst)`
+      : "";
+  return ok(`${message}${cleanupNote}`);
+}
+
+/// Der Auftraggeber stößt den Product Owner von Hand an, das Projekt auf
+/// unklare oder undefinierte Zustände zu prüfen (siehe worker/tasks/poSweep.ts)
+/// – gedacht für den Moment, in dem im Büro der Eindruck entsteht, irgendwo
+/// sei etwas liegen geblieben, ohne dass sich das an einer konkreten Sackgasse
+/// festmachen lässt. Läuft unabhängig vom nächsten fälligen Arbeitsschritt.
+export async function nudgeProductOwner(formData: FormData): Promise<ActionResult> {
+  const projectId = str(formData, "projectId");
+  if (!projectId) return fail("Kein Projekt angegeben.");
+
+  const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
+  if (!productOwner) return fail("Diesem Projekt ist kein Product Owner zugeordnet – erst das Team starten.");
+
+  // Dieselbe Vorab-Aufräumung wie bei nudgeTeam (s.o.): poSweep selbst stößt
+  // am Ende zwar auch die Wiederaufnahme an (worker/tasks/poSweep.ts), aber
+  // eine tote Job-Sperre blockiert die Warteschlange des betroffenen Agenten
+  // unabhängig davon – die muss weg, bevor überhaupt wieder etwas läuft.
+  await reconcileStaleLocksNow();
+
+  await enqueueAgentJob("poSweep", {
+    agentId: productOwner.id,
+    projectId,
+    reason: "Auftraggeber bittet um Klarheit im Projekt",
+  });
+
+  revalidateProject(projectId);
+  return ok(`${productOwner.name} geht das Projekt durch und meldet sich im Büro, sobald etwas gefunden ist.`);
 }
 
 /// Rueckfrage ans Team – die Antwort schreibt der Scrum-Master-Agent, sobald
@@ -193,64 +235,49 @@ export async function decideReview(formData: FormData): Promise<ActionResult> {
   if (!review) return fail("Freigabe nicht gefunden.");
   if (review.decision !== "PENDING") return note("Diese Freigabe ist bereits entschieden.");
 
-  const ticket = review.ticket;
-  const projectId = ticket.projectId;
+  const projectId = review.ticket.projectId;
+  const outcome = await resolveReview({ reviewId, decision, comment, decidedBy: "Mensch" });
+  revalidateProject(projectId);
+  return ok(outcome);
+}
 
-  await prisma.$transaction([
-    prisma.reviewApproval.update({
-      where: { id: reviewId },
-      data: {
-        decision,
-        comment: comment ?? review.comment,
-        decidedAt: new Date(),
-        reviewerName: "Mensch",
-      },
-    }),
-    prisma.ticket.update({
-      where: { id: ticket.id },
-      data: { status: decision === "APPROVED" ? "DONE" : "IN_PROGRESS" },
-    }),
-    prisma.activityLogEntry.create({
-      data: {
-        projectId,
-        ticketId: ticket.id,
-        actor: "Mensch",
-        action: decision === "APPROVED" ? "human_approved" : "human_rejected",
-        detail:
-          `„${ticket.title}" ${decision === "APPROVED" ? "freigegeben" : "zurückgewiesen"}` +
-          (comment ? `: ${comment}` : ""),
-      },
-    }),
-  ]);
+/// „Team soll entscheiden": Liegt vom Product Owner schon eine Empfehlung vor
+/// (siehe reviewTriage), setzt sie das Team sofort um. Sonst prueft der
+/// Product Owner die Freigabe jetzt selbst, mit `forceDecide` – auch bei als
+/// kritisch markierten Tickets, die reviewTriage sonst nie anfasst: Diesmal
+/// hat der Auftraggeber die Entscheidung ausdruecklich abgegeben.
+export async function delegateReview(formData: FormData): Promise<ActionResult> {
+  const reviewId = str(formData, "reviewId");
+  if (!reviewId) return fail("Keine Freigabe angegeben.");
 
-  // Zurueckgewiesen heisst: derselbe Kollege macht weiter, mit der Begruendung
-  // des Chefs als neuer Vorgabe.
-  if (decision === "REJECTED") {
-    const assignee = ticket.assigneeId
-      ? await prisma.agent.findUnique({ where: { id: ticket.assigneeId } })
-      : await agentForRole(projectId, "BACKEND");
-    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+  const review = await prisma.reviewApproval.findUnique({ where: { id: reviewId }, include: { ticket: true } });
+  if (!review) return fail("Freigabe nicht gefunden.");
+  if (review.decision !== "PENDING") return note("Diese Freigabe ist bereits entschieden.");
 
-    if (assignee && project.status === "ACTIVE") {
-      await prisma.ticket.update({
-        where: { id: ticket.id },
-        data: {
-          plan: `${ticket.plan ?? ""}\n\n## Rückmeldung des Auftraggebers\n${comment ?? "(ohne Begründung)"}`,
-        },
-      });
-      await enqueueAgentJob("ticketWork", {
-        agentId: assignee.id,
-        projectId,
-        ticketId: ticket.id,
-        reason: `Nacharbeit nach Rückweisung durch den Auftraggeber: ${(comment ?? "").slice(0, 200)}`,
-      });
-    }
+  const projectId = review.ticket.projectId;
+
+  if (review.recommendedDecision) {
+    const outcome = await resolveReview({
+      reviewId,
+      decision: review.recommendedDecision,
+      comment: review.recommendedFeedback,
+      decidedBy: "Team (auf deinen Wunsch)",
+    });
+    revalidateProject(projectId);
+    return ok(`An das Team delegiert. ${outcome}`);
   }
 
+  const decider = (await agentForRole(projectId, "PRODUCT_OWNER")) ?? (await agentForRole(projectId, "SCRUM_MASTER"));
+  if (!decider) return fail("Kein Product Owner oder Scrum Master im Team – bitte selbst entscheiden.");
+
+  await enqueueAgentJob("reviewTriage", {
+    agentId: decider.id,
+    projectId,
+    reviewId,
+    reason: "Auftraggeber hat die Entscheidung delegiert",
+    forceDecide: true,
+  });
+
   revalidateProject(projectId);
-  return ok(
-    decision === "APPROVED"
-      ? `„${ticket.title}" freigegeben.`
-      : `„${ticket.title}" zurückgewiesen – das Team arbeitet nach.`,
-  );
+  return ok(`${decider.name} entscheidet jetzt – die Freigabe schließt sich gleich von selbst.`);
 }

@@ -12,14 +12,11 @@
 import { prisma } from "@/lib/prisma";
 import { fail, note, ok, type ActionResult } from "@/lib/actions/result";
 import { revalidateProject } from "@/lib/actions/revalidate";
-import { scheduleNextStep } from "@/lib/nextStep";
-import { OWN_OPTION_KEY, readOptions, type ClarificationEffect } from "@/lib/clarificationOptions";
+import { resolveClarification } from "@/lib/clarificationDecision";
+import { DELEGATE_OPTION_KEY, OWN_OPTION_KEY, readOptions, type ClarificationEffect } from "@/lib/clarificationOptions";
+import { agentForRole } from "@/lib/team";
+import type { Clarification, ConnectorProvider, SupportChannel } from "@/generated/prisma/client";
 import { enqueueAgentJob } from "../../../worker/queue";
-import type { ConnectorProvider, SupportChannel } from "@/generated/prisma/client";
-
-/// Um wie viele Sprints das Budget waechst, wenn der Auftraggeber
-/// weiterarbeiten laesst (siehe worker/tasks/sprintPlanning.ts).
-const SPRINT_BUDGET_STEP = 6;
 
 function str(formData: FormData, key: string): string | null {
   const value = String(formData.get(key) ?? "").trim();
@@ -40,6 +37,8 @@ export async function decideClarification(formData: FormData): Promise<ActionRes
   if (!clarification) return fail("Klärung nicht gefunden.");
   if (clarification.status !== "OPEN") return note("Diese Klärung ist bereits entschieden.");
 
+  if (optionKey === DELEGATE_OPTION_KEY) return delegateClarification(clarification);
+
   // „Eigener Weg" ist keine gespeicherte Option, sondern das Textfeld: Dann
   // zaehlt allein, was der Mensch aufgeschrieben hat – ohne dass ihm der Titel
   // eines Vorschlags vorangestellt wird, den er gerade abgelehnt hat.
@@ -56,145 +55,63 @@ export async function decideClarification(formData: FormData): Promise<ActionRes
   const effect: ClarificationEffect = option?.effect ?? "resume";
   const projectId = clarification.projectId;
 
-  await prisma.$transaction([
-    prisma.clarification.update({
-      where: { id: clarificationId },
-      data: {
-        status: "DECIDED",
-        decision,
-        decidedBy: "Mensch",
-        decidedAt: new Date(),
-      },
-    }),
-    prisma.activityLogEntry.create({
-      data: {
-        projectId,
-        ticketId: clarification.ticketId,
-        actor: "Mensch",
-        action: "clarification_decided",
-        detail: `Beschluss zu „${clarification.question.slice(0, 160)}": ${decision.slice(0, 300)}`,
-      },
-    }),
-  ]);
-
-  // Der Beschluss gehoert auch dorthin, wo der naechste Agent ihn garantiert
-  // liest: in den Plan des Tickets, an dem er weiterarbeitet.
-  if (clarification.ticket) {
-    await prisma.ticket.update({
-      where: { id: clarification.ticket.id },
-      data: {
-        plan:
-          `${clarification.ticket.plan ?? ""}\n\n## Beschluss des Auftraggebers\n` +
-          `Frage: ${clarification.question}\nBeschluss: ${decision}`,
-      },
-    });
-  }
-
-  // Weitergeleitete Frage: Der Vorgang im Postfach ist damit erledigt.
-  if (clarification.forwardedRequestId) {
-    await prisma.supportRequest.update({
-      where: { id: clarification.forwardedRequestId },
-      data: { status: "CLOSED" },
-    });
-  }
-
-  const outcome = await applyEffect(effect, clarification.id, projectId);
+  const outcome = await resolveClarification({
+    clarificationId: clarification.id,
+    decision,
+    effect,
+    decidedBy: "Mensch",
+    byHuman: true,
+  });
   revalidateProject(projectId);
   return ok(`Beschluss festgehalten. ${outcome}`);
 }
 
-/// Was ein Beschluss in der Arbeit bewirkt. Ohne diesen Schritt waere eine
-/// Klaerung nur eine Notiz – das Team stuende weiter still.
-async function applyEffect(
-  effect: ClarificationEffect,
-  clarificationId: string,
-  projectId: string,
-): Promise<string> {
-  const clarification = await prisma.clarification.findUniqueOrThrow({ where: { id: clarificationId } });
+/// „Team soll entscheiden": Liegt vom Product Owner schon eine Empfehlung vor
+/// (siehe clarificationTriage), setzt sie das Team sofort um – kein LLM-Aufruf
+/// noetig, der Mensch hat ja gerade zugestimmt. Sonst prueft der Product Owner
+/// die Klaerung jetzt selbst, mit `forceDecide`: anders als beim normalen
+/// Triage-Lauf legt er sie diesmal unter keinen Umstaenden erneut vor.
+async function delegateClarification(
+  clarification: Clarification & { ticket: { id: string } | null },
+): Promise<ActionResult> {
+  const options = readOptions(clarification.options);
+  const recommended = clarification.recommendedOptionKey
+    ? options.find((option) => option.key === clarification.recommendedOptionKey)
+    : undefined;
 
-  if (effect === "stop") {
-    await prisma.$transaction([
-      prisma.project.update({ where: { id: projectId }, data: { autopilot: false } }),
-      prisma.activityLogEntry.create({
-        data: {
-          projectId,
-          actor: "Mensch",
-          action: "team_waiting",
-          detail: "Das Team arbeitet auf diesen Beschluss hin nicht weiter.",
-        },
-      }),
-    ]);
-    return `Das Team bleibt stehen – über „Nächsten Schritt anstoßen" geht es weiter.`;
-  }
-
-  if (effect === "skip" && clarification.ticketId) {
-    // Zurueck in den Backlog statt im Sprint zu verhungern: Das Ticket bleibt
-    // erhalten, aber der laufende Sprint kommt ohne es zum Abschluss.
-    const ticket = await prisma.ticket.update({
-      where: { id: clarification.ticketId },
-      data: { status: "BACKLOG", sprintId: null },
+  if (recommended) {
+    const outcome = await resolveClarification({
+      clarificationId: clarification.id,
+      decision: `${recommended.label} – auf deinen Wunsch entschieden`,
+      effect: recommended.effect,
+      decidedBy: "Team (auf deinen Wunsch)",
+      // Der Weg kommt vom Team, der Klick vom Menschen – fuer das Anlauf-Budget
+      // zaehlt der Klick.
+      byHuman: true,
     });
-    await prisma.activityLogEntry.create({
-      data: {
-        projectId,
-        ticketId: ticket.id,
-        actor: "Mensch",
-        action: "ticket_deferred",
-        detail: `„${ticket.title}" zurück in den Backlog gestellt.`,
-      },
-    });
-    const next = await scheduleNextStep(projectId);
-    return `„${ticket.title}" liegt wieder im Backlog. ${next}`;
+    revalidateProject(clarification.projectId);
+    return ok(`An das Team delegiert. ${outcome}`);
   }
 
-  if (effect === "budget") {
-    const project = await prisma.project.update({
-      where: { id: projectId },
-      data: { sprintBudget: { increment: SPRINT_BUDGET_STEP }, autopilot: true },
-    });
-    const next = await resume(clarification.resumeTask, clarification.resumePayload, projectId);
-    return `Budget steht jetzt bei ${project.sprintBudget} Sprints. ${next}`;
+  if (options.length === 0) {
+    return fail("Es gibt noch keine Wege, zwischen denen das Team wählen könnte – bitte kurz warten oder selbst entscheiden.");
   }
 
-  return resume(clarification.resumeTask, clarification.resumePayload, projectId);
-}
+  const decider =
+    (await agentForRole(clarification.projectId, "PRODUCT_OWNER")) ??
+    (await agentForRole(clarification.projectId, "SCRUM_MASTER"));
+  if (!decider) return fail("Kein Product Owner oder Scrum Master im Team – bitte selbst einen Weg auswählen.");
 
-/// Nimmt den eingefrorenen Schritt wieder auf. Ist keiner hinterlegt (z.B. bei
-/// einem durch Neustart verlorenen Job), bestimmt Scrumy aus dem Board, was
-/// ansteht – das Team soll nie am fehlenden Payload scheitern.
-async function resume(
-  task: string | null,
-  payload: unknown,
-  projectId: string,
-): Promise<string> {
-  const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
-  if (project.status !== "ACTIVE") {
-    return `Das Projekt ist nicht aktiv – über „Arbeit fortsetzen" nimmt das Team sie wieder auf.`;
-  }
+  await enqueueAgentJob("clarificationTriage", {
+    agentId: decider.id,
+    projectId: clarification.projectId,
+    clarificationId: clarification.id,
+    reason: "Auftraggeber hat die Entscheidung delegiert",
+    forceDecide: true,
+  });
 
-  if (task && payload && typeof payload === "object") {
-    const agentId = (payload as { agentId?: string }).agentId;
-    if (agentId) {
-      const agent = await prisma.agent.findUnique({ where: { id: agentId } });
-      if (agent) {
-        // Der eingefrorene Payload stammt aus derselben Queue, in die er
-        // zurueckgeht – die Typen sind dieselben, nur ueber die Datenbank
-        // gereist und dadurch fuer TypeScript wieder unbekannt.
-        await enqueueAgentJob(
-          task as keyof GraphileWorker.Tasks,
-          payload as GraphileWorker.Tasks[keyof GraphileWorker.Tasks],
-        );
-        // Blockiert-Anzeige aufheben: Der Kollege hat wieder etwas zu tun.
-        await prisma.agent.updateMany({
-          where: { id: agent.id, status: "BLOCKED" },
-          data: { status: "IDLE" },
-        });
-        return `${agent.name} nimmt die Arbeit wieder auf.`;
-      }
-    }
-  }
-
-  return scheduleNextStep(projectId);
+  revalidateProject(clarification.projectId);
+  return ok(`${decider.name} entscheidet jetzt – die Klärung schließt sich gleich von selbst.`);
 }
 
 /// Klaerung zuruecknehmen – wenn sich die Frage von selbst erledigt hat.

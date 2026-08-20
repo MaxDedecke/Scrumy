@@ -1,6 +1,25 @@
 // Kleine Inline-Icons (Heroicons-Outline-Pfade), damit keine zusätzliche
 // Icon-Dependency ins Projekt muss.
 
+// Die Wortmarke: nur die Kontur eines "S" (aus Archivo Black als Pfad
+// extrahiert), transparent gefüllt statt als Fläche – die Farbe kommt über
+// currentColor/text-brand vom Aufrufer.
+export function ScrumyMark({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="3 -40 723 792"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={26}
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      <path d="M667 212V224H460V220Q460 190 438.0 170.0Q416 150 371 150Q327 150 303.5 163.0Q280 176 280 195Q280 222 312.0 235.0Q344 248 415 262Q498 279 551.5 297.5Q605 316 645.0 358.0Q685 400 686 472Q686 594 603.5 653.0Q521 712 383 712Q222 712 132.5 658.0Q43 604 43 467H252Q252 519 279.0 536.5Q306 554 363 554Q405 554 432.5 545.0Q460 536 460 508Q460 483 429.5 470.5Q399 458 330 444Q246 426 191.0 406.5Q136 387 95.0 342.0Q54 297 54 220Q54 107 141.5 53.5Q229 0 363 0Q495 0 580.0 53.5Q665 107 667 212Z" />
+    </svg>
+  );
+}
+
 export function EllipsisIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
@@ -188,6 +207,39 @@ export function BoltIcon({ className, filled = false }: { className?: string; fi
   );
 }
 
+/// „Vorschau stoppen" – ein gefülltes Quadrat, wie die Stopptaste eines Players.
+export function StopIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
+      <rect x="6" y="6" width="12" height="12" rx="1.5" />
+    </svg>
+  );
+}
+
+/// „Vorschau neu laden" – zwei Pfeile im Kreis.
+/// „Anhalten"/„Nachbessern" als Mini-Aktion in eingeklappten Karten – ein Kreis
+/// mit Diagonale, wie ein Verbotsschild.
+export function BanIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className={className} aria-hidden>
+      <circle cx="12" cy="12" r="8.25" />
+      <path strokeLinecap="round" d="M6.34 6.34l11.32 11.32" />
+    </svg>
+  );
+}
+
+export function RefreshIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+      />
+    </svg>
+  );
+}
+
 export function TrashIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
@@ -222,6 +274,142 @@ export function ArchiveIcon({ className }: { className?: string }) {
         strokeLinejoin="round"
         d="M20.25 7.5l-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0-3-3m3 3 3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z"
       />
+    </svg>
+  );
+}
+
+/// Listenansicht – drei Zeilen mit Aufzählungspunkten.
+export function ListIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8.25 6h12M8.25 12h12M8.25 18h12M3.75 6h.008v.008H3.75V6Zm0 6h.008v.008H3.75V12Zm0 6h.008v.008H3.75V18Z"
+      />
+    </svg>
+  );
+}
+
+/// Visuelle Ansicht – vier Kacheln, steht hier für „Bürogrundriss".
+export function GridIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z"
+      />
+    </svg>
+  );
+}
+
+/// Strichmännchen für die Büroansicht. `filled` macht Kopf und Rumpf massiv
+/// (arbeitet), sonst bleibt nur die grüne Kontur (passiv) – Zustand hängt
+/// nicht an der Farbe allein.
+export function PersonIcon({ className, filled = false }: { className?: string; filled?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <circle cx="12" cy="7.75" r="3.25" fill={filled ? "currentColor" : "none"} />
+      <path
+        fill={filled ? "currentColor" : "none"}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M5.25 20.25a6.75 6.75 0 0 1 13.5 0"
+      />
+    </svg>
+  );
+}
+
+/// PC-Monitor für die Büroansicht. Nur der Bildschirm trägt den Zustand
+/// (`filled`), der Fuß bleibt immer eine dünne Kontur.
+export function DesktopIcon({ className, filled = false }: { className?: string; filled?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <rect x="3.75" y="4.5" width="16.5" height="10.5" rx="1.25" fill={filled ? "currentColor" : "none"} />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 19.5h4.5M12 15v4.5" />
+    </svg>
+  );
+}
+
+/// Stuhl für die Büroansicht. Trägt selbst keinen Zustand über die Farbe –
+/// nur seine Position/Drehung (vom Aufrufer per Transform gesetzt) zeigt an,
+/// ob er an- oder abgerückt ist.
+export function ChairIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M6 10.5h12M7 10.5V6.75A1.5 1.5 0 0 1 8.5 5.25h7A1.5 1.5 0 0 1 17 6.75V10.5M6.5 10.5 6 19.5m11.5-9 .5 9"
+      />
+    </svg>
+  );
+}
+
+/// Deko-Item 1/4 für den Bürotisch: Topfpflanze.
+export function PlantIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <path strokeLinecap="round" d="M8 21h8M12 21v-7" />
+      <path
+        strokeLinejoin="round"
+        d="M12 14c0-3.5-2.5-5.5-6-5.5C6 12 8.5 14 12 14Zm0 0c0-4 2.8-6.5 6.5-6.5C18.5 11.5 15.8 14 12 14Z"
+      />
+    </svg>
+  );
+}
+
+/// Deko-Item 2/4: Tasse. Bekommt bei "zuletzt aktiv" optional Dampf
+/// (`SteamIcon`) dazu – kleine Kaffeepause-Anspielung.
+export function MugIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <rect x="5" y="9" width="10" height="9" rx="1.5" />
+      <path strokeLinecap="round" d="M15 11h2a2 2 0 0 1 0 4h-2" />
+    </svg>
+  );
+}
+
+/// Deko-Item 3/4: Bücherstapel.
+export function BooksIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <rect x="4" y="14" width="16" height="3" rx="0.75" />
+      <rect x="5.5" y="10.5" width="13" height="3" rx="0.75" />
+      <rect x="7" y="7" width="10" height="3" rx="0.75" />
+    </svg>
+  );
+}
+
+/// Deko-Item 4/4: gerahmtes Foto.
+export function FrameIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <rect x="6" y="6" width="12" height="12" rx="1.25" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8.5 15.5 11 12l2 2.3L15.5 11l1 1.8" />
+    </svg>
+  );
+}
+
+/// Dampf über der Tasse bei "zuletzt aktiv" – rein dekorativ, animiert über
+/// `.office-steam` in globals.css, nie das einzige Statussignal.
+export function SteamIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 12 15" fill="none" stroke="currentColor" strokeWidth={1.3} className={className} aria-hidden>
+      <path strokeLinecap="round" d="M4 12c1.2-1.3-1.2-2.4 0-4M8 12c1.2-1.3-1.2-2.4 0-4" />
+    </svg>
+  );
+}
+
+/// Team arbeitet gerade: voller, blasser Ring + ein heller Bogen. Dreht sich
+/// über die vom Aufrufer gesetzte Klasse `motion-safe:animate-spin` – ohne
+/// Bewegung bleibt der Ring trotzdem als "läuft"-Symbol erkennbar.
+export function SpinnerIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" strokeOpacity="0.25" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   );
 }

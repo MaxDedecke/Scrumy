@@ -8,6 +8,12 @@
 // `effect` ist der Grund, warum ein Beschluss mehr ist als eine Notiz: Er sagt,
 // was mit der eingefrorenen Arbeit passiert.
 
+/// Wie viele zusaetzliche Anlaeufe ein Ticket bekommt, wenn ein Mensch
+/// „nochmal versuchen" beschliesst (siehe `Ticket.attemptBudget`). Bewusst
+/// hier: Der Worker legt das Budget an, die Server-Action stockt es auf, und
+/// beide Seiten sollen dieselbe Zahl meinen.
+export const TICKET_ATTEMPT_GRANT = 3;
+
 export type ClarificationEffect =
   /** Eingefrorenen Schritt wieder einreihen (bzw. den nächsten fälligen). */
   | "resume"
@@ -16,9 +22,17 @@ export type ClarificationEffect =
   /** Team hält an und wartet auf den Menschen. */
   | "stop"
   /** Sprint-Budget aufstocken und weiterarbeiten. */
-  | "budget";
+  | "budget"
+  /**
+   * Ticket ohne weiteren Anlauf als erledigt verbuchen. Anders als "resume"
+   * wird der eingefrorene Arbeitsschritt NICHT erneut eingereiht – sonst
+   * scheitert ein strukturell blockierter Schritt (z.B. eine gesperrte Datei)
+   * bei jedem Anlauf identisch wieder und erzeugt Klärung um Klärung, obwohl
+   * der Beschluss längst "schließen" lautete.
+   */
+  | "close";
 
-export const CLARIFICATION_EFFECTS: ClarificationEffect[] = ["resume", "skip", "stop", "budget"];
+export const CLARIFICATION_EFFECTS: ClarificationEffect[] = ["resume", "skip", "stop", "budget", "close"];
 
 export interface ClarificationOption {
   key: string;
@@ -32,6 +46,13 @@ export interface ClarificationOption {
 /// nicht zu den gespeicherten Optionen, weil er keine Empfehlung des Teams ist,
 /// sondern das Recht des Auftraggebers, eine eigene Antwort zu geben.
 export const OWN_OPTION_KEY = "__own";
+
+/// Der Weg, der die Entscheidung an das Team zurückgibt, statt sie selbst zu
+/// treffen. Anders als `OWN_OPTION_KEY` ist das kein Textfeld – der Klick
+/// allein muss reichen, sonst landet „entscheide du das bitte" wortwörtlich
+/// als unausführbarer Beschluss im Protokoll und die Klärung kommt genauso
+/// zurück (siehe decideClarification in actions/clarifications.ts).
+export const DELEGATE_OPTION_KEY = "__delegate";
 
 /// Wie viele Wege ein Agent höchstens vorschlagen darf. Mehr macht die
 /// Entscheidung nicht besser, nur länger.

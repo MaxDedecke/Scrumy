@@ -22,8 +22,10 @@ einer Firma:
 
 1. **Mannschaft aufstellen** – fehlende Rollen werden mit Namen besetzt
    (`src/lib/team.ts`).
-2. **Arbeitsplatz einrichten** – ein echtes lokales Git-Repository pro Projekt
-   (`src/lib/workspace.ts`), Konzept und Anforderungen landen als Dateien darin.
+2. **Arbeitsplatz einrichten** – ein hinterlegtes GitHub-Repository wird
+   geklont, andernfalls entsteht ein lokales Git-Repository
+   (`src/lib/workspace.ts`). Konzept und Anforderungen landen als Dateien
+   darin; jeder Team-Commit wird bei konfiguriertem `origin` direkt gepusht.
 3. **Auftrag verstehen** – der Product Owner schreibt `docs/verstaendnis.md`
    (Umfang, Annahmen, Risiken, offene Fragen) und committet es.
 4. **Scrum** – Sprint-Planung (Tickets + Ziel) → je Ticket: Planung, Umsetzung
@@ -59,8 +61,10 @@ deployt werden.
   der Support-Agent per Jira-Connector, der Backend-/DevOps-Agent per Git-Connector
   im Projekt-Repo. Kundenweit (`projectId` leer, z.B. das eine Jira-Postfach) oder
   projektspezifisch (z.B. genau 1 Repo). `config` enthält nur nicht-geheime
-  Verbindungsdaten; Zugangsdaten liegen über `credentialRef` in einem Secret-Store,
-  nicht in der DB. Konfiguriert wird das je Projekt unter "Team & Konnektoren".
+  Verbindungsdaten; Zugangsdaten liegen über `credentialRef` in der Umgebung
+  (z.B. `env:KUNDE_A_GITHUB_TOKEN`), nicht in der DB. Konfiguriert wird das je
+  Projekt unter "Team & Konnektoren". Pro Projekt ist höchstens ein aktiver
+  Git-Connector erlaubt.
 - **LlmProfile** – **global, nicht pro Kunde** – ein Cloud-Modell oder ein lokaler
   Ollama-Container, den Agenten zugewiesen werden. Verwaltung unter
   `/settings/llm-profiles`.
@@ -155,6 +159,122 @@ Danach einmalig seeden (falls gewünscht):
 docker compose exec app npx tsx prisma/seed.ts
 ```
 
+`scrumy_scrumy_db_data` und `scrumy_scrumy_workspaces` sind als `external`
+eingetragen (siehe Kommentar in `docker-compose.yml`) und müssen auf einem
+neuen Host einmalig existieren, bevor `docker compose up` funktioniert:
+
+```bash
+docker volume create scrumy_scrumy_db_data
+docker volume create scrumy_scrumy_workspaces
+```
+
+## GitHub-Repository anbinden
+
+In den Projekt-Einstellungen eine HTTPS-URL wie
+`https://github.com/organisation/repository.git` hinterlegen. Beim ersten
+Teamstart klont Scrumy das Repository in den Projekt-Workspace. Ist das Remote
+leer, legt Scrumy `main` samt Grund-`.gitignore` an. Danach wird jeder Commit
+des Teams automatisch nach `origin` gepusht; ein abgelehnter Push lässt den
+Arbeitsschritt sichtbar scheitern, statt nur lokal Erfolg zu melden.
+
+Für private Repositories und Schreibzugriff `GITHUB_TOKEN` in `.env` setzen.
+Geeignet ist ein Fine-grained Personal Access Token oder GitHub-App-Token mit
+`Contents: Read and write` für genau die betroffenen Repositories. Der Token
+wird über Git Askpass nur an den jeweiligen Git-Prozess gereicht und weder in
+der Remote-URL noch in `.git/config` oder der Datenbank gespeichert.
+
+Optional kann unter „Team & Konnektoren“ ein projektspezifischer, aktiver
+`GIT`-Connector angelegt werden:
+
+```json
+{"repoUrl":"https://github.com/organisation/repository.git","defaultBranch":"main"}
+```
+
+Ohne Credential-Referenz verwendet ein GitHub-Remote `env:GITHUB_TOKEN` als
+Fallback. Für getrennte Zugänge bekommen die Projekte eigene Variablen, etwa
+`KUNDE_A_GITHUB_TOKEN` und `KUNDE_B_GITHUB_TOKEN`, und der jeweilige Connector
+verweist auf `env:KUNDE_A_GITHUB_TOKEN` bzw. `env:KUNDE_B_GITHUB_TOKEN`. Der
+Worker übernimmt beliebige neue Variablennamen aus `.env`; die Compose-Datei
+muss dafür nicht erweitert werden. Nach einer Änderung an `.env` reicht es,
+den Worker neu zu erstellen.
+
+Die URL im Projektfeld hat Vorrang vor einer URL im Connector. Pro Projekt ist
+höchstens ein aktiver Git-Connector zulässig; weitere können als inaktive
+Historie bestehen bleiben. Für das Demo-Projekt kann `DEMO_REPO_URL` gesetzt
+werden; ohne diese Variable bleibt der Seed bewusst lokal und pusht nirgendwohin.
+
+## RunPod: eigenes Modell statt Cloud-Anbieter
+
+Für Testläufe mit einem selbst gehosteten Modell – z.B. um in einer
+abgerechneten GPU-Stunde zu sehen, was ein Team mit einem bestimmten Modell in
+der Zeit schafft. Zwei unabhängige Wege, **Scrumy selbst läuft dabei immer
+hier/auf dem gewohnten Host** – nur das Modell kommt von RunPod:
+
+### Weg 1: einen bereits laufenden RunPod-Endpoint einbinden (empfohlen)
+
+Wenn schon eine URL + Auth-Token für einen laufenden RunPod-Pod oder
+-Serverless-Endpoint existiert, reicht ein LLM-Profil – **kein** Deployment
+von Scrumy selbst nötig:
+
+- `/settings/llm-profiles` → neues Profil.
+- **Anbieter: „OpenAI-kompatibel“** (`GENERIC_OPENAI_COMPAT`) – **nicht**
+  „Ollama“. Der `OLLAMA`-Anbieter in diesem Dropdown ruft Ollamas *natives*
+  `/api/chat` auf und hängt nie einen Auth-Header an (siehe `src/lib/llm.ts`);
+  ein Token-geschützter Endpoint braucht den OpenAI-kompatiblen Pfad
+  (`/v1/chat/completions` + `Authorization: Bearer …`), den `OLLAMA` gar nicht
+  anspricht. Genau dieser Pfad ist es auch, den RunPods eigene
+  OpenAI-kompatible Schnittstelle erwartet.
+- **Base-URL**: die RunPod-URL **inklusive** `/v1`, z.B.
+  `https://api.runpod.ai/v2/<endpoint-id>/openai/v1` (Serverless-Endpoint) oder
+  die Proxy-URL des Pods, je nachdem was RunPod ausgegeben hat. Ohne
+  abschließenden Slash – Scrumy hängt `/chat/completions` direkt an.
+- **API-Key-Referenz**: `env:LLM_API_KEY` und den Token in `.env` als
+  `LLM_API_KEY=…` setzen (Container bekommen die Variable schon durchgereicht,
+  siehe `docker-compose.yml`) – landet dann nicht im Klartext in der DB.
+  Alternativ den Token direkt ins Feld einfügen, dann aber wie beschriftet
+  bewusst im Klartext in der DB.
+- **Modell**: exakt der Modellname, wie ihn der RunPod-Endpoint erwartet.
+
+Danach das Profil einem oder mehreren Agenten zuweisen (Projekt →
+„Team & Konnektoren“) – fertig.
+
+### Weg 2: Scrumy selbst auf einem RunPod-GPU-Pod betreiben, mit eigenem Ollama-Container
+
+Alternative, falls Scrumy nicht hier, sondern direkt auf dem GPU-Pod laufen
+soll (z.B. um Cloud-Kosten für ein Modell zu vermeiden, statt einen fremden
+Endpoint zu mieten).
+
+**Voraussetzung:** ein GPU-Pod-Template, das Docker *innerhalb* des Pods
+erlaubt (Docker-in-Docker/privilegiert, mit `nvidia-container-toolkit`). Das
+ist keine Ollama-spezifische Anforderung – `app` und `worker` brauchen den
+Docker-Socket schon für Vorschau-Container und automatische Tests (siehe
+`docker-compose.yml`). Beim Pod-Erstellen Port `3001` (Scrumy-UI) freigeben,
+`11434` (Ollama) optional für direkten Zugriff von außen.
+
+```bash
+git clone <dieses Repo> && cd Scrumy
+./docker/runpod-bootstrap.sh
+```
+
+Das Skript legt die externen Volumes an, baut den Vorschau/Test-Runner, startet
+den vollen Stack **inklusive** `ollama` (`--profile ollama`, standardmäßig
+**nicht** Teil von `docker compose up` – siehe Kommentar am Service, eine
+GPU-Reservierung würde jeden Start ohne GPU sonst scheitern lassen, dieser Weg
+bleibt also rein optional und ändert am normalen Betrieb nichts) und wartet,
+bis das in `OLLAMA_MODEL` konfigurierte Modell fertig gepullt ist
+(Standard `llama3.1:8b`, siehe `.env.example` – bei mehr VRAM ruhig größer).
+
+Danach: `docker compose exec app npm run db:seed` für einen Demo-Kunden mit
+Beispielprojekt (ein Agent ist darin schon dem lokalen Ollama-Profil
+zugewiesen), oder ohne Seed einen eigenen Kunden/Projekt anlegen und unter
+`/settings/llm-profiles` das Profil „Lokaler Ollama-Container“ prüfen bzw.
+Agenten manuell zuweisen. Modellname im Profil muss zu `OLLAMA_MODEL` passen –
+der Seed übernimmt das automatisch, ein manuell angelegtes Profil nicht.
+
+Am Ende der Stunde einfach den Pod in RunPod terminieren (dort läuft die
+Abrechnung) – `docker compose down -v` davor nur, falls Volumes/Modell-Cache
+explizit mit weg sollen.
+
 ## Worker (Job-Queue)
 
 Damit sich pro Projekt beliebig viele Agenten anlegen lassen, ohne dass Ausführung
@@ -180,9 +300,9 @@ einer separaten, horizontal skalierbaren Queue.
   `ticketWork` (planen → umsetzen → QA-Review), `sprintReview`, `teamInquiry`.
   Jeder Task reiht am Ende den nächsten ein (`worker/orchestration.ts`); ein
   pausiertes Projekt bricht die Kette beim nächsten Schritt ab.
-- `src/lib/workspace.ts` – die Git-Schicht: Repo anlegen, Dateien schreiben
+- `src/lib/workspace.ts` – die Git-Schicht: Repo klonen/anlegen, Dateien schreiben
   (mit Pfadprüfung gegen Ausbrüche aus dem Projektverzeichnis), im Namen des
-  Agenten committen, Log/Diff lesen. Die Repos liegen im Volume
+  Agenten committen, bei konfiguriertem Remote pushen, Log/Diff lesen. Die Repos liegen im Volume
   `scrumy_workspaces` (`WORKSPACE_ROOT`, Standard `/workspaces`), das sich `app`
   (liest) und `worker` (schreibt) teilen.
 - Ein Schritt dauert Minuten. Der `worker`-Service bekommt deshalb
@@ -203,7 +323,6 @@ Datenmodell, CRUD-Frontend, Discovery/Konzept-Flow und die Agenten-Orchestrierun
   eingehende Anfragen in den laufenden Sprint-Rhythmus.
 - Tests im Kundenprojekt ausführen (Build/Testlauf im Workspace) und das
   Ergebnis in den QA-Review geben, statt nur den Diff zu lesen.
-- Push in ein echtes Remote (`Project.repoUrl`) statt nur lokaler Historie.
 - Connector-Implementierungen (Jira-API-Client, E-Mail-Eingang) inkl. Status-
   Rücksync über `Ticket.externalRef`.
 - Auth & Mandantentrennung (Kunden sehen nur ihr eigenes Projekt/Postfach).

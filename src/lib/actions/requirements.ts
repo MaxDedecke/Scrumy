@@ -122,10 +122,46 @@ const GENERATE_SYSTEM_PROMPT = [
   "Du liest ein Projektkonzept und leitest daraus die Anforderungen ab, die das Entwicklungsteam umsetzen muss.",
   "Antworte ausschließlich mit einem JSON-Array, ohne Fließtext davor oder danach.",
   "Jedes Element hat die Felder: title (kurz, umsetzbar, deutsch), description (1–3 Sätze, was fachlich passieren muss),",
-  'priority (genau einer der Werte "LOW", "MEDIUM", "HIGH", "URGENT").',
-  "Schneide jede Anforderung so zu, dass ein Entwicklungsteam sie in wenigen Tagen umsetzen kann.",
+  'priority (genau einer der Werte "LOW", "MEDIUM", "HIGH", "URGENT"), acceptanceCriteria (Array aus 1–4 kurzen, konkret prüfbaren Sätzen – woran ein Tester ohne Rückfrage erkennt, dass genau DIESE Anforderung erfüllt ist).',
+  "Ein Konzept-Abschnitt beschreibt meist eine ganze Fähigkeit (z.B. \"Excel/CSV-Import\"), keine einzelne Anforderung. Zerlege jede Fähigkeit in ihre einzeln umsetz- und prüfbaren Facetten, statt sie als einen Satz zusammenzufassen – typische Facetten sind u.a.: das Kernverhalten selbst (z.B. Datei einlesen und Felder zuordnen), Konfiguration/Zuordnung (z.B. Spalten-Mapping, wenn Formate variieren können), Validierung und Fehlerbehandlung bei fehlerhaften Eingaben, wiederkehrende/geplante Ausführung (falls die Fähigkeit laut Konzept nicht nur einmalig gebraucht wird), Protokollierung/Nachvollziehbarkeit, sowie Rechte/Sichtbarkeit falls das Konzept das andeutet. Nimm nur Facetten auf, die das Konzept tatsächlich trägt – erfinde keine Facette, die weder explizit noch zwingend impliziert ist.",
+  "Beispiel für zu grob (NICHT so): title \"Excel/CSV-Import implementieren\", description \"Import von Daten aus Excel- und CSV-Dateien, wiederkehrend einsetzbar, nicht nur zur Erstbefüllung.\" Das gehört in mehrere Anforderungen aufgeteilt, z.B.: \"Datei-Upload mit Format-/Spaltenerkennung\", \"Zuordnung von Datei-Spalten zu Zielfeldern konfigurierbar machen\", \"Ungültige oder unvollständige Zeilen beim Import erkennen und melden statt sie stillschweigend zu übernehmen\", \"Wiederkehrenden Import derselben Datenquelle auslösen können, ohne die Erstbefüllung zu wiederholen\" – jede davon für sich mit eigenen Akzeptanzkriterien.",
+  "Schneide jede einzelne Anforderung so zu, dass ein Entwicklungsteam sie ohne fremde Hilfe an ein bis zwei Tagen umsetzen und anhand ihrer eigenen Akzeptanzkriterien mit Testdaten prüfen kann – nicht die ganze Fähigkeit aus dem Konzept, sondern genau die eine Facette. Enthält ein Titel mehrere große Bestandteile (erkennbar an \"und\"/Aufzählungen wie \"Import und Export\", \"Anlegen, Ändern und Löschen\"), zerlege ihn weiter.",
+  'Enthält das Konzept einen Abschnitt „Blockiert auf Zulieferung durch den Kunden" (oder ähnlich betitelt, z.B. Migration, Zugangsdaten, Provider-Auswahl), leite daraus KEINE Anforderung ab – das sind Voraussetzungen, die erst der Kunde liefern muss, keine Arbeit für das Team.',
   "Erfinde nichts, was nicht im Konzept steht oder sich zwingend daraus ergibt.",
+  "Jede Anforderung darf nur EIN Mal in der Liste vorkommen: Merge nur, wenn zwei Formulierungen exakt dasselbe Ergebnis mit anderen Worten beschreiben (reine Umformulierung, z.B. nicht separat \"Login mit E-Mail\" UND \"Anmeldung per E-Mail-Adresse\"). Zwei Anforderungen, die unterschiedliche Facetten derselben Fähigkeit abdecken und sich einzeln testen lassen (z.B. \"Import ausführen\" und \"Import wiederholbar terminieren\"), sind KEIN Duplikat und bleiben getrennt, auch wenn sie viele Wörter wie den Fähigkeitsnamen gemeinsam haben.",
 ].join(" ");
+
+/// Normalisiert einen Titel fuer den Duplikat-Vergleich: klein geschrieben,
+/// ohne Satzzeichen, einzelne Wortzwischenraeume.
+function normalizeTitle(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9äöüß\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/// Grobe Wortueberlappung (Jaccard) zwischen zwei Titeln. Reicht, um
+/// Umformulierungen wie "Grundlegende Rechenoperationen implementieren"
+/// (im echten Betrieb mehrfach mit leicht anderem Wortlaut generiert) als
+/// Duplikat zu erkennen, ohne einen weiteren LLM-Aufruf dafuer zu brauchen.
+function titleSimilarity(a: string, b: string): number {
+  const wordsA = new Set(normalizeTitle(a).split(" ").filter((w) => w.length >= 3));
+  const wordsB = new Set(normalizeTitle(b).split(" ").filter((w) => w.length >= 3));
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  const intersection = [...wordsA].filter((w) => wordsB.has(w)).length;
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return intersection / union;
+}
+
+/// Schwelle, ab der zwei Titel als dasselbe Anliegen gelten. Seit der Prompt
+/// gezielt viele kleine Facetten EINER Faehigkeit verlangt (z.B. "Import
+/// ausfuehren" und "Import terminieren"), teilen benachbarte Anforderungen
+/// absichtlich den Faehigkeitsnamen als gemeinsames Wort – bei 0.6 waeren
+/// solche gewollt getrennten Facetten faelschlich als Duplikat weggefallen.
+/// 0.82 faengt weiterhin reine Umformulierungen ab, laesst aber Titel mit nur
+/// einem gemeinsamen Kernbegriff und sonst unterschiedlichem Wortlaut stehen.
+const DUPLICATE_TITLE_THRESHOLD = 0.82;
+
+function isDuplicateTitle(title: string, against: string[]): boolean {
+  return against.some((other) => titleSimilarity(title, other) >= DUPLICATE_TITLE_THRESHOLD);
+}
 
 /// Leitet Anforderungen per LLM aus dem Konzept ab. Nutzt das Standard-Profil
 /// aus den globalen LLM-Einstellungen. Bestehende Anforderungen bleiben
@@ -185,22 +221,54 @@ export async function generateRequirementsFromConcept(formData: FormData): Promi
   }
 
   const priorities: Priority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];
+  const MAX_CRITERIA_PER_REQUIREMENT = 4;
+  // Duplikate faengt der Prompt oben nur an, wenn das Modell sich daran haelt
+  // – zuverlaessig ist nur eine Pruefung danach. `seenTitles` waechst mit
+  // jeder uebernommenen Anforderung, damit auch Duplikate INNERHALB derselben
+  // Modellantwort erkannt werden, nicht nur gegen den alten Bestand.
+  const seenTitles = existing.map((r) => r.title);
+  let skippedDuplicates = 0;
   const parsed = items.flatMap((item) => {
     if (typeof item !== "object" || item === null) return [];
     const record = item as Record<string, unknown>;
     const title = typeof record.title === "string" ? record.title.trim() : "";
     if (!title) return [];
-    const description =
+    if (isDuplicateTitle(title, seenTitles)) {
+      skippedDuplicates += 1;
+      return [];
+    }
+    seenTitles.push(title);
+    const baseDescription =
       typeof record.description === "string" && record.description.trim().length > 0
         ? record.description.trim()
-        : null;
+        : "";
+    // Akzeptanzkriterien haben (wie bei Tickets, siehe sprintPlanning.ts) kein
+    // eigenes DB-Feld, sondern werden als Markdown-Abschnitt in die
+    // Beschreibung eingebettet – gleiche Darstellung, ein Textfeld zum Lesen.
+    const criteria = Array.isArray(record.acceptanceCriteria)
+      ? record.acceptanceCriteria
+          .map((entry) => String(entry).trim())
+          .filter(Boolean)
+          .slice(0, MAX_CRITERIA_PER_REQUIREMENT)
+      : [];
+    const description =
+      [
+        baseDescription,
+        criteria.length > 0 ? `## Akzeptanzkriterien\n${criteria.map((entry) => `- ${entry}`).join("\n")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n") || null;
     const raw = typeof record.priority === "string" ? record.priority.toUpperCase() : "";
     const priority = (priorities as string[]).includes(raw) ? (raw as Priority) : "MEDIUM";
     return [{ projectId, title, description, priority, source: "GENERATED" as const }];
   });
 
   if (parsed.length === 0) {
-    return fail("Das Modell hat keine verwertbaren Anforderungen geliefert.");
+    return fail(
+      skippedDuplicates > 0
+        ? "Das Modell hat nur Anforderungen geliefert, die inhaltlich schon vorhanden sind."
+        : "Das Modell hat keine verwertbaren Anforderungen geliefert.",
+    );
   }
 
   await prisma.$transaction([
@@ -211,7 +279,8 @@ export async function generateRequirementsFromConcept(formData: FormData): Promi
         projectId,
         actor: "Product-Owner-Agent",
         action: "requirements_generated",
-        detail: `${parsed.length} Anforderungen aus dem Konzept abgeleitet (${profile.name})`,
+        detail: `${parsed.length} Anforderungen aus dem Konzept abgeleitet (${profile.name})` +
+          (skippedDuplicates > 0 ? `, ${skippedDuplicates} inhaltliche Duplikate übersprungen` : ""),
       },
     }),
   ]);
@@ -220,7 +289,10 @@ export async function generateRequirementsFromConcept(formData: FormData): Promi
   revalidatePath(`/projects/${projectId}`);
 
   return ok(
-    `${parsed.length} Anforderung${parsed.length === 1 ? "" : "en"} erzeugt mit „${profile.name}“. Bitte prüfen.`,
+    `${parsed.length} Anforderung${parsed.length === 1 ? "" : "en"} erzeugt mit „${profile.name}“. Bitte prüfen.` +
+      (skippedDuplicates > 0
+        ? ` (${skippedDuplicates} inhaltliche${skippedDuplicates === 1 ? "s" : ""} Duplikat${skippedDuplicates === 1 ? "" : "e"} übersprungen)`
+        : ""),
   );
 }
 

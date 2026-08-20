@@ -1,4 +1,7 @@
-import type { ReactNode } from "react";
+"use client";
+
+import { useState, type ReactNode } from "react";
+import { ChevronRightIcon } from "@/components/icons";
 
 // Panel: die Flächenform der Projektseiten.
 //
@@ -11,6 +14,17 @@ import type { ReactNode } from "react";
 // Aufbau: fester Kopf (Titel, Zähler, Aktionen) – scrollender Rumpf – fester
 // Fuß (Formular/Buttons, die nicht weglaufen dürfen). Unter lg hebt <PanelGrid>
 // die Höhenbegrenzung auf, dann wächst das Panel wieder mit seinem Inhalt.
+//
+// `collapsible`/`collapsedView`: Ein Panel lässt sich per Icon neben dem Titel
+// einklappen – dann bleibt nur der Kopf (plus `collapsedView`, eine knappe
+// Zusammenfassung) stehen, Rumpf und Fuß verschwinden. Wichtig: Das Panel
+// klappt nur in der HÖHE ein (`flex-none` statt `flex-1`), nie in der Breite –
+// die Spaltenbreite gibt weiterhin <PanelGrid> vor. Von der frei werdenden
+// Höhe profitiert ausschließlich das Panel in derselben Spalte, weil die
+// aufrufende Seite die beiden gestapelten Panels einer Spalte in eine eigene
+// Flex-Spalte packt statt sie eine gemeinsame Grid-Zeile teilen zu lassen –
+// sonst schrumpfte mit dem eingeklappten Panel auch das Nachbarpanel der
+// anderen Spalte in derselben Zeile mit.
 export function Panel({
   title,
   count,
@@ -24,6 +38,15 @@ export function Panel({
   /** Innenabstand des Rumpfs – für randlose Listen auf `false`. */
   padded = true,
   tone,
+  /** Blendet das Einklapp-Icon ein. Ohne `collapsedView` bleibt beim
+   *  Einklappen nur der Kopf stehen. */
+  collapsible = false,
+  /** Was im eingeklappten Zustand statt Rumpf/Fuß steht – knapp, ohne
+   *  eigenes Scrollen. */
+  collapsedView,
+  /** Eingeklappt starten (z.B. für Panels, die selten die Aufmerksamkeit
+   *  brauchen). Standard: aufgeklappt. */
+  defaultCollapsed = false,
 }: {
   title: string;
   count?: number;
@@ -35,14 +58,31 @@ export function Panel({
   padded?: boolean;
   /** `attention` hebt Panels hervor, die auf eine Entscheidung warten. */
   tone?: "attention";
+  collapsible?: boolean;
+  collapsedView?: ReactNode;
+  defaultCollapsed?: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
   return (
     <section
-      className={`card flex min-h-0 min-w-0 flex-col overflow-hidden ${
-        tone === "attention" ? "border-accent-border" : ""
-      } ${className}`}
+      className={`card flex min-w-0 flex-col overflow-hidden ${
+        collapsible ? (collapsed ? "min-h-0 shrink-0" : "min-h-0 flex-1") : "min-h-0"
+      } ${tone === "attention" ? "border-accent-border" : ""} ${className}`}
     >
       <div className="flex h-11 shrink-0 items-center gap-2.5 border-b border-hairline px-4">
+        {collapsible && (
+          <button
+            type="button"
+            onClick={() => setCollapsed((value) => !value)}
+            title={collapsed ? "Aufklappen" : "Einklappen"}
+            aria-label={collapsed ? "Aufklappen" : "Einklappen"}
+            aria-expanded={!collapsed}
+            className="-ml-1 shrink-0 rounded p-1 text-ink-3 transition-colors hover:bg-surface-3 hover:text-ink"
+          >
+            <ChevronRightIcon className={`h-3.5 w-3.5 transition-transform ${collapsed ? "" : "rotate-90"}`} />
+          </button>
+        )}
         <h2 className="section-title truncate">{title}</h2>
         {typeof count === "number" && (
           <span className="shrink-0 rounded-full bg-surface-3 px-1.5 text-[11px] font-medium tabular-nums text-ink-3">
@@ -52,16 +92,22 @@ export function Panel({
         {action && <div className="ml-auto flex shrink-0 items-center gap-2 text-xs">{action}</div>}
       </div>
 
-      <div
-        className={`flex min-h-0 flex-1 flex-col ${scroll ? "overflow-y-auto" : "overflow-hidden"} ${
-          padded ? "p-4" : ""
-        }`}
-      >
-        {children}
-      </div>
+      {collapsible && collapsed ? (
+        collapsedView && <div className="min-h-0 shrink-0">{collapsedView}</div>
+      ) : (
+        <>
+          <div
+            className={`flex min-h-0 flex-1 flex-col ${scroll ? "overflow-y-auto" : "overflow-hidden"} ${
+              padded ? "p-4" : ""
+            }`}
+          >
+            {children}
+          </div>
 
-      {footer && (
-        <div className="shrink-0 border-t border-hairline bg-surface-2/40 px-4 py-3">{footer}</div>
+          {footer && (
+            <div className="shrink-0 border-t border-hairline bg-surface-2/40 px-4 py-3">{footer}</div>
+          )}
+        </>
       )}
     </section>
   );
@@ -87,6 +133,14 @@ export function PanelGrid({
       {children}
     </div>
   );
+}
+
+// Spalte innerhalb von <PanelGrid> mit zwei oder mehr gestapelten Panels.
+// Eigene Flex-Spalte statt gemeinsamer Grid-Zeile mit der Nachbarspalte:
+// Klappt ein Panel hier ein, wächst nur sein Stapel-Nachbar in dieser Spalte
+// in die frei werdende Höhe – die andere Spalte bleibt unberührt.
+export function PanelStack({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`flex min-h-0 flex-col gap-4 ${className}`}>{children}</div>;
 }
 
 // Schmaler Streifen über dem Raster (Kennzahlen, Statuszeile, Hinweis). Nimmt

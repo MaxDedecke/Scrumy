@@ -14,6 +14,7 @@ import { commitAll, ensureRepo, writeFiles } from "@/lib/workspace";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { handOverTo, loadWorkingProject } from "../orchestration";
+import { remoteSettingsForProject } from "../projectRepository";
 import type { TeamKickoffPayload } from "../taskTypes";
 
 const teamKickoff: Task<"teamKickoff"> = async (payload: TeamKickoffPayload, helpers) => {
@@ -36,7 +37,8 @@ const teamKickoff: Task<"teamKickoff"> = async (payload: TeamKickoffPayload, hel
   });
 
   // --- 1. Arbeitsplatz einrichten -------------------------------------------
-  const { dir, created } = await ensureRepo(projectId);
+  const remote = await remoteSettingsForProject(project);
+  const { dir, created, cloned } = await ensureRepo(projectId, remote);
   if (project.workspacePath !== dir) {
     await prisma.project.update({ where: { id: projectId }, data: { workspacePath: dir } });
   }
@@ -44,8 +46,12 @@ const teamKickoff: Task<"teamKickoff"> = async (payload: TeamKickoffPayload, hel
     projectId,
     actor: agent.name,
     agentId: agent.id,
-    action: created ? "repo_created" : "repo_reused",
-    detail: created ? `Lokales Git-Repository angelegt (${dir})` : `Bestehendes Repository weiterverwendet (${dir})`,
+    action: cloned ? "repo_cloned" : created ? "repo_created" : "repo_reused",
+    detail: cloned
+      ? `Git-Repository von ${remote?.remoteUrl} geklont (${dir})`
+      : created
+        ? `Lokales Git-Repository angelegt (${dir})`
+        : `Bestehendes Repository weiterverwendet (${dir})`,
   });
 
   // --- 2. Auftragsunterlagen ins Repo ---------------------------------------
@@ -113,7 +119,7 @@ Schreibe das Dokument "Projektverständnis" als Markdown (ohne Code-Fence drumhe
 ## Umfang (was gehört dazu – und was ausdrücklich nicht)
 ## Fachliche Kernbegriffe
 ## Technischer Rahmen
-(Vorschlag für Technologie und Architektur, passend zu Konzept und Anforderungen – begründet, aber knapp.)
+(Technologie und Container-Zuschnitt, passend zu Konzept und Anforderungen – begründet, aber knapp. Docker-Compose mit einem Container je Dienst ist der Standard aus den Grundregeln; nenne konkret, welche Dienste es geben wird, und in welchem Verzeichnis ein etwaiges Frontend liegt. Weichst du davon ab, nenne ausdrücklich, welche der drei Ausnahmen aus den Grundregeln greift.)
 ## Annahmen
 (Was wir annehmen, weil es im Auftrag nicht steht.)
 ## Risiken

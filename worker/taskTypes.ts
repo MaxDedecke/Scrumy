@@ -52,6 +52,39 @@ export interface ClarificationPrepPayload {
   reason: string;
 }
 
+/** Product Owner prüft eine vorbereitete Klärung: selbst entscheiden oder dem
+ *  Auftraggeber vorlegen (siehe worker/tasks/clarificationTriage.ts). */
+export interface ClarificationTriagePayload {
+  agentId: string;
+  projectId: string;
+  clarificationId: string;
+  reason: string;
+  /** Der Auftraggeber hat „Team soll entscheiden" gewählt: kein Vorlegen mehr
+   *  erlaubt, selbst wenn die Klärung als kritisch gilt. */
+  forceDecide?: boolean;
+}
+
+/** Product Owner prüft eine angefragte Freigabe: selbst freigeben/zur
+ *  Nachbesserung zurückschicken oder dem Auftraggeber vorlegen (siehe
+ *  worker/tasks/reviewTriage.ts). */
+export interface ReviewTriagePayload {
+  agentId: string;
+  projectId: string;
+  reviewId: string;
+  reason: string;
+  /** Der Auftraggeber hat „Team soll entscheiden" gewählt: kein Vorlegen mehr
+   *  erlaubt, selbst wenn das Ticket als kritisch gilt. */
+  forceDecide?: boolean;
+}
+
+/** Auftraggeber stößt den Product Owner von Hand an: Projekt auf unklare oder
+ *  undefinierte Zustände prüfen und Ordnung schaffen (siehe worker/tasks/poSweep.ts). */
+export interface PoSweepPayload {
+  agentId: string;
+  projectId: string;
+  reason: string;
+}
+
 declare global {
   // Von graphile-worker vorgegebener Mechanismus fuer typisierte Task-Payloads
   // (Declaration Merging), kein selbst gewaehltes Namespace-Pattern.
@@ -64,6 +97,9 @@ declare global {
       sprintReview: SprintReviewPayload;
       teamInquiry: TeamInquiryPayload;
       clarificationPrep: ClarificationPrepPayload;
+      clarificationTriage: ClarificationTriagePayload;
+      reviewTriage: ReviewTriagePayload;
+      poSweep: PoSweepPayload;
     }
   }
 }

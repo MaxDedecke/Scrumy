@@ -33,6 +33,10 @@
   --color-accent-soft: rgba(122, 165, 247, 0.12);
   --color-accent-border: rgba(122, 165, 247, 0.32);
 
+  /* Marke: das giftgrüne S im Logo – bewusst getrennt vom UI-Akzent (Blau),
+     nur fürs Wortmarken-Icon in der Kopfzeile. */
+  --color-brand: #c6ff0a;
+
   /* Feste Status-Palette (nie für Kategorien wiederverwendet). */
   --color-good: #35c05a;
   --color-warning: #fab219;
@@ -217,8 +221,243 @@
     }
   }
 
+  /* -------------------------------------------------------------------
+     Büroplan (AgentWorkspacePanel, Ansicht "office"): ein Raum statt eines
+     Icon-Rasters. Fensterband + Bodenlinien sind reine Atmosphäre, unabhängig
+     von der Agentenzahl. `--office-desk*` sind bewusst nur hier lokal
+     definiert (aus --color-surface-3 abgeleitet) statt im @theme oben – ein
+     einmaliger Holzton fürs Bürobild, kein neues App-weites Token.
+     ------------------------------------------------------------------- */
+  .office-room {
+    --office-desk: color-mix(in oklab, var(--color-surface-3) 82%, #8a6a3c 18%);
+    --office-desk-edge: color-mix(in oklab, var(--office-desk) 80%, white 8%);
+    position: relative;
+    overflow: hidden;
+    background:
+      linear-gradient(var(--color-accent-soft), transparent 30%),
+      repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 28px),
+      var(--color-surface);
+  }
+
+  .office-room::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--color-hairline-strong);
+  }
+
+  /* Feste zwei Zeilen statt frei wachsender Reihen: die Spaltenzahl kommt
+     inline vom Panel (Math.ceil(Agentenzahl / 2)), hier steht nur noch die
+     Zeilenhöhe fest. Reicht die Breite nicht, scrollt der Tisch-Bereich
+     horizontal statt eine dritte Zeile anzufangen. */
+  .office-desks {
+    display: grid;
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row;
+    gap: 1.125rem 0.875rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+
+  .office-desk {
+    transition:
+      transform 150ms ease,
+      background-color 150ms ease;
+  }
+
+  .office-desk:hover {
+    transform: translateY(-2px);
+    background-color: rgba(255, 255, 255, 0.02);
+  }
+
+  .office-desk-surface {
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    bottom: 0.75rem;
+    height: 0.875rem;
+    background: var(--office-desk);
+    border: 1px solid var(--color-hairline);
+    border-top-color: var(--office-desk-edge);
+    border-radius: 0.25rem;
+  }
+
+  .office-chair {
+    position: absolute;
+    left: 50%;
+    bottom: -0.125rem;
+    color: var(--color-ink-4);
+    transition: transform 220ms ease;
+  }
+
+  .office-desk[data-state="working"] .office-chair {
+    transform: translate(-50%, 0) scale(0.92);
+  }
+
+  .office-desk[data-state="idle"] .office-chair {
+    transform: translate(-115%, 0) rotate(-18deg);
+  }
+
+  .office-desk[data-state="fresh"] .office-chair {
+    transform: translate(-50%, 0);
+    opacity: 0.6;
+  }
+
+  .office-monitor-foot {
+    position: absolute;
+    left: 50%;
+    bottom: 1.25rem;
+    transform: translateX(-50%);
+    width: 0.5rem;
+    height: 0.1875rem;
+    background: var(--color-ink-4);
+    border-radius: 1px;
+  }
+
+  .office-monitor {
+    position: absolute;
+    left: 50%;
+    bottom: 1.5rem;
+    transform: translateX(-50%);
+    width: 2.25rem;
+    height: 1.625rem;
+    border-radius: 0.25rem;
+    border: 1.5px solid var(--color-ink-4);
+    background: var(--color-surface-2);
+    transition:
+      box-shadow 220ms ease,
+      border-color 220ms ease,
+      background-color 220ms ease;
+  }
+
+  .office-desk[data-state="working"] .office-monitor {
+    border-color: var(--color-good);
+    background: color-mix(in oklab, var(--color-good) 55%, var(--color-surface-2));
+    box-shadow: 0 0 0.5rem color-mix(in oklab, var(--color-good) 55%, transparent);
+  }
+
+  .office-dots {
+    position: absolute;
+    left: 50%;
+    bottom: 1.9375rem;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 0.125rem;
+  }
+
+  .office-dots span {
+    width: 0.1875rem;
+    height: 0.1875rem;
+    border-radius: 9999px;
+    background: color-mix(in oklab, var(--color-canvas) 65%, transparent);
+    animation: office-blink 1.2s ease-in-out infinite;
+  }
+
+  .office-dots span:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+
+  .office-dots span:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+
+  @keyframes office-blink {
+    0%,
+    80%,
+    100% {
+      opacity: 0.25;
+    }
+    40% {
+      opacity: 1;
+    }
+  }
+
+  .office-person {
+    position: absolute;
+    left: 50%;
+    color: var(--color-good);
+    transition:
+      transform 220ms ease,
+      opacity 220ms ease;
+  }
+
+  .office-desk[data-state="working"] .office-person {
+    bottom: 1.75rem;
+    transform: translateX(-50%) scale(0.85);
+  }
+
+  .office-desk[data-state="idle"] .office-person {
+    bottom: -0.0625rem;
+    transform: translateX(-135%);
+    opacity: 0.85;
+  }
+
+  .office-desk[data-state="fresh"] .office-person {
+    bottom: -0.0625rem;
+    transform: translateX(-50%);
+    opacity: 0.55;
+  }
+
+  /* Deko-Item (Pflanze/Tasse/Bücherstapel/Bild) – deterministisch aus der
+     Agenten-ID gewählt, siehe agentDecor() im Panel. Sekundär, tritt nie
+     gegen die Statusfarben des Monitors an. */
+  .office-decor {
+    position: absolute;
+    bottom: 1.4375rem;
+    color: var(--color-ink-4);
+  }
+
+  .office-decor.corner-left {
+    left: 9%;
+  }
+
+  .office-decor.corner-right {
+    right: 9%;
+  }
+
+  .office-steam {
+    position: absolute;
+    bottom: 2.1rem;
+    color: var(--color-ink-4);
+    opacity: 0.55;
+  }
+
+  .office-steam path {
+    animation: office-drift 2.8s ease-in-out infinite;
+    transform-origin: bottom center;
+  }
+
+  @keyframes office-drift {
+    0%,
+    100% {
+      transform: translateY(0) scaleY(1);
+      opacity: 0.5;
+    }
+    50% {
+      transform: translateY(-2px) scaleY(1.08);
+      opacity: 0.85;
+    }
+  }
+
+  .office-nameplate {
+    background: var(--color-surface-3);
+    border: 1px solid var(--color-hairline-strong);
+  }
+
+  .office-desk[data-state="fresh"] .office-nameplate {
+    color: var(--color-ink-2);
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .toast-enter {
+      animation: none;
+    }
+
+    .office-dots span,
+    .office-steam path {
       animation: none;
     }
   }

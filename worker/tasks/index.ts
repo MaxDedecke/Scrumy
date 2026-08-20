@@ -14,6 +14,7 @@
 import type { Task, TaskList } from "graphile-worker";
 import { prisma } from "@/lib/prisma";
 import "../taskTypes";
+import { AgentRunError } from "../agentRun";
 import { openClarification } from "../clarification";
 import teamKickoff from "./teamKickoff";
 import sprintPlanning from "./sprintPlanning";
@@ -21,6 +22,9 @@ import ticketWork from "./ticketWork";
 import sprintReview from "./sprintReview";
 import teamInquiry from "./teamInquiry";
 import clarificationPrep from "./clarificationPrep";
+import clarificationTriage from "./clarificationTriage";
+import reviewTriage from "./reviewTriage";
+import poSweep from "./poSweep";
 
 /// Woran der Mensch im Buero erkennt, welcher Schritt gescheitert ist.
 const STEP_LABEL: Record<string, string> = {
@@ -89,6 +93,7 @@ async function raiseClarification(
 ): Promise<void> {
   const chain = (payload ?? {}) as ChainPayload;
   const message = error instanceof Error ? error.message : String(error);
+  const tokenLimit = error instanceof AgentRunError && error.code === "TOKEN_LIMIT";
   const ticket = chain.ticketId
     ? await prisma.ticket.findUnique({ where: { id: chain.ticketId }, select: { title: true } })
     : null;
@@ -104,10 +109,26 @@ async function raiseClarification(
     sprintId: chain.sprintId ?? null,
     raisedById: chain.agentId ?? null,
     question: ticket
-      ? `„${ticket.title}": Die Umsetzung ist auch im letzten Anlauf abgebrochen. Wie sollen wir weitermachen?`
+      ? tokenLimit
+        ? `„${ticket.title}": Der Arbeitsschritt ist trotz automatischer Verkleinerung am Token-Limit gescheitert.`
+        : `„${ticket.title}": Die Umsetzung ist auch im letzten Anlauf abgebrochen. Wie sollen wir weitermachen?`
       : `Der Schritt „${step}" ist auch im letzten Anlauf abgebrochen. Wie sollen wir weitermachen?`,
     context: `Schritt: ${step}\nAbbruchgrund: ${message}`,
+    options: tokenLimit
+      ? [
+          {
+            key: "resume",
+            label: "Erneut technisch zerlegen",
+            detail: "Scrumy versucht den Schritt nochmals mit dem kompakten Kontext- und Zerlegungsweg.",
+            effect: "resume",
+          },
+          { key: "stop", label: "Team anhalten", effect: "stop" },
+        ]
+      : undefined,
     resume: { task: identifier, payload },
+    // Zu einem technischen Limit soll der Scrum Master keine vermeintlich
+    // fachlichen Wege oder nicht konfigurierte Modellwechsel erfinden.
+    prepare: !tokenLimit,
   });
 }
 
@@ -117,8 +138,14 @@ export const taskList: TaskList = {
   ticketWork: withClarification("ticketWork", ticketWork) as Task,
   sprintReview: withClarification("sprintReview", sprintReview) as Task,
   // Bewusst ohne Umschlag: Eine unbeantwortete Rueckfrage steht sichtbar im
-  // Buero, und eine gescheiterte Entscheidungsvorlage darf keine zweite
-  // Klaerung ausloesen.
+  // Buero, und eine gescheiterte Entscheidungsvorlage oder -pruefung darf
+  // keine zweite Klaerung ausloesen.
   teamInquiry: teamInquiry as Task,
   clarificationPrep: clarificationPrep as Task,
+  clarificationTriage: clarificationTriage as Task,
+  reviewTriage: reviewTriage as Task,
+  // Bewusst ohne Umschlag: Ein von Hand angestoßener Klarheits-Check ist kein
+  // Glied der Arbeitskette – scheitert er, gibt es keinen eingefrorenen
+  // Schritt, den eine Klärung wieder aufnehmen müsste.
+  poSweep: poSweep as Task,
 };

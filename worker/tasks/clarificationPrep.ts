@@ -14,8 +14,10 @@
 import type { Task } from "graphile-worker";
 import { prisma } from "@/lib/prisma";
 import { extractJsonObject } from "@/lib/llm";
+import { agentForRole } from "@/lib/team";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
+import { enqueueAgentJob } from "../queue";
 import {
   CLARIFICATION_EFFECTS,
   readOptions,
@@ -69,12 +71,13 @@ Jeder Weg braucht eine Wirkung ("effect"), damit Scrumy den Beschluss ausführen
 - "skip": Das betroffene Ticket geht zurück in den Backlog, der Sprint läuft ohne es weiter.
 - "stop": Das Team hält an und wartet auf den Auftraggeber.
 - "budget": Nur wenn es um die Sprint-Obergrenze geht – Budget aufstocken und weiterarbeiten.
+- "close": Nur wenn es ein Ticket betrifft und der Weg heißt "das Ticket ohne weiteren Anlauf abschließen" – z.B. weil das eigentlich Geforderte schon woanders erledigt ist und nur ein Formalschritt fehlt, der sich nicht sauber automatisieren lässt. Verwechsle das NICHT mit "resume": "resume" versucht den blockierten Schritt erneut (sinnvoll bei einem einmaligen Fehler), "close" beendet ihn endgültig. Schlägst du "close" für einen Weg vor, der eigentlich nur "nochmal versuchen" meint, scheitert der nächste Anlauf ggf. identisch wieder.
 
 Antworte nur mit diesem JSON-Objekt:
 {
   "lage": "höchstens drei Sätze",
   "optionen": [
-    { "label": "kurzer Titel des Wegs", "detail": "was das konkret heißt, mit Für und Wider in 1-2 Sätzen", "effect": "resume | skip | stop | budget" }
+    { "label": "kurzer Titel des Wegs", "detail": "was das konkret heißt, mit Für und Wider in 1-2 Sätzen", "effect": "resume | skip | stop | budget | close" }
   ],
   "empfehlung": "Welchen Weg du empfiehlst und warum – ein bis zwei Sätze."
 }`,
@@ -107,6 +110,20 @@ Antworte nur mit diesem JSON-Objekt:
       action: "clarification_prepared",
       detail: `Entscheidungsvorlage für „${clarification.question.slice(0, 160)}" (${options.length} Wege)`,
     });
+
+    // Bevor die Klärung dem Auftraggeber vorgelegt wird, prüft der Product
+    // Owner, ob sie nicht schon jetzt entschieden werden kann (siehe
+    // clarificationTriage). Ohne besetzte Rolle bleibt es beim bisherigen Weg:
+    // Die Agenda steht, der Mensch entscheidet.
+    const productOwner = await agentForRole(projectId, "PRODUCT_OWNER");
+    if (productOwner) {
+      await enqueueAgentJob("clarificationTriage", {
+        agentId: productOwner.id,
+        projectId,
+        clarificationId,
+        reason: "Klärung vor Vorlage geprüft",
+      });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     helpers.logger.error(`Klärung ${clarificationId} konnte nicht vorbereitet werden: ${message}`);

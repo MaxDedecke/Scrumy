@@ -13,6 +13,7 @@ import { ActionForm } from "@/components/ActionForm";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Panel, PanelEmpty, PanelGrid } from "@/components/Panel";
 import { Disclosure, formGridClass } from "@/components/Disclosure";
+import { ConceptTemplateMenu } from "@/components/ConceptTemplateMenu";
 import { GenerateRequirementsButton } from "@/components/GenerateRequirementsButton";
 import { CheckIcon, PaperclipIcon, TrashIcon } from "@/components/icons";
 import {
@@ -21,14 +22,8 @@ import {
   deleteRequirement,
   reopenRequirements,
 } from "@/lib/actions/requirements";
-import {
-  applyConceptTemplate,
-  releaseConcept,
-  reopenConcept,
-  saveConceptDraft,
-} from "@/lib/actions/concept";
+import { releaseConcept, reopenConcept, saveConceptDraft } from "@/lib/actions/concept";
 import { startTeam } from "@/lib/actions/team";
-import { CONCEPT_TEMPLATES, CONCEPT_TEMPLATE_CATEGORIES } from "@/lib/conceptTemplates";
 import {
   buttonPrimaryClass,
   buttonSecondaryClass,
@@ -92,17 +87,20 @@ export default async function ProjectDiscoveryPage({
         className="lg:row-span-2"
         scroll={false}
         action={
-          project.concept && (
-            <span
-              className={`${
-                conceptReleased ? CONCEPT_STATUS_PILL.FINALIZED : CONCEPT_STATUS_PILL.DRAFT
-              } pill-dot`}
-            >
-              {conceptReleased
-                ? `Version ${latestVersion.version} freigegeben`
-                : CONCEPT_STATUS_LABEL.DRAFT}
-            </span>
-          )
+          <>
+            {project.concept && (
+              <span
+                className={`${
+                  conceptReleased ? CONCEPT_STATUS_PILL.FINALIZED : CONCEPT_STATUS_PILL.DRAFT
+                } pill-dot`}
+              >
+                {conceptReleased
+                  ? `Version ${latestVersion.version} freigegeben`
+                  : CONCEPT_STATUS_LABEL.DRAFT}
+              </span>
+            )}
+            <ConceptTemplateMenu projectId={project.id} hasConceptContent={hasConceptContent} />
+          </>
         }
         footer={
           <div className="space-y-2.5">
@@ -155,53 +153,6 @@ export default async function ProjectDiscoveryPage({
             </div>
 
             <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
-              <details className="min-w-0">
-                <summary className="disclosure-summary text-xs">
-                  Aus Vorlage starten ({CONCEPT_TEMPLATES.length})
-                </summary>
-                <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-hairline p-3">
-                  <p className="mb-4 text-xs leading-relaxed text-ink-3">
-                    Jede Vorlage füllt das Konzeptfeld mit einem Entwurf für die Ablösung des jeweiligen
-                    Produkts: Ausgangslage, Ziel, Kernmodule, bewusste Abgrenzung und offene Punkte.
-                    {hasConceptContent && " Ein vorhandener Entwurf wird dabei überschrieben."}
-                  </p>
-                  <ActionForm action={applyConceptTemplate} className="space-y-4">
-                    <input type="hidden" name="projectId" value={project.id} />
-                    {CONCEPT_TEMPLATE_CATEGORIES.map((category) => {
-                      const templates = CONCEPT_TEMPLATES.filter((t) => t.category === category);
-                      if (templates.length === 0) return null;
-                      return (
-                        <div key={category}>
-                          <h3 className="section-title mb-2">{category}</h3>
-                          <div className="grid gap-2 sm:grid-cols-2">
-                            {templates.map((template) => (
-                              <ConfirmButton
-                                key={template.id}
-                                name="templateId"
-                                value={template.id}
-                                confirmText={
-                                  hasConceptContent
-                                    ? `Vorhandenen Konzept-Entwurf durch die Vorlage „${template.name}" ersetzen?`
-                                    : null
-                                }
-                                className="card-interactive block p-2.5 text-left"
-                              >
-                                <span className="block text-sm font-medium text-ink">
-                                  Eigenes {template.name}
-                                </span>
-                                <span className="mt-0.5 block text-xs leading-relaxed text-ink-3">
-                                  {template.what}
-                                </span>
-                              </ConfirmButton>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </ActionForm>
-                </div>
-              </details>
-
               {versions.length > 0 && (
                 <details className="min-w-0">
                   <summary className="disclosure-summary text-xs">
@@ -311,7 +262,9 @@ export default async function ProjectDiscoveryPage({
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-ink">{req.title}</p>
                     {req.description && (
-                      <p className="mt-0.5 text-xs leading-relaxed text-ink-3">{req.description}</p>
+                      <p className="mt-0.5 whitespace-pre-line break-words text-xs leading-relaxed text-ink-3">
+                        {req.description}
+                      </p>
                     )}
                   </div>
                   <ActionForm action={deleteRequirement}>

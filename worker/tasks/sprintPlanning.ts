@@ -4,13 +4,19 @@
 // Tickets und gibt dem Sprint ein Ziel. Wenn aus seiner Sicht alles aus
 // Konzept und Anforderungen umgesetzt ist, sagt er das ausdrücklich – dann
 // hört das Team auf, statt sich Arbeit auszudenken.
+//
+// Zwei Quellen VOR neuen Tickets aus dem Konzept: zurückgestellte Tickets
+// (siehe `pulled` unten) und offene Kundenanfragen (siehe `openRequests`).
+// Beide sind deterministisch, nicht dem Modell überlassen – es kennt weder
+// den Backlog noch das Support-Postfach zuverlässig und würde sonst leicht
+// Doppelgänger erfinden.
 import type { Task } from "graphile-worker";
 import { prisma } from "@/lib/prisma";
 import { extractJsonObject } from "@/lib/llm";
 import { commitAll, writeFiles } from "@/lib/workspace";
 import { agentForRole, roleForTicket } from "@/lib/team";
-import { PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
-import type { Priority, TicketType } from "@/generated/prisma/client";
+import { PRIORITY_LABEL, SUPPORT_CHANNEL_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
+import type { Priority, Ticket, TicketType } from "@/generated/prisma/client";
 import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { continueSprint, loadWorkingProject } from "../orchestration";
@@ -19,7 +25,20 @@ import type { SprintPlanningPayload } from "../taskTypes";
 
 /// Wie viele Tickets ein Sprint hoechstens bekommt. Kleine Sprints halten die
 /// Rueckmeldeschleife zum Menschen kurz – er sieht frueher, wohin es laeuft.
+/// Zurueckgestellte Tickets zaehlen mit: Sie belegen Plaetze, bevor ueberhaupt
+/// ein neues Ticket aus dem Konzept entsteht.
 const MAX_TICKETS_PER_SPRINT = 5;
+
+/// Wie viele offene Kundenanfragen dem Product Owner zur Pruefung vorgelegt
+/// werden. Mehr wuerde den Prompt fluten, ohne dass in einem Sprint ohnehin
+/// Platz fuer mehr Tickets waere.
+const MAX_SUPPORT_REQUESTS_IN_PROMPT = 8;
+
+/// Reihenfolge, in der zurueckgestellte Tickets wieder gezogen werden –
+/// dieselbe Rangfolge wie beim Ziehen vom Board (siehe `nextOpenTicket`),
+/// nur zusaetzlich nach Prioritaet sortiert, da hier (anders als innerhalb
+/// eines laufenden Sprints) mehr Tickets warten koennen, als Platz ist.
+const PRIORITY_RANK: Record<Priority, number> = { URGENT: 3, HIGH: 2, MEDIUM: 1, LOW: 0 };
 
 /// Um wie viele Sprints der Auftraggeber das Budget aufstockt, wenn er nach
 /// dem Aufbrauchen weiterarbeiten laesst.
@@ -33,6 +52,32 @@ interface PlannedTicket {
   estimate?: unknown;
   role?: unknown;
   critical?: unknown;
+  acceptanceCriteria?: unknown;
+  likelyFiles?: unknown;
+  dependsOn?: unknown;
+  /// 1-basierter Index in die im Prompt gelistete Kundenanfragen-Liste, wenn
+  /// dieses Ticket direkt aus einer der Anfragen stammt.
+  anfrageNr?: unknown;
+}
+
+const MAX_FILES_PER_TICKET = 4;
+const MAX_CRITERIA_PER_TICKET = 4;
+
+function stringList(value: unknown, limit: number): string[] {
+  return Array.isArray(value)
+    ? value.map((entry) => String(entry).trim()).filter(Boolean).slice(0, limit)
+    : [];
+}
+
+function atomicityIssues(ticket: PlannedTicket): string[] {
+  const issues: string[] = [];
+  const estimate = Number(ticket.estimate);
+  const files = stringList(ticket.likelyFiles, 100);
+  const criteria = stringList(ticket.acceptanceCriteria, 100);
+  if (!Number.isFinite(estimate) || estimate < 1 || estimate > 3) issues.push("Schätzung muss 1–3 sein");
+  if (files.length === 0 || files.length > MAX_FILES_PER_TICKET) issues.push("1–4 voraussichtliche Dateien nötig");
+  if (criteria.length === 0 || criteria.length > MAX_CRITERIA_PER_TICKET) issues.push("1–4 Akzeptanzkriterien nötig");
+  return issues;
 }
 
 function asTicketType(value: unknown): TicketType {
@@ -45,6 +90,15 @@ function asPriority(value: unknown): Priority {
   const known: Priority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];
   const normalized = String(value ?? "").toUpperCase();
   return known.find((priority) => priority === normalized) ?? "MEDIUM";
+}
+
+function formatTicketDoc(ticket: Ticket, note?: string): string {
+  return (
+    `### ${ticket.title}${note ? ` _(${note})_` : ""}\n\n- Typ: ${TICKET_TYPE_LABEL[ticket.type]}\n- Priorität: ${PRIORITY_LABEL[ticket.priority]}` +
+    `${ticket.estimate ? `\n- Schätzung: ${ticket.estimate} Punkte` : ""}` +
+    `${ticket.isCritical ? "\n- **Kritisch: braucht menschliche Freigabe**" : ""}` +
+    `${ticket.description ? `\n\n${ticket.description}` : ""}`
+  );
 }
 
 const sprintPlanning: Task<"sprintPlanning"> = async (payload: SprintPlanningPayload, helpers) => {
@@ -63,7 +117,32 @@ const sprintPlanning: Task<"sprintPlanning"> = async (payload: SprintPlanningPay
     orderBy: { number: "asc" },
     include: { tickets: true },
   });
-  const nextNumber = (previousSprints.at(-1)?.number ?? 0) + 1;
+  // scheduleNextStep (src/lib/nextStep.ts) und die Autopilot-Kette
+  // (worker/tasks/sprintReview.ts) reihen beide unabhängig voneinander einen
+  // sprintPlanning-Job ein, sobald sie den letzten Sprint als DONE sehen –
+  // ohne sich gegenseitig zu kennen. Feuern zwei solcher Anstöße kurz
+  // hintereinander, ist der letzte Sprint zum Zeitpunkt des zweiten Jobs
+  // bereits neu geplant (ACTIVE) statt DONE: Dann ist dieser Anlauf ein
+  // Doppel-Anstoß und plant nichts. Ohne diese Prüfung entstanden in OurJira
+  // zwei Sprints mit fast identischem Ziel und Ticket-Set 59 Sekunden
+  // auseinander, seither parallel gegeneinander bearbeitet (bis hin zu zwei
+  // Agenten gleichzeitig am selben Ticket).
+  const latestSprint = previousSprints.at(-1);
+  if (latestSprint && latestSprint.status !== "DONE") {
+    helpers.logger.info(
+      `Sprint ${latestSprint.number} ist bereits ${latestSprint.status} – Sprint-Planung übersprungen (Doppel-Anstoß).`,
+    );
+    // Nach einem erfolgreichen lokalen Commit, dessen Remote-Push kurzzeitig
+    // scheiterte, kommt derselbe Planungsjob ebenfalls hier an: Der zentrale
+    // Repo-Abgleich hat den Commit beim Retry bereits gepusht, aber der erste
+    // Anlauf konnte den nächsten Ticket-Job noch nicht einreihen. Das
+    // jobKey-Deduping der Ticket-Queue macht den Aufruf auch für einen echten
+    // Doppel-Anstoß sicher.
+    await continueSprint(projectId, latestSprint.id);
+    return;
+  }
+
+  const nextNumber = (latestSprint?.number ?? 0) + 1;
 
   if (nextNumber > project.sprintBudget) {
     await logActivity({
@@ -103,6 +182,36 @@ const sprintPlanning: Task<"sprintPlanning"> = async (payload: SprintPlanningPay
     return;
   }
 
+  // --- Zurückgestellte Tickets zuerst ziehen ---------------------------------
+  // Ein per Klärungs-Beschluss "skip" zurückgestelltes Ticket (siehe
+  // src/lib/clarificationDecision.ts) landet auf BACKLOG, ohne Sprint. Ohne
+  // diese Wiedervorlage sah es danach niemand mehr an: Die nächste Planung
+  // erzeugte aus Konzept und Anforderungen neue Tickets, das zurückgestellte
+  // blieb für immer liegen – "Backlog" war nur ein Wort, kein Zustand, aus dem
+  // je wieder gearbeitet wurde.
+  const backlogTickets = (
+    await prisma.ticket.findMany({ where: { projectId, sprintId: null, status: "BACKLOG" } })
+  ).sort(
+    (a, b) => PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority] || a.createdAt.getTime() - b.createdAt.getTime(),
+  );
+  const pulled = backlogTickets.slice(0, MAX_TICKETS_PER_SPRINT);
+  const remainingSlots = Math.max(0, MAX_TICKETS_PER_SPRINT - pulled.length);
+
+  // --- Offene Kundenanfragen, die noch keinem Ticket zugeordnet sind --------
+  // Das Support-Postfach beschreibt sich selbst als "vom Product-Owner-Agenten
+  // in Tickets überführt" – bis hierher passierte das nirgends im Code, eine
+  // neue Anfrage blieb für immer "Neu". `tickets: { none: {} }` schließt auch
+  // Anfragen aus, die ein anderes Projekt desselben Kunden schon übernommen
+  // hat. Bei vollem Sprint lohnt sich der Blick nicht.
+  const openRequests =
+    remainingSlots > 0
+      ? await prisma.supportRequest.findMany({
+          where: { organizationId: project.organizationId, status: { in: ["NEW", "TRIAGED"] }, tickets: { none: {} } },
+          orderBy: { createdAt: "asc" },
+          take: MAX_SUPPORT_REQUESTS_IN_PROMPT,
+        })
+      : [];
+
   const history = previousSprints
     .map((sprint) => {
       const done = sprint.tickets.filter((ticket) => ticket.status === "DONE").length;
@@ -111,23 +220,65 @@ const sprintPlanning: Task<"sprintPlanning"> = async (payload: SprintPlanningPay
     })
     .join("\n");
 
+  const backlogSection =
+    pulled.length > 0
+      ? `\n# Zurückgestellte Tickets (werden automatisch wieder in diesen Sprint aufgenommen)\n${pulled
+          .map(
+            (ticket) =>
+              `- „${ticket.title}" (${TICKET_TYPE_LABEL[ticket.type]}, ${PRIORITY_LABEL[ticket.priority]})` +
+              `${ticket.description ? `: ${ticket.description.slice(0, 300)}` : ""}`,
+          )
+          .join("\n")}\n`
+      : "";
+
+  const requestSection =
+    openRequests.length > 0
+      ? `\n# Offene Kundenanfragen (noch keinem Ticket zugeordnet)\n${openRequests
+          .map(
+            (request, index) =>
+              `${index + 1}. [${SUPPORT_CHANNEL_LABEL[request.channel]}${request.fromContact ? `, ${request.fromContact}` : ""}] ` +
+              `${request.subject ?? "(kein Betreff)"}: ${request.body.slice(0, 400)}`,
+          )
+          .join("\n")}\n`
+      : "";
+
   const context = await buildProjectContext(projectId);
-  const { text } = await runAgent({
-    agent,
-    projectId,
-    kind: "sprint_planning",
-    headline: `Plant Sprint ${nextNumber}`,
-    system: `${TEAM_GRUNDREGELN}
-
-Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwortest ausschließlich mit einem JSON-Objekt.`,
-    prompt: `${context}
-
+  const planningPrompt = `${context}
+${backlogSection}${requestSection}
 # Bisherige Sprints
 ${history || "(noch keine)"}
 
-Plane Sprint ${nextNumber}. Wähle die nächsten Arbeitspakete so, dass sie aufeinander aufbauen und der Kunde nach dem Sprint etwas Sichtbares hat. Höchstens ${MAX_TICKETS_PER_SPRINT} Tickets, jedes in einem Arbeitsschritt umsetzbar.
+Plane Sprint ${nextNumber}. Wähle die nächsten Arbeitspakete so, dass sie aufeinander aufbauen und der Kunde nach dem Sprint etwas Sichtbares hat.
+${
+  pulled.length > 0
+    ? `${pulled.length} zurückgestellte Tickets sind oben gelistet und werden automatisch wieder in diesen Sprint aufgenommen – plane sie nicht erneut, wiederhole ihren Inhalt nicht.`
+    : ""
+}
+${
+  remainingSlots > 0
+    ? `Plane höchstens ${remainingSlots} NEUE Tickets zusätzlich dazu.`
+    : `Für neue Tickets ist in diesem Sprint kein Platz mehr (die zurückgestellten Tickets oben füllen ihn) – lass "tickets" leer.`
+}
+${
+  openRequests.length > 0
+    ? `Prüfe außerdem die oben gelisteten Kundenanfragen: Gehört eine erkennbar zu DIESEM Projekt und ist noch nicht als Ticket abgebildet, erstelle dafür ein Ticket und setze "anfrageNr" auf ihre Nummer aus der Liste. Gehört eine Anfrage erkennbar zu einem anderen Produkt desselben Kunden, lass sie unerwähnt – ein anderes Projekt kümmert sich darum.`
+    : ""
+}
 
-Wenn aus Konzept und Anforderungen nichts Wesentliches mehr offen ist, setze "done" auf true und lass "tickets" leer.
+Ein Ticket ist ein EINZELNER, in einem Modellaufruf umsetzbarer und prüfbarer Schritt – kein Epic. Harte Grenzen je Ticket:
+- genau ein technisches Ergebnis und 1–4 konkrete Akzeptanzkriterien,
+- Schätzung 1–3,
+- voraussichtlich höchstens ${MAX_FILES_PER_TICKET} neu anzulegende oder zu ändernde Dateien,
+- Frontend, Backend, Datenmodell, Migration, Integration und Tests bei größerem Umfang in abhängige Tickets trennen,
+- Titel mit mehreren großen Komponenten (z.B. „Canvas und WebSocket-Anbindung") weiter zerlegen.
+
+Eine große Anwendung ist kein Grund für große Tickets: Plane nur den nächsten kleinen Schnitt; weitere Schnitte kommen in späteren Sprints.
+
+Wenn aus Konzept und Anforderungen nichts Wesentliches mehr offen ist, setze "done" auf true und lass "tickets" leer.${
+    pulled.length > 0
+      ? ` Das gilt unabhängig von den zurückgestellten Tickets oben – die zählen so oder so als offene Arbeit.`
+      : ""
+  }
 
 Antworte nur mit diesem JSON-Objekt:
 {
@@ -136,25 +287,64 @@ Antworte nur mit diesem JSON-Objekt:
   "doneReason": "nur wenn done=true: warum der Auftrag erfüllt ist",
   "tickets": [
     {
-      "title": "kurzer Titel",
-      "description": "was zu tun ist und woran man sieht, dass es fertig ist",
+      "title": "ein einzelnes, kleines Ergebnis",
+      "description": "was genau zu tun ist",
+      "acceptanceCriteria": ["konkret prüfbares Kriterium"],
+      "likelyFiles": ["relativer/pfad.ts"],
+      "dependsOn": ["Titel eines vorherigen Tickets in diesem Sprint"],
       "type": "FEATURE | BUG | INTEGRATION | CHORE",
       "priority": "LOW | MEDIUM | HIGH | URGENT",
-      "estimate": 3,
+      "estimate": 1,
       "role": "BACKEND | FRONTEND | QA | DEVOPS",
-      "critical": false
+      "critical": false,
+      "anfrageNr": 2
     }
   ]
 }
 
-"critical" bedeutet: die Änderung braucht vor dem Ausliefern eine menschliche Freigabe (z.B. Datenmigration, Zahlungen, Löschvorgänge, Zugriffsrechte).`,
+"critical" bedeutet: die Änderung braucht vor dem Ausliefern eine menschliche Freigabe (z.B. Datenmigration, Zahlungen, Löschvorgänge, Zugriffsrechte).
+"anfrageNr" nur setzen, wenn dieses Ticket direkt eine der oben gelisteten Kundenanfragen abdeckt – sonst weglassen.`;
+
+  const { text } = await runAgent({
+    agent,
+    projectId,
+    kind: "sprint_planning",
+    headline: `Plant Sprint ${nextNumber}`,
+    system: `${TEAM_GRUNDREGELN}
+
+Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwortest ausschließlich mit einem JSON-Objekt.`,
+    prompt: planningPrompt,
   });
 
-  const parsed = extractJsonObject(text);
-  const goal = String(parsed.goal ?? "").trim() || `Sprint ${nextNumber}`;
-  const planned = Array.isArray(parsed.tickets) ? (parsed.tickets as PlannedTicket[]) : [];
+  let parsed = extractJsonObject(text);
+  let planned = Array.isArray(parsed.tickets) ? (parsed.tickets as PlannedTicket[]).slice(0, remainingSlots) : [];
 
-  if (parsed.done === true || planned.length === 0) {
+  const issues = planned.flatMap((ticket, index) =>
+    atomicityIssues(ticket).map((issue) => `Ticket ${index + 1} „${String(ticket.title ?? "")}": ${issue}`),
+  );
+  if (parsed.done !== true && issues.length > 0) {
+    const refined = await runAgent({
+      agent,
+      projectId,
+      kind: "sprint_refinement",
+      headline: `Zerlegt zu große Tickets für Sprint ${nextNumber}`,
+      maxTokens: 5000,
+      system: `${TEAM_GRUNDREGELN}\n\nDu bist ${agent.name}, Product Owner. Du zerlegst zu große Tickets. Du antwortest ausschließlich mit einem JSON-Objekt.`,
+      prompt: `${planningPrompt}\n\n# Erster Entwurf\n${JSON.stringify(parsed)}\n\n# Verstöße gegen die harten Ticketgrenzen\n${issues.join("\n")}\n\nSchreibe den gesamten Sprintentwurf neu. Zerlege die genannten Tickets, statt nur Schätzung oder Dateiliste künstlich zu kürzen. Maximal ${remainingSlots} neue Tickets; was nicht hineinpasst, bleibt für den nächsten Sprint.`,
+    });
+    parsed = extractJsonObject(refined.text);
+    planned = Array.isArray(parsed.tickets) ? (parsed.tickets as PlannedTicket[]).slice(0, remainingSlots) : [];
+  }
+
+  const goal = String(parsed.goal ?? "").trim() || `Sprint ${nextNumber}`;
+
+  // "Fertig" ist eine Aussage des Modells nur über Konzept und Anforderungen.
+  // Zurückgestellte Tickets sind davon unabhängig offene Arbeit – ein Modell,
+  // das sie im Prompt übersieht oder ignoriert, darf den Auftrag nicht für
+  // erledigt erklären, solange noch welche warten.
+  const done = pulled.length === 0 && parsed.done === true;
+
+  if (done || (planned.length === 0 && pulled.length === 0)) {
     const detail = String(parsed.doneReason ?? "").trim() ||
       "Der Product Owner sieht keine offenen Arbeitspakete mehr aus Konzept und Anforderungen.";
     await prisma.project.update({ where: { id: projectId }, data: { autopilot: false } });
@@ -204,29 +394,85 @@ Antworte nur mit diesem JSON-Objekt:
     data: { projectId, number: nextNumber, goal, status: "ACTIVE" },
   });
 
-  const createdTickets = [];
-  for (const item of planned.slice(0, MAX_TICKETS_PER_SPRINT)) {
+  // Zurückgestellte Tickets existieren schon (samt Anlauf-Historie/-Budget) –
+  // sie brauchen nur die Zuordnung zum neuen Sprint, keine Neuerstellung.
+  const carriedOverTickets = await Promise.all(
+    pulled.map((ticket) => prisma.ticket.update({ where: { id: ticket.id }, data: { sprintId: sprint.id } })),
+  );
+  if (carriedOverTickets.length > 0) {
+    await logActivity({
+      projectId,
+      actor: agent.name,
+      agentId: agent.id,
+      action: "tickets_reclaimed",
+      detail: `${carriedOverTickets.length} zurückgestellte ${carriedOverTickets.length === 1 ? "Ticket" : "Tickets"} wieder in Sprint ${sprint.number} aufgenommen: ${carriedOverTickets.map((ticket) => `„${ticket.title}"`).join(", ")}.`,
+    });
+  }
+
+  const createdTickets: Ticket[] = [];
+  for (const item of planned) {
     const title = String(item.title ?? "").trim();
     if (!title) continue;
 
     const role = roleForTicket(typeof item.role === "string" ? item.role : null);
     const assignee = await agentForRole(projectId, role);
+    const criteria = stringList(item.acceptanceCriteria, MAX_CRITERIA_PER_TICKET);
+    const likelyFiles = stringList(item.likelyFiles, MAX_FILES_PER_TICKET);
+    const dependencies = stringList(item.dependsOn, MAX_TICKETS_PER_SPRINT);
 
-    createdTickets.push(
-      await prisma.ticket.create({
-        data: {
-          projectId,
-          sprintId: sprint.id,
-          title,
-          description: typeof item.description === "string" ? item.description : null,
-          type: asTicketType(item.type),
-          priority: asPriority(item.priority),
-          estimate: Number.isFinite(Number(item.estimate)) ? Number(item.estimate) : null,
-          isCritical: item.critical === true,
-          assigneeId: assignee?.id ?? null,
-        },
-      }),
-    );
+    // Ordnet das Ticket ggf. der Kundenanfrage zu, aus der es stammt – per
+    // `updateMany` mit Status-Bedingung: Ein anderes Projekt desselben Kunden
+    // könnte dieselbe Anfrage in genau diesem Moment ebenfalls triagieren, nur
+    // wer sie zuerst als NEW/TRIAGED erwischt, darf sie umwandeln.
+    const anfrageNr = Number(item.anfrageNr);
+    const matchedRequest = Number.isInteger(anfrageNr) ? openRequests[anfrageNr - 1] : undefined;
+    let sourceRequestId: string | null = null;
+    if (matchedRequest) {
+      const claimed = await prisma.supportRequest.updateMany({
+        where: { id: matchedRequest.id, status: { in: ["NEW", "TRIAGED"] } },
+        data: { status: "CONVERTED", handledById: agent.id },
+      });
+      if (claimed.count === 1) sourceRequestId = matchedRequest.id;
+    }
+
+    const baseDescription = typeof item.description === "string" ? item.description.trim() : "";
+    const structuredDescription = [
+      baseDescription,
+      criteria.length > 0 ? `## Akzeptanzkriterien\n${criteria.map((entry) => `- ${entry}`).join("\n")}` : "",
+      likelyFiles.length > 0 ? `## Voraussichtliche Dateien\n${likelyFiles.map((entry) => `- ${entry}`).join("\n")}` : "",
+      dependencies.length > 0 ? `## Abhängigkeiten\n${dependencies.map((entry) => `- ${entry}`).join("\n")}` : "",
+      matchedRequest && sourceRequestId
+        ? `## Quelle\nKundenanfrage${matchedRequest.fromContact ? ` von ${matchedRequest.fromContact}` : ""}: ${matchedRequest.subject ?? matchedRequest.body.slice(0, 120)}`
+        : "",
+    ].filter(Boolean).join("\n\n");
+
+    const ticket = await prisma.ticket.create({
+      data: {
+        projectId,
+        sprintId: sprint.id,
+        sourceRequestId,
+        title,
+        description: structuredDescription || null,
+        type: asTicketType(item.type),
+        priority: asPriority(item.priority),
+        estimate: Number.isFinite(Number(item.estimate)) ? Math.min(3, Math.max(1, Number(item.estimate))) : 1,
+        isCritical: item.critical === true,
+        assigneeId: assignee?.id ?? null,
+      },
+    });
+    createdTickets.push(ticket);
+
+    if (sourceRequestId && matchedRequest) {
+      await logActivity({
+        projectId,
+        actor: agent.name,
+        agentId: agent.id,
+        action: "support_request_converted",
+        detail: `Kundenanfrage „${matchedRequest.subject ?? matchedRequest.body.slice(0, 80)}" zu Ticket „${title}" überführt.`,
+        ticketId: ticket.id,
+        supportRequestId: matchedRequest.id,
+      });
+    }
   }
 
   // Sprint-Plan auch im Repo ablegen: Der Auftraggeber soll den Plan dort
@@ -234,15 +480,10 @@ Antworte nur mit diesem JSON-Objekt:
   if (project.workspacePath) {
     const planDoc =
       `# Sprint ${sprint.number}\n\n**Ziel:** ${goal}\n\n**Geplant von:** ${agent.name} (Product Owner)\n\n## Tickets\n\n` +
-      createdTickets
-        .map(
-          (ticket) =>
-            `### ${ticket.title}\n\n- Typ: ${TICKET_TYPE_LABEL[ticket.type]}\n- Priorität: ${PRIORITY_LABEL[ticket.priority]}` +
-            `${ticket.estimate ? `\n- Schätzung: ${ticket.estimate} Punkte` : ""}` +
-            `${ticket.isCritical ? "\n- **Kritisch: braucht menschliche Freigabe**" : ""}` +
-            `${ticket.description ? `\n\n${ticket.description}` : ""}`,
-        )
-        .join("\n\n");
+      [
+        ...carriedOverTickets.map((ticket) => formatTicketDoc(ticket, "zurückgestellt, wieder aufgenommen")),
+        ...createdTickets.map((ticket) => formatTicketDoc(ticket)),
+      ].join("\n\n");
 
     await writeFiles(project.workspacePath, [
       { path: `docs/sprints/sprint-${sprint.number}-plan.md`, content: planDoc },
@@ -253,12 +494,15 @@ Antworte nur mit diesem JSON-Objekt:
     });
   }
 
+  const allTickets = [...carriedOverTickets, ...createdTickets];
   await logActivity({
     projectId,
     actor: agent.name,
     agentId: agent.id,
     action: "sprint_planned",
-    detail: `Sprint ${sprint.number} geplant – Ziel: ${goal} (${createdTickets.length} Tickets)`,
+    detail:
+      `Sprint ${sprint.number} geplant – Ziel: ${goal} (${allTickets.length} Tickets` +
+      `${carriedOverTickets.length > 0 ? `, davon ${carriedOverTickets.length} wieder aufgenommen` : ""})`,
   });
 
   helpers.logger.info(`Sprint ${sprint.number} für Projekt ${projectId} geplant (${reason}).`);

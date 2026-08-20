@@ -6,6 +6,7 @@ const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
+  const demoRepoUrl = process.env.DEMO_REPO_URL?.trim() || null;
   // --- Globale LLM-Profile (beratungsweit, nicht pro Kunde) --------------------
   const [sonnetProfile, opusProfile, localOllamaProfile] = await Promise.all([
     prisma.llmProfile.create({
@@ -27,7 +28,10 @@ async function main() {
       data: {
         name: "Lokaler Ollama-Container",
         provider: "OLLAMA",
-        model: "llama3.1:70b",
+        // Muss zum tatsaechlich gepullten Modell passen (siehe "ollama"-Service
+        // in docker-compose.yml und OLLAMA_MODEL in .env.example) - sonst
+        // 404 beim ersten Agentenaufruf.
+        model: process.env.OLLAMA_MODEL?.trim() || "llama3.1:8b",
         baseUrl: "http://ollama:11434",
       },
     }),
@@ -46,7 +50,9 @@ async function main() {
       name: "Warenwirtschaft & CRM",
       description:
         "Maßgeschneidertes Warenwirtschafts-, CRM- und Auftragstool als Alternative zu SAP Business One / Odoo.",
-      repoUrl: "https://github.com/MaxDedecke/demo-gmbh-erp.git",
+      // Ohne DEMO_REPO_URL bleibt der Seed vollstaendig lokal und kann nicht
+      // versehentlich in ein echtes Repository pushen.
+      repoUrl: demoRepoUrl,
     },
   });
 
@@ -70,7 +76,7 @@ async function main() {
       provider: "GIT",
       name: "Demo GmbH ERP Repo",
       config: { repoUrl: project.repoUrl, defaultBranch: "main" },
-      credentialRef: "vault://demo-gmbh/erp-repo-deploy-key",
+      credentialRef: project.repoUrl ? "env:GITHUB_TOKEN" : null,
     },
   });
 

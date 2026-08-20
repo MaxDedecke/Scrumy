@@ -6,6 +6,21 @@
 // Die Preisangaben sind bewusst grobe Größenordnungen (Listenpreise ändern
 // sich laufend und hängen an Staffeln/Verhandlung) – sie sollen den Leidens-
 // druck einordnen, nicht ein Angebot begründen. Vor Angebotsabgabe prüfen.
+//
+// `customerBlockers` existiert, weil Projekte reihenweise daran hängen
+// blieben: Der Product-Owner-Agent leitet Anforderungen aus dem Konzept-
+// Freitext ab, und wenn eine Migration oder ein Zugang zu einem Fremdsystem
+// dort wie ein normales Feature klingt ("Import der bestehenden Daten"),
+// wird daraus eine ganz normale Sprint-Story – die dann liegen bleibt, weil
+// das Team auf Daten/Zugangsdaten/Entscheidungen wartet, die nur der Kunde
+// liefern kann. `integrations` enthält deshalb nur, was das Team ohne den
+// Kunden bauen und mit Testdaten prüfen kann; alles, was zwingend vom Kunden
+// kommen muss, bevor die betroffene Anforderung überhaupt startklar ist,
+// steht in `customerBlockers` und wird in einem eigenen, unmissverständlich
+// beschrifteten Abschnitt gerendert (siehe `renderConceptTemplate`). Die
+// Anforderungs-Generierung (`GENERATE_SYSTEM_PROMPT` in
+// `src/lib/actions/requirements.ts`) ist angewiesen, aus diesem Abschnitt
+// keine Team-Anforderungen abzuleiten.
 
 export type ConceptTemplate = {
   id: string;
@@ -20,7 +35,16 @@ export type ConceptTemplate = {
   goal: string;
   modules: string[];
   nonGoals: string[];
+  /** Technische Schnittstellen, die das Team ohne den Kunden bauen und mit
+   *  Testdaten prüfen kann – keine einmaligen Migrationen oder Zugänge zu
+   *  Fremdsystemen, die erst der Kunde freischalten muss (siehe
+   *  `customerBlockers`). */
   integrations: string[];
+  /** Was zwingend vom Kunden kommen muss (echte Daten, Zugangsdaten,
+   *  Provider-Entscheidungen), bevor die betroffene Anforderung umsetzbar
+   *  ist. Bewusst getrennt von `integrations`, damit daraus keine normale
+   *  Sprint-Story wird, an der das Team dann hängen bleibt. */
+  customerBlockers: string[];
   openQuestions: string[];
 };
 
@@ -60,8 +84,12 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Kein Ersatz für Ad-hoc-Analysen einzelner Mitarbeiter",
     ],
     integrations: [
-      "Import der bestehenden Arbeitsmappen als Erstbefüllung",
+      "Excel-/CSV-Import als wiederkehrende Funktion, nicht nur für die Erstbefüllung",
       "Export nach Excel/CSV für Berichte an Dritte",
+    ],
+    customerBlockers: [
+      "Die tatsächlichen Arbeitsmappen als Export – ohne sie ist die Erstbefüllung nicht baubar, nur die Importfunktion dafür",
+      "Fachliche Freigabe, welche Formeln/Sonderfälle in der neuen Anwendung nachgebildet werden müssen",
     ],
     openQuestions: [
       "Welche Tabellen sind wirklich geschäftskritisch (meist 3–5 von vielen)?",
@@ -88,8 +116,12 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Kein Marketplace für Erweiterungen",
     ],
     integrations: [
-      "Datenübernahme per CSV-Export aus den bestehenden Bases",
+      "CSV-Import als wiederkehrende Funktion für neue Datensätze",
       "REST-Schnittstelle für angebundene Tools",
+    ],
+    customerBlockers: [
+      "CSV-Export der bestehenden Bases vom Kunden – ohne ihn keine Erstbefüllung",
+      "Zugang zu den bestehenden Airtable-Bases, falls die Exporte unvollständig sind",
     ],
     openQuestions: [
       "Welche Bases und Ansichten werden tatsächlich täglich genutzt?",
@@ -117,7 +149,11 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
     ],
     integrations: [
       "Kalender-Export (ICS) für Termine",
-      "Excel-/CSV-Import bestehender Pläne",
+      "Excel-/CSV-Import als wiederkehrende Funktion",
+    ],
+    customerBlockers: [
+      "Export der bestehenden Pläne aus Smartsheet inkl. Abhängigkeiten",
+      "Liste der laufenden Projekte, die tatsächlich übernommen werden sollen",
     ],
     openQuestions: [
       "Wie viele Projekte laufen parallel, wie viele Vorgänge je Projekt?",
@@ -145,9 +181,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Kein frei konfigurierbarer Workflow-Editor – Workflows werden fachlich festgelegt",
       "Keine Nachbildung der Jira-Marketplace-Plugins",
     ],
-    integrations: [
-      "Git-Anbindung: Commit/Branch referenziert die Ticketnummer",
-      "Import bestehender Vorgänge inkl. Kommentaren",
+    integrations: ["Git-Anbindung: Commit/Branch referenziert die Ticketnummer"],
+    customerBlockers: [
+      "Export der bestehenden Jira-Vorgänge inkl. Kommentaren und Historie",
+      "Zugangsdaten/API-Token für den Jira-Export, falls kein Self-Service-Export reicht",
     ],
     openQuestions: [
       "Welche Ticket-Typen und Statusübergänge werden tatsächlich gelebt?",
@@ -173,9 +210,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Kein Zielsystem (OKR) in der ersten Ausbaustufe",
       "Keine Zeiterfassung – separat zu entscheiden",
     ],
-    integrations: [
-      "Kalender-Abo (ICS) für Fälligkeiten",
-      "E-Mail-Eingang für neue Aufgaben",
+    integrations: ["Kalender-Abo (ICS) für Fälligkeiten", "E-Mail-Eingang für neue Aufgaben"],
+    customerBlockers: [
+      "Export der bestehenden Asana-Projekte als Erstbefüllung",
+      "Freigabe, welche Regeln/Automatisierungen tatsächlich weiterlaufen sollen",
     ],
     openQuestions: [
       "Werden Portfolios/Zeitachsen wirklich genutzt oder nur Listen?",
@@ -201,9 +239,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Kein visueller Automatisierungs-Baukasten für Endnutzer",
       "Keine Nachbildung aller Spaltentypen – nur die genutzten",
     ],
-    integrations: [
-      "E-Mail-Benachrichtigungen",
-      "CSV-Import der bestehenden Boards",
+    integrations: ["E-Mail-Benachrichtigungen"],
+    customerBlockers: [
+      "CSV-Export der bestehenden Boards vom Kunden",
+      "Freigabe, welche Automatisierungen 1:1 übernommen werden (siehe offene Fragen)",
     ],
     openQuestions: [
       "Wie viele Automatisierungen laufen heute und was tun sie?",
@@ -229,9 +268,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Keine Kundenkommunikation im Tool – dafür ist das Support-Postfach zuständig",
       "Kein Dokumentenmanagement",
     ],
-    integrations: [
-      "Git-Anbindung (Branch- und PR-Referenzen)",
-      "Import per API-Export",
+    integrations: ["Git-Anbindung (Branch- und PR-Referenzen)"],
+    customerBlockers: [
+      "API-Export der bestehenden Linear-Issues (Zugangsdaten vom Kunden)",
+      "Freigabe der Geheimhaltungsauflagen, die den Betrieb einschränken",
     ],
     openQuestions: [
       "Arbeitet das Team in Zyklen oder kontinuierlich?",
@@ -259,9 +299,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Kein Makro-System wie in Confluence",
       "Keine Echtzeit-Mehrbenutzerbearbeitung in Stufe 1",
     ],
-    integrations: [
-      "Verlinkung von Tickets aus dem Projektsystem",
-      "Import bestehender Seiten inkl. Anhänge",
+    integrations: ["Verlinkung von Tickets aus dem Projektsystem"],
+    customerBlockers: [
+      "Export der bestehenden Confluence-Seiten inkl. Anhänge",
+      "Freigabe, welche Bereiche vertraulich sind (bestimmt das Rechtekonzept)",
     ],
     openQuestions: [
       "Wie viele Seiten und Anhänge müssen übernommen werden?",
@@ -287,9 +328,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Keine beliebige Verschachtelung von Datenbanken in Datenbanken",
       "Keine KI-Funktionen in der ersten Ausbaustufe",
     ],
-    integrations: [
-      "Markdown-/CSV-Import des bestehenden Workspace",
-      "Verlinkung ins Ticketsystem",
+    integrations: ["Verlinkung ins Ticketsystem"],
+    customerBlockers: [
+      "Markdown-/CSV-Export des bestehenden Notion-Workspace vom Kunden",
+      "Fachliche Entscheidung, welche Datenbanken führend sind (bestimmt das Datenmodell)",
     ],
     openQuestions: [
       "Welche Datenbanken sind führend, welche nur Notizen?",
@@ -315,9 +357,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Kein Diagramm-Editor mit Fachnotation (BPMN/UML)",
       "Keine Videokonferenz im Board",
     ],
-    integrations: [
-      "Überführung von Notizzetteln in Anforderungen/Tickets",
-      "PDF-/Bild-Export für Protokolle",
+    integrations: ["Überführung von Notizzetteln in Anforderungen/Tickets"],
+    customerBlockers: [
+      "Export laufender Boards, falls Ergebnisse daraus übernommen werden sollen",
+      "Termin für einen ersten Workshop zur Abnahme der Vorlagen",
     ],
     openQuestions: [
       "Wie viele Teilnehmer gleichzeitig, davon wie viele extern?",
@@ -345,9 +388,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Kein Marketing-Automation-Modul in Stufe 1",
       "Keine Nachbildung des Salesforce-Rechtemodells in voller Tiefe",
     ],
-    integrations: [
-      "E-Mail-Anbindung zur Aktivitätserfassung",
-      "Übernahme von Konten, Kontakten und offenen Chancen",
+    integrations: ["E-Mail-Anbindung zur Aktivitätserfassung"],
+    customerBlockers: [
+      "Export von Konten, Kontakten und offenen Chancen aus Salesforce",
+      "Zugangsdaten/API für den Export, falls der Standardexport nicht reicht",
     ],
     openQuestions: [
       "Welche Felder und Objekte sind über die Jahre wirklich in Gebrauch?",
@@ -373,9 +417,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Kein Lead-Scoring per Modell in Stufe 1",
       "Kein Ticketsystem – dafür gibt es das Support-Postfach",
     ],
-    integrations: [
-      "Website-Formulare direkt ins CRM",
-      "Versanddienstleister für E-Mail-Zustellung",
+    integrations: ["Website-Formulare direkt ins CRM"],
+    customerBlockers: [
+      "Export der bestehenden Kontakte und Deal-Historie aus HubSpot",
+      "Auswahl und Zugangsdaten des Versanddienstleisters für die E-Mail-Zustellung",
     ],
     openQuestions: [
       "Wie viele Kontakte sind es heute, wie schnell wachsen sie?",
@@ -397,13 +442,11 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Automatische Folgeaufgaben bei Phasenwechsel",
       "Prognose und Abschlussquote je Vertriebler",
     ],
-    nonGoals: [
-      "Kein Telefonie-Modul",
-      "Keine Rechnungsstellung – Schnittstelle zur Buchhaltung genügt",
-    ],
-    integrations: [
-      "E-Mail-Synchronisierung",
-      "Übergabe gewonnener Deals an die Buchhaltung",
+    nonGoals: ["Kein Telefonie-Modul", "Keine Rechnungsstellung – Schnittstelle zur Buchhaltung genügt"],
+    integrations: ["E-Mail-Synchronisierung"],
+    customerBlockers: [
+      "Export der bestehenden Deals und Aktivitäten aus Pipedrive",
+      "Ansprechpartner in der Buchhaltung für die Übergabe gewonnener Deals",
     ],
     openQuestions: [
       "Wie viele Pipelines braucht der Vertrieb wirklich?",
@@ -427,13 +470,11 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Antwortvorlagen und interne Notizen",
       "Auswertung: Reaktionszeit, Lösungsquote, Wiedereröffnungen",
     ],
-    nonGoals: [
-      "Kein Telefonie-Kanal in Stufe 1",
-      "Kein öffentliches Community-Forum",
-    ],
-    integrations: [
-      "E-Mail-Postfach als Ticketquelle",
-      "Übergabe an das Entwicklungs-Ticketsystem bei Bugs",
+    nonGoals: ["Kein Telefonie-Kanal in Stufe 1", "Kein öffentliches Community-Forum"],
+    integrations: ["Übergabe an das Entwicklungs-Ticketsystem bei Bugs"],
+    customerBlockers: [
+      "Zugang zum bestehenden Support-Postfach bzw. Export der offenen Tickets",
+      "Vertraglich zugesagte SLA-Werte, die das System durchsetzen soll",
     ],
     openQuestions: [
       "Wie viele Anfragen pro Monat, welche Spitzenlast?",
@@ -455,13 +496,11 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Automatische Antwortvorschläge aus den Hilfeartikeln",
       "Weiterleitung an einen Menschen mit vollem Kontext",
     ],
-    nonGoals: [
-      "Keine Marketing-Kampagnen über den Chat",
-      "Keine Produkt-Touren/Onboarding-Overlays",
-    ],
-    integrations: [
-      "Anbindung an das Support-Postfach",
-      "Kundenkontext aus dem CRM im Chatfenster",
+    nonGoals: ["Keine Marketing-Kampagnen über den Chat", "Keine Produkt-Touren/Onboarding-Overlays"],
+    integrations: ["Anbindung an das Support-Postfach", "Kundenkontext aus dem CRM im Chatfenster"],
+    customerBlockers: [
+      "Export bestehender Hilfeartikel/Konversationshistorie, falls diese übernommen werden sollen",
+      "Freigabe, ab wann automatische Antwortvorschläge live geschaltet werden dürfen (Haftungsfrage)",
     ],
     openQuestions: [
       "Wie viele Konversationen pro Monat laufen heute?",
@@ -489,9 +528,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Keine Produktionsplanung (PPS) in Stufe 1",
       "Keine eigene Finanzbuchhaltung – Übergabe an den Steuerberater",
     ],
-    integrations: [
-      "DATEV-/Buchhaltungsexport",
-      "Versanddienstleister für Lieferscheine und Sendungsverfolgung",
+    integrations: ["Versanddienstleister für Lieferscheine und Sendungsverfolgung"],
+    customerBlockers: [
+      "Export der Artikel-, Lager- und Auftragsdaten aus SAP Business One",
+      "Zugangsdaten/Freigabe für den DATEV-/Buchhaltungsexport der Kanzlei",
     ],
     openQuestions: [
       "Welche SAP-Module sind tatsächlich im Einsatz?",
@@ -517,9 +557,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Keine Konzernkonsolidierung über mehrere Gesellschaften in Stufe 1",
       "Keine Mehrwährungsfähigkeit, falls nicht benötigt",
     ],
-    integrations: [
-      "Bankdatei-Import (CAMT/MT940)",
-      "Übergabe an den Steuerberater",
+    integrations: ["Übergabe an den Steuerberater"],
+    customerBlockers: [
+      "Export von Kontenrahmen, offenen Posten und Stammdaten aus NetSuite",
+      "Zugangsdaten für den Bankdatei-Import (CAMT/MT940)",
     ],
     openQuestions: [
       "Wie viele Gesellschaften und Währungen sind im Spiel?",
@@ -541,18 +582,13 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Freigabe-Workflow vor Übergabe",
       "Export im DATEV-Format an die Kanzlei",
     ],
-    nonGoals: [
-      "Keine eigene Steuerberechnung oder Jahresabschluss",
-      "Kein Ersatz der Kanzleisoftware selbst",
+    nonGoals: ["Keine eigene Steuerberechnung oder Jahresabschluss", "Kein Ersatz der Kanzleisoftware selbst"],
+    integrations: ["Rechnungsausgang aus der Warenwirtschaft"],
+    customerBlockers: [
+      "Freigabe des Formats, das die Kanzlei tatsächlich akzeptiert (nicht nur der DATEV-Standard)",
+      "Zugang zu bestehenden Altbelegen, falls diese übernommen werden sollen",
     ],
-    integrations: [
-      "DATEV-Exportformat (Buchungsstapel)",
-      "Rechnungsausgang aus der Warenwirtschaft",
-    ],
-    openQuestions: [
-      "Wie viele Belege pro Monat fallen an?",
-      "Welche Formate akzeptiert die Kanzlei?",
-    ],
+    openQuestions: ["Wie viele Belege pro Monat fallen an?", "Welche Formate akzeptiert die Kanzlei?"],
   },
 
   // -------------------------------------------------------------- HR & Personal
@@ -571,13 +607,11 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Bewerbermanagement von Eingang bis Zusage",
       "Auswertungen: Fluktuation, Urlaubsrückstellungen",
     ],
-    nonGoals: [
-      "Keine Lohnabrechnung – Übergabe an das Abrechnungsbüro",
-      "Kein Schichtplanungsmodul in Stufe 1",
-    ],
-    integrations: [
-      "Export an die Lohnbuchhaltung",
-      "Kalender-Abo für genehmigte Abwesenheiten",
+    nonGoals: ["Keine Lohnabrechnung – Übergabe an das Abrechnungsbüro", "Kein Schichtplanungsmodul in Stufe 1"],
+    integrations: ["Kalender-Abo für genehmigte Abwesenheiten"],
+    customerBlockers: [
+      "Export der Personalstammdaten und Personalakten aus Personio",
+      "Ansprechpartner im Abrechnungsbüro für die Export-Schnittstelle",
     ],
     openQuestions: [
       "Welche Aufbewahrungsfristen gelten für Personaldokumente?",
@@ -599,13 +633,11 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Weiterbildungsverwaltung mit Nachweisen",
       "Auswertungen für die Geschäftsführung",
     ],
-    nonGoals: [
-      "Keine globale Payroll",
-      "Kein Nachbau der Workday-Berichtssprache",
-    ],
-    integrations: [
-      "Verzeichnisdienst für Konten (SSO/LDAP)",
-      "Export an die Lohnabrechnung",
+    nonGoals: ["Keine globale Payroll", "Kein Nachbau der Workday-Berichtssprache"],
+    integrations: ["Verzeichnisdienst für Konten (SSO/LDAP)"],
+    customerBlockers: [
+      "Export der Organisationsstruktur und Mitarbeiterhistorie aus Workday",
+      "Freigabe des Betriebsrats/der Mitbestimmung, bevor Auswertungen für die Geschäftsführung live gehen",
     ],
     openQuestions: [
       "Wie viele Standorte und Rechtsräume sind betroffen?",
@@ -633,9 +665,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Keine Audio-/Videokonferenz im Chat (siehe eigene Vorlage)",
       "Kein App-Verzeichnis für Erweiterungen",
     ],
-    integrations: [
-      "Benachrichtigungen aus dem Ticketsystem",
-      "Verzeichnisdienst für Konten",
+    integrations: ["Benachrichtigungen aus dem Ticketsystem"],
+    customerBlockers: [
+      "Export des bestehenden Nachrichtenverlaufs aus Slack, falls Historie übernommen werden soll",
+      "Zugangsdaten für den Verzeichnisdienst (SSO/LDAP), um Konten automatisch anzulegen",
     ],
     openQuestions: [
       "Wie lange müssen Nachrichten aufbewahrt werden?",
@@ -661,9 +694,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Keine Telefoneinwahl über das Festnetz in Stufe 1",
       "Keine Webinar-Funktionen mit tausenden Teilnehmern",
     ],
-    integrations: [
-      "Kalender-Einladungen (ICS)",
-      "Verzeichnisdienst für Konten",
+    integrations: ["Kalender-Einladungen (ICS)"],
+    customerBlockers: [
+      "Zugangsdaten für den Verzeichnisdienst (SSO/LDAP)",
+      "Vorgaben zur Aufbewahrung/dem Speicherort bestehender Aufzeichnungen",
     ],
     openQuestions: [
       "Wie viele parallele Konferenzen mit wie vielen Teilnehmern?",
@@ -689,14 +723,12 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Keine Zahlungsabwicklung bei der Buchung",
       "Keine Ressourcenbuchung (Räume, Geräte) in Stufe 1",
     ],
-    integrations: [
-      "Kalender-Anbindung für Verfügbarkeiten",
-      "Anlage des Kontakts im CRM",
+    integrations: ["Anlage des Kontakts im CRM"],
+    customerBlockers: [
+      "Zugangsdaten für die Kalenderanbindung je Mitarbeiter (OAuth-Freigabe)",
+      "Liste der Termintypen, die zum Start abgebildet werden müssen",
     ],
-    openQuestions: [
-      "Wie viele Termintypen gibt es?",
-      "Sollen Termine automatisch im CRM landen?",
-    ],
+    openQuestions: ["Wie viele Termintypen gibt es?", "Sollen Termine automatisch im CRM landen?"],
   },
 
   // -------------------------------------------------------- Marketing & Analytics
@@ -719,9 +751,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Keine mehrstufigen Marketing-Automationsstrecken in Stufe 1",
       "Kein Social-Media-Modul",
     ],
-    integrations: [
-      "Versanddienstleister (SMTP/API) für die Zustellung",
-      "Kontaktabgleich mit dem CRM",
+    integrations: ["Kontaktabgleich mit dem CRM"],
+    customerBlockers: [
+      "Export der bestehenden Kontaktlisten inkl. Einwilligungsnachweis (DSGVO) aus Mailchimp",
+      "Auswahl und Zugangsdaten des Versanddienstleisters (SMTP/API)",
     ],
     openQuestions: [
       "Wie groß ist der Verteiler, wie oft wird versendet?",
@@ -743,18 +776,13 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "A/B-Tests für Betreff und Inhalt",
       "Umsatzzuordnung je Strecke",
     ],
-    nonGoals: [
-      "Kein SMS-Versand in Stufe 1",
-      "Keine Vorhersagemodelle für Kundenwert",
+    nonGoals: ["Kein SMS-Versand in Stufe 1", "Keine Vorhersagemodelle für Kundenwert"],
+    integrations: ["Shop-Anbindung für Bestell- und Warenkorbdaten (technische Schnittstelle)"],
+    customerBlockers: [
+      "Export der bestehenden Kundenprofile und Kaufhistorie aus Klaviyo",
+      "Auswahl und Zugangsdaten des Versanddienstleisters für die Zustellung",
     ],
-    integrations: [
-      "Shop-Anbindung für Bestell- und Warenkorbdaten",
-      "Versanddienstleister für die Zustellung",
-    ],
-    openQuestions: [
-      "Welche Strecken erwirtschaften heute den Umsatz?",
-      "Wie viele Profile sind aktiv?",
-    ],
+    openQuestions: ["Welche Strecken erwirtschaften heute den Umsatz?", "Wie viele Profile sind aktiv?"],
   },
   {
     id: "tableau",
@@ -771,13 +799,11 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Geplanter Berichtsversand per E-Mail",
       "Rechte je Dashboard und je Kennzahl",
     ],
-    nonGoals: [
-      "Kein Self-Service-Modellierer für Endnutzer",
-      "Kein Data Warehouse-Aufbau in Stufe 1",
-    ],
-    integrations: [
-      "Lesezugriff auf die Datenbanken der Fachsysteme",
-      "Export nach Excel/PDF",
+    nonGoals: ["Kein Self-Service-Modellierer für Endnutzer", "Kein Data Warehouse-Aufbau in Stufe 1"],
+    integrations: ["Export nach Excel/PDF"],
+    customerBlockers: [
+      "Zugangsdaten/Leserechte auf die Datenbanken der Fachsysteme, die angebunden werden sollen",
+      "Freigabe, welche Kennzahlen wirklich zur Steuerung genutzt werden (siehe offene Fragen)",
     ],
     openQuestions: [
       "Welche Kennzahlen werden wirklich zur Steuerung genutzt?",
@@ -799,13 +825,11 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Einbettung in Website oder Versand per Link",
       "Benachrichtigung bei neuen Antworten",
     ],
-    nonGoals: [
-      "Keine Zahlungsabwicklung im Formular",
-      "Keine Umfrage-Panels/Teilnehmerbeschaffung",
-    ],
-    integrations: [
-      "Antworten als Datensätze in Fachsysteme (z.B. Anforderungen, Leads)",
-      "E-Mail-Benachrichtigung an Zuständige",
+    nonGoals: ["Keine Zahlungsabwicklung im Formular", "Keine Umfrage-Panels/Teilnehmerbeschaffung"],
+    integrations: ["Antworten als Datensätze in Fachsysteme (z.B. Anforderungen, Leads)"],
+    customerBlockers: [
+      "Export bestehender Formulare und Antworten aus Typeform, falls diese übernommen werden sollen",
+      "DSGVO-Einschätzung, ob personenbezogene Daten erhoben werden (bestimmt das Datenmodell)",
     ],
     openQuestions: [
       "Wie viele Antworten pro Monat sind zu erwarten?",
@@ -829,18 +853,13 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Bestellverwaltung mit Status und Versandetiketten",
       "Rabatte, Gutscheine und Staffelpreise",
     ],
-    nonGoals: [
-      "Kein Marktplatz mit mehreren Händlern",
-      "Kein eigenes Theme-System für Dritte",
+    nonGoals: ["Kein Marktplatz mit mehreren Händlern", "Kein eigenes Theme-System für Dritte"],
+    integrations: ["Warenwirtschaft für Bestände und Rechnungen"],
+    customerBlockers: [
+      "Auswahl und Vertragsabschluss mit dem Zahlungsdienstleister (inkl. Zugangsdaten)",
+      "Export des bestehenden Produktkatalogs und der Kundenhistorie aus Shopify",
     ],
-    integrations: [
-      "Zahlungsdienstleister",
-      "Warenwirtschaft für Bestände und Rechnungen",
-    ],
-    openQuestions: [
-      "Wie viele Artikel und Bestellungen pro Monat?",
-      "Welche Zahlarten sind zwingend?",
-    ],
+    openQuestions: ["Wie viele Artikel und Bestellungen pro Monat?", "Welche Zahlarten sind zwingend?"],
   },
   {
     id: "docusign",
@@ -861,9 +880,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Keine qualifizierte elektronische Signatur ohne zertifizierten Vertrauensdienst",
       "Kein Vertragsmanagement mit Fristenüberwachung in Stufe 1",
     ],
-    integrations: [
-      "Vertrauensdiensteanbieter für die Signatur",
-      "Ablage im Dokumentenspeicher",
+    integrations: ["Ablage im Dokumentenspeicher"],
+    customerBlockers: [
+      "Rechtliche Festlegung der nötigen Signaturstufe (einfach/fortgeschritten/qualifiziert)",
+      "Auswahl und Vertragsabschluss mit dem Vertrauensdiensteanbieter für die Signatur",
     ],
     openQuestions: [
       "Welche Signaturstufe ist rechtlich nötig (einfach/fortgeschritten/qualifiziert)?",
@@ -891,9 +911,10 @@ export const CONCEPT_TEMPLATES: ConceptTemplate[] = [
       "Kein grafischer Baukasten für Endnutzer in Stufe 1",
       "Keine Konnektoren zu Systemen, die nicht im Einsatz sind",
     ],
-    integrations: [
-      "Die real angebundenen Systeme (aus der Connector-Konfiguration des Projekts)",
-      "Benachrichtigung des zuständigen Teams bei Fehlern",
+    integrations: ["Benachrichtigung des zuständigen Teams bei Fehlern"],
+    customerBlockers: [
+      "Zugangsdaten/API-Keys für jedes real angebundene System (aus der Connector-Konfiguration des Projekts)",
+      "Freigabe, welche der bestehenden Zaps überhaupt geschäftskritisch sind (siehe offene Fragen)",
     ],
     openQuestions: [
       "Welche Zaps laufen heute und wie oft?",
@@ -909,6 +930,14 @@ export function findConceptTemplate(id: string): ConceptTemplate | undefined {
 /// Baut aus einer Vorlage den Konzept-Freitext. Bewusst Markdown-ähnlich als
 /// Klartext, weil `Concept.content` ein einfaches Textfeld ist und der Entwurf
 /// vom Berater direkt weiterbearbeitet wird.
+///
+/// Der Abschnitt "Blockiert auf Zulieferung durch den Kunden" ist bewusst vom
+/// Rest getrennt und unmissverständlich beschriftet: Die Anforderungs-
+/// Generierung liest genau diese Überschrift und leitet daraus keine
+/// Team-Anforderungen ab (siehe `GENERATE_SYSTEM_PROMPT` in
+/// `src/lib/actions/requirements.ts`). Ohne diese Trennung landen Migration
+/// und Fremdsystem-Zugänge als ganz normale Story im Sprint – und das Team
+/// bleibt daran hängen, weil nur der Kunde sie liefern kann.
 export function renderConceptTemplate(template: ConceptTemplate): string {
   const bullets = (items: string[]) => items.map((item) => `- ${item}`);
 
@@ -932,12 +961,16 @@ export function renderConceptTemplate(template: ConceptTemplate): string {
     "## Schnittstellen",
     ...bullets(template.integrations),
     "",
+    "## Blockiert auf Zulieferung durch den Kunden",
+    "Das sind keine Anforderungen für das Team, sondern Voraussetzungen, ohne die die betroffenen Module nicht startklar sind. Nicht als normale Sprint-Story einplanen – erst als Klärung an den Kunden stellen, danach die eigentliche Anforderung generieren.",
+    ...bullets(template.customerBlockers),
+    `- Die echten Daten aus ${template.name} als Export – keine Testdaten, sonst ist die Migration nicht durchführbar`,
+    "- Ablösetermin und Entscheidung zum Parallelbetrieb während der Umstellung",
+    "",
     "## Vor der Freigabe zu klären",
     ...bullets(template.openQuestions),
-    `- Datenübernahme aus ${template.name}: Umfang, Format, Stichtag`,
     "- Nutzerzahl, Rollen und Rechte zum Start",
     "- Betrieb: eigene Infrastruktur oder gehostet, Backup- und Ausfallkonzept",
-    "- Ablösetermin und Parallelbetrieb während der Umstellung",
     "",
     "---",
     `Aus Vorlage „${template.name}" erzeugt – Ausgangspunkt, kein fertiges Konzept.`,
