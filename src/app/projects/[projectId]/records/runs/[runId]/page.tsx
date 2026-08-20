@@ -65,18 +65,24 @@ export default async function AgentRunPage({
       </PanelStrip>
 
       {isAttempt ? (
-        <Panel title="Verlauf" count={attempt.length} padded={false}>
-          <h3 className="section-title px-4 pb-1 pt-3">Systemprompt</h3>
-          <details className="px-4 pb-3">
-            <summary className="cursor-pointer text-sm text-ink-3 hover:text-ink-2">
-              gilt für den ganzen Versuch (aufklappen)
-            </summary>
-            <pre className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-ink-2">{run.systemPrompt}</pre>
-          </details>
-          <div className="border-t border-hairline px-4 py-4">
-            <AttemptChat runs={attempt} />
-          </div>
-        </Panel>
+        // Eigenes PanelGrid mit nur einer Spalte: erst dadurch bekommt das
+        // Panel eine Hoehenbegrenzung (siehe <PanelGrid>) und scrollt seinen
+        // Rumpf selbst – sonst wuerde die Seite mit jeder Chatnachricht immer
+        // laenger, statt an Ort und Stelle zu scrollen.
+        <PanelGrid className="lg:grid-cols-1">
+          <Panel title="Verlauf" count={attempt.length} padded={false}>
+            <h3 className="section-title px-4 pb-1 pt-3">Systemprompt</h3>
+            <details className="px-4 pb-3">
+              <summary className="cursor-pointer text-sm text-ink-3 hover:text-ink-2">
+                gilt für den ganzen Versuch (aufklappen)
+              </summary>
+              <pre className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-ink-2">{run.systemPrompt}</pre>
+            </details>
+            <div className="border-t border-hairline px-4 py-4">
+              <AttemptChat runs={attempt} />
+            </div>
+          </Panel>
+        </PanelGrid>
       ) : (
         <PanelGrid className="lg:grid-cols-2">
           <Panel title={run.error ? "Fehler" : "Antwort des Agenten"} padded={false}>

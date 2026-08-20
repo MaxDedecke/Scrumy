@@ -16,7 +16,13 @@ import { AgentResponse } from "@/components/AgentResponse";
 // <details> eingeklappt statt den Verlauf zu dominieren.
 export function AttemptChat({ runs, className }: { runs: AgentRun[]; className?: string }) {
   return (
-    <div className={`flex flex-col gap-3 ${className ?? ""}`}>
+    // `min-h-[50vh]`: Auf dem Handy hebt <PanelGrid> die Höhenbegrenzung des
+    // Panels bewusst auf (siehe dortiger Kommentar), der Verlauf waechst dort
+    // also mit der Seite statt selbst zu scrollen. Ohne eigene Mindesthöhe
+    // waere ein kurzer Versuch (1-2 Turns) dann nur ein winziger Streifen –
+    // die Mindesthöhe sorgt fuer eine ordentliche Lesehöhe, auch wenn wenig
+    // Inhalt da ist.
+    <div className={`flex min-h-[50vh] flex-col gap-3 ${className ?? ""}`}>
       {runs.map((run, i) => (
         <div key={run.id} className="flex flex-col gap-1.5">
           <div className="max-w-[92%] self-end rounded-2xl rounded-br-sm border border-accent-border bg-accent-soft px-3 py-2">
