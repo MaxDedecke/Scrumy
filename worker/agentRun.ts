@@ -6,7 +6,7 @@
 // was ein Agent tut, passiert damit ohne Beleg. Gleichzeitig haengt hier der
 // sichtbare Agentenstatus (IDLE/WORKING) und das Rate-Limit pro LLM-Profil.
 import { prisma } from "@/lib/prisma";
-import { chat, chatTurn, LlmError, type ChatMessage, type ToolCall, type ToolDef } from "@/lib/llm";
+import { chat, chatTurn, LlmError, type ChatMessage, type ReasoningEffort, type ToolCall, type ToolDef } from "@/lib/llm";
 import type { Agent } from "@/generated/prisma/client";
 import { withLlmProfileLimit } from "./llmProfileLimiter";
 
@@ -45,6 +45,10 @@ export interface RunAgentOptions {
   /** Zeitlimit fuer den Modellaufruf. Umsetzungsschritte brauchen deutlich
    *  laenger als eine Textantwort – ein Ticket kann mehrere Dateien umfassen. */
   timeoutMs?: number;
+  /** Nur bei OpenRouter-Profilen wirksam, siehe `src/lib/llm.ts`. Reicht bis
+   *  zum Anbieter durch, sonst folgenlos (z.B. bei Anthropic/Ollama). */
+  reasoningEffort?: ReasoningEffort;
+  preferThroughput?: boolean;
 }
 
 export interface AgentRunResult {
@@ -101,6 +105,8 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         prompt,
         maxTokens: options.maxTokens ?? 8000,
         timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        reasoningEffort: options.reasoningEffort,
+        preferThroughput: options.preferThroughput,
       }),
     );
 

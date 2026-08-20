@@ -66,6 +66,10 @@ export interface ChatTurnResult {
   stopReason: string;
 }
 
+/// Nur für OpenRouter (GENERIC_OPENAI_COMPAT mit passender Base-URL) wirksam –
+/// siehe Kommentar bei `chatTurnOpenAiCompat`.
+export type ReasoningEffort = "low" | "medium" | "high";
+
 const PROVIDER_ENV_VAR: Record<LlmProvider, string | null> = {
   ANTHROPIC: "ANTHROPIC_API_KEY",
   OPENAI: "OPENAI_API_KEY",
@@ -642,6 +646,8 @@ async function chatTurnOpenAiCompat(
   tools: ToolDef[] | undefined,
   maxTokens: number,
   timeoutMs: number,
+  reasoningEffort?: ReasoningEffort,
+  preferThroughput?: boolean,
 ): Promise<ChatTurnResult> {
   const fallback = profile.provider === "OPENAI" ? "https://api.openai.com/v1" : null;
   const base = trimTrailingSlash(profile.baseUrl || fallback || "");
@@ -656,6 +662,22 @@ async function chatTurnOpenAiCompat(
       ? tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } }))
       : undefined;
   const url = `${base}/chat/completions`;
+
+  // `reasoning`/`provider` sind OpenRouter-eigene Erweiterungen des
+  // OpenAI-Vertrags – ein anderer OpenAI-kompatibler Anbieter hinter
+  // GENERIC_OPENAI_COMPAT kennt sie nicht zwangsläufig, deshalb nur schicken,
+  // wenn die Base-URL wirklich auf OpenRouter zeigt.
+  const isOpenRouter = base.includes("openrouter.ai");
+  const openRouterExtras = {
+    ...(isOpenRouter && reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
+    // "sort: throughput" statt eines fest einprogrammierten Provider-Namens:
+    // OpenRouter routet `deepseek-v4-flash-0731` über 30 Upstream-Anbieter mit
+    // stark schwankender Geschwindigkeit (im Knowledge-Hub-Projekt beobachtet:
+    // 8 Tokens/s bei einem als "degradiert" markierten Anbieter vs. über 100
+    // Tokens/s bei anderen) – eine feste Liste würde veralten, sobald sich die
+    // Anbieter-Gesundheit ändert.
+    ...(isOpenRouter && preferThroughput ? { provider: { sort: "throughput" } } : {}),
+  };
 
   let data: {
     choices?: { message?: { content?: string; tool_calls?: OpenAiToolCall[] }; finish_reason?: string }[];
@@ -674,7 +696,13 @@ async function chatTurnOpenAiCompat(
     data = (await postJson(
       url,
       headers,
-      { model: profile.model, max_tokens: effectiveMaxTokens, messages: openAiMessages, ...(openAiTools ? { tools: openAiTools } : {}) },
+      {
+        model: profile.model,
+        max_tokens: effectiveMaxTokens,
+        messages: openAiMessages,
+        ...(openAiTools ? { tools: openAiTools } : {}),
+        ...openRouterExtras,
+      },
       timeoutMs,
     )) as typeof data;
   } catch (error) {
@@ -686,7 +714,13 @@ async function chatTurnOpenAiCompat(
       data = (await postJson(
         url,
         headers,
-        { model: profile.model, max_completion_tokens: effectiveMaxTokens, messages: openAiMessages, ...(openAiTools ? { tools: openAiTools } : {}) },
+        {
+          model: profile.model,
+          max_completion_tokens: effectiveMaxTokens,
+          messages: openAiMessages,
+          ...(openAiTools ? { tools: openAiTools } : {}),
+          ...openRouterExtras,
+        },
         timeoutMs,
       )) as typeof data;
     } else {
@@ -739,6 +773,8 @@ export async function chatTurn({
   tools,
   maxTokens = 8000,
   timeoutMs = 180_000,
+  reasoningEffort,
+  preferThroughput,
 }: {
   profile: ChatProfile;
   system: string;
@@ -746,6 +782,16 @@ export async function chatTurn({
   tools?: ToolDef[];
   maxTokens?: number;
   timeoutMs?: number;
+  /** Nur bei OpenRouter (GENERIC_OPENAI_COMPAT) wirksam: begrenzt, wie viele
+   *  Tokens ein Reasoning-Modell fürs Nachdenken verbrennen darf, bevor es
+   *  antwortet – ohne das kann sich ein Modell wie deepseek-v4-flash im
+   *  Nachdenken verlieren und nie eine Antwort liefern (siehe Kommentar bei
+   *  `chatTurnOpenAiCompat`). */
+  reasoningEffort?: ReasoningEffort;
+  /** Nur bei OpenRouter wirksam: bevorzugt den Upstream-Anbieter mit dem
+   *  höchsten gemessenen Durchsatz statt OpenRouters Standardrouting, das
+   *  auch spürbar langsamere/instabile Anbieter treffen kann. */
+  preferThroughput?: boolean;
 }): Promise<ChatTurnResult> {
   switch (profile.provider) {
     case "ANTHROPIC":
@@ -754,7 +800,7 @@ export async function chatTurn({
       return chatTurnOllama(profile, system, messages, tools, timeoutMs);
     case "OPENAI":
     case "GENERIC_OPENAI_COMPAT":
-      return chatTurnOpenAiCompat(profile, system, messages, tools, maxTokens, timeoutMs);
+      return chatTurnOpenAiCompat(profile, system, messages, tools, maxTokens, timeoutMs, reasoningEffort, preferThroughput);
   }
 }
 
@@ -768,12 +814,16 @@ export async function chat({
   prompt,
   maxTokens = 8000,
   timeoutMs = 180_000,
+  reasoningEffort,
+  preferThroughput,
 }: {
   profile: ChatProfile;
   system: string;
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoningEffort?: ReasoningEffort;
+  preferThroughput?: boolean;
 }): Promise<string> {
   const result = await chatTurn({
     profile,
@@ -781,6 +831,8 @@ export async function chat({
     messages: [{ role: "user", content: prompt }],
     maxTokens,
     timeoutMs,
+    reasoningEffort,
+    preferThroughput,
   });
   return result.text;
 }

@@ -305,11 +305,22 @@ Antworte nur mit diesem JSON-Objekt:
 "critical" bedeutet: die Änderung braucht vor dem Ausliefern eine menschliche Freigabe (z.B. Datenmigration, Zahlungen, Löschvorgänge, Zugriffsrechte).
 "anfrageNr" nur setzen, wenn dieses Ticket direkt eine der oben gelisteten Kundenanfragen abdeckt – sonst weglassen.`;
 
+  // reasoningEffort/preferThroughput: Im Knowledge-Hub-Projekt brauchte die
+  // Sprint-Planung mit deepseek-v4-flash (OpenRouter) 6 Anläufe, bevor einer
+  // durchkam – abwechselnd 5-Minuten-Timeout und am 16k-Token-Limit
+  // abgeschnitten. Ursache laut OpenRouter-Endpunkt-Statistik: Das Modell
+  // routet über 30 Upstream-Anbieter mit stark schwankendem Durchsatz (8 bis
+  // über 100 Tokens/s) und kann sich bei den vielen gleichzeitigen
+  // Ticket-Regeln hier (Atomarität, Schätzung, Dateigrenze, …) im Nachdenken
+  // verlieren. "low" deckelt das Reasoning-Budget, "throughput" vermeidet die
+  // langsamen/instabilen Anbieter.
   const { text } = await runAgent({
     agent,
     projectId,
     kind: "sprint_planning",
     headline: `Plant Sprint ${nextNumber}`,
+    reasoningEffort: "low",
+    preferThroughput: true,
     system: `${TEAM_GRUNDREGELN}
 
 Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwortest ausschließlich mit einem JSON-Objekt.`,
@@ -346,6 +357,8 @@ Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwort
       kind: "sprint_refinement",
       headline: `Zerlegt zu große Tickets für Sprint ${nextNumber}`,
       maxTokens: 5000,
+      reasoningEffort: "low",
+      preferThroughput: true,
       // Zerlegen ist ein Sonderfall des ohnehin ueppigen DEFAULT_TIMEOUT_MS
       // (siehe worker/agentRun.ts): selbst der schlanke Prompt hier verlangt
       // dem Modell noch reichlich Ueberlegung ab (mehrere neue, in sich
