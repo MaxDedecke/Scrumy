@@ -316,24 +316,48 @@ Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwort
     prompt: planningPrompt,
   });
 
-  let parsed = extractJsonObject(text);
+  const parsed = extractJsonObject(text);
   let planned = Array.isArray(parsed.tickets) ? (parsed.tickets as PlannedTicket[]).slice(0, remainingSlots) : [];
 
+  // Je Ticket einzeln gemerkt (nicht nur als flache Liste), damit unten die
+  // bereits passenden Tickets von den zu großen getrennt werden können.
+  const ticketIssues = planned.map((ticket) => atomicityIssues(ticket));
   const issues = planned.flatMap((ticket, index) =>
-    atomicityIssues(ticket).map((issue) => `Ticket ${index + 1} „${String(ticket.title ?? "")}": ${issue}`),
+    ticketIssues[index].map((issue) => `Ticket ${index + 1} „${String(ticket.title ?? "")}": ${issue}`),
   );
   if (parsed.done !== true && issues.length > 0) {
+    const goodTickets = planned.filter((_, index) => ticketIssues[index].length === 0);
+    const badTickets = planned.filter((_, index) => ticketIssues[index].length > 0);
+
+    // Bewusst NICHT der volle planningPrompt (Konzept, Beschlussregister,
+    // Backlog, Kundenanfragen, Sprint-Historie – alles schon in den ersten
+    // Entwurf eingeflossen) und auch nicht der komplette erste Entwurf: Das
+    // Modell soll hier nur noch die paar zu großen Tickets zerlegen, nicht
+    // den ganzen Sprint neu durchdenken. Genau diese unnötig aufgeblähten
+    // Refinement-Prompts liefen zuletzt öfter in den Timeout (5 Min. reichten
+    // nicht, siehe Job-Log) – vermutlich weil das Modell bei so vielen
+    // gleichzeitig zu beachtenden Dingen entsprechend lange "denkt". Ein
+    // knapper Prompt mit nur den betroffenen Tickets braucht spürbar weniger
+    // davon. Die bereits passenden Tickets übernehmen wir unten unverändert
+    // aus dem ersten Entwurf, ohne dass das Modell sie erneut ausgeben muss.
     const refined = await runAgent({
       agent,
       projectId,
       kind: "sprint_refinement",
       headline: `Zerlegt zu große Tickets für Sprint ${nextNumber}`,
       maxTokens: 5000,
-      system: `${TEAM_GRUNDREGELN}\n\nDu bist ${agent.name}, Product Owner. Du zerlegst zu große Tickets. Du antwortest ausschließlich mit einem JSON-Objekt.`,
-      prompt: `${planningPrompt}\n\n# Erster Entwurf\n${JSON.stringify(parsed)}\n\n# Verstöße gegen die harten Ticketgrenzen\n${issues.join("\n")}\n\nSchreibe den gesamten Sprintentwurf neu. Zerlege die genannten Tickets, statt nur Schätzung oder Dateiliste künstlich zu kürzen. Maximal ${remainingSlots} neue Tickets; was nicht hineinpasst, bleibt für den nächsten Sprint.`,
+      // Zerlegen ist ein Sonderfall des ohnehin ueppigen DEFAULT_TIMEOUT_MS
+      // (siehe worker/agentRun.ts): selbst der schlanke Prompt hier verlangt
+      // dem Modell noch reichlich Ueberlegung ab (mehrere neue, in sich
+      // stimmige Teiltickets statt einer einzelnen Antwort). Mehr Luft statt
+      // eines weiteren Fehlschlags, der das Ticket nur unzerlegt zurücklässt.
+      timeoutMs: 480_000,
+      system: `${TEAM_GRUNDREGELN}\n\nDu bist ${agent.name}, Product Owner. Du zerlegst zu große Tickets in kleinere, eigenständig umsetzbare Teiltickets. Du antwortest ausschließlich mit einem JSON-Objekt.`,
+      prompt: `# Zu große Tickets aus dem Sprint-Entwurf für Sprint ${nextNumber}\n${JSON.stringify(badTickets, null, 2)}\n\n# Verstöße gegen die harten Ticketgrenzen\n${issues.join("\n")}\n\nZerlege NUR diese zu großen Tickets, je in 2–4 kleinere, eigenständig umsetzbare Teiltickets (Schätzung je 1–3, höchstens ${MAX_FILES_PER_TICKET} Dateien, höchstens ${MAX_CRITERIA_PER_TICKET} Akzeptanzkriterien). Die übrigen ${goodTickets.length} Tickets dieses Sprints sind bereits in Ordnung und werden unverändert übernommen – wiederhole sie nicht.\n\nAntworte nur mit diesem JSON-Objekt, "tickets" enthält NUR die neuen Teiltickets (höchstens ${Math.max(remainingSlots - goodTickets.length, 0)} insgesamt):\n{\n  "tickets": [\n    {\n      "title": "ein einzelnes, kleines Ergebnis",\n      "description": "was genau zu tun ist",\n      "acceptanceCriteria": ["konkret prüfbares Kriterium"],\n      "likelyFiles": ["relativer/pfad.ts"],\n      "type": "FEATURE | BUG | INTEGRATION | CHORE",\n      "priority": "LOW | MEDIUM | HIGH | URGENT",\n      "estimate": 1,\n      "role": "BACKEND | FRONTEND | QA | DEVOPS",\n      "critical": false\n    }\n  ]\n}`,
     });
-    parsed = extractJsonObject(refined.text);
-    planned = Array.isArray(parsed.tickets) ? (parsed.tickets as PlannedTicket[]).slice(0, remainingSlots) : [];
+    const refinedParsed = extractJsonObject(refined.text);
+    const splitTickets = Array.isArray(refinedParsed.tickets) ? (refinedParsed.tickets as PlannedTicket[]) : [];
+    planned = [...goodTickets, ...splitTickets].slice(0, remainingSlots);
   }
 
   const goal = String(parsed.goal ?? "").trim() || `Sprint ${nextNumber}`;

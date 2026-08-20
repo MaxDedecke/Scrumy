@@ -183,6 +183,12 @@ async function splitTicketAfterTokenLimit({
     kind: "ticket_split",
     headline: `Zerlegt Ticket „${ticket.title}" nach Token-Limit`,
     maxTokens: 5000,
+    // Wie bei sprint_refinement (worker/tasks/sprintPlanning.ts, dieselbe
+    // Begründung dort): Mehrere in sich stimmige Teiltickets aus einem zu
+    // großen Arbeitsschritt herauszuarbeiten braucht dem Modell erkennbar
+    // mehr Überlegung als eine einzelne Antwort – der DEFAULT_TIMEOUT_MS
+    // (5 Min., siehe worker/agentRun.ts) reichte dafür beobachtet nicht immer.
+    timeoutMs: 480_000,
     system: `${TEAM_GRUNDREGELN}\n\nDu bist ${productOwner.name}, Product Owner. Du zerlegst einen technisch zu großen Arbeitsschritt. Du antwortest ausschließlich mit einem JSON-Objekt.`,
     prompt: `${context}
 

@@ -9,6 +9,7 @@ import { ActionForm } from "@/components/ActionForm";
 import { IconSubmit } from "@/components/IconSubmit";
 import { PlayIcon, StopIcon } from "@/components/icons";
 import { PreviewFrame } from "@/components/PreviewFrame";
+import { ReportBugForm } from "@/components/ReportBugForm";
 
 // Zeigt das Frontend, das das Team im Projekt-Repo gebaut hat, live in einem
 // iframe – siehe src/lib/preview.ts für die Erkennung/den Prozessstart.
@@ -85,6 +86,13 @@ export default async function ProjectPreviewPage({
             <pre className="max-h-64 w-full max-w-2xl overflow-auto rounded-lg border border-hairline bg-surface-2/60 p-3 text-left text-xs text-ink-3">
               {info.log}
             </pre>
+          )}
+          {info.status === "ERROR" && (
+            <ReportBugForm
+              projectId={projectId}
+              source="preview"
+              diagnostics={[info.error, info.log].filter(Boolean).join("\n\n")}
+            />
           )}
         </div>
       )}

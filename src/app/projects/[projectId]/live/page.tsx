@@ -9,6 +9,7 @@ import { ActionForm } from "@/components/ActionForm";
 import { IconSubmit } from "@/components/IconSubmit";
 import { PlayIcon, StopIcon } from "@/components/icons";
 import { LiveStackRedirect } from "@/components/LiveStackRedirect";
+import { ReportBugForm } from "@/components/ReportBugForm";
 
 // Der Tab, den der "Anwendung starten"-Knopf im Projektkopf (siehe
 // LiveAppControls) IMMER neu öffnet – unabhängig davon, ob der Stack schon
@@ -93,6 +94,13 @@ export default async function ProjectLivePage({
             <pre className="max-h-64 w-full max-w-2xl overflow-auto rounded-lg border border-hairline bg-surface-2/60 p-3 text-left text-xs text-ink-3">
               {info.log}
             </pre>
+          )}
+          {info.status === "ERROR" && (
+            <ReportBugForm
+              projectId={projectId}
+              source="live"
+              diagnostics={[info.error, info.log].filter(Boolean).join("\n\n")}
+            />
           )}
         </div>
       )}
