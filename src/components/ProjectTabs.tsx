@@ -18,6 +18,7 @@ export function ProjectTabs({ projectId, className = "" }: { projectId: string; 
     { label: "Anforderungen & Konzept", href: `${base}/discovery` },
     { label: "Team-Büro", href: `${base}/office` },
     { label: "Benutzeroberfläche", href: `${base}/preview` },
+    { label: "Code", href: `${base}/code` },
     { label: "Nachweise", href: `${base}/records` },
     { label: "Team & Einstellungen", href: `${base}/team` },
   ];
@@ -25,7 +26,7 @@ export function ProjectTabs({ projectId, className = "" }: { projectId: string; 
   return (
     <nav
       aria-label="Projektbereiche"
-      className={`shrink-0 grid grid-cols-6 gap-1 rounded-xl border border-hairline bg-surface p-1 ${className}`}
+      className={`shrink-0 grid grid-cols-7 gap-1 rounded-xl border border-hairline bg-surface p-1 ${className}`}
     >
       {tabs.map((tab) => {
         // Unterseiten zählen zu ihrem Tab (ein Commit-Diff liegt unter

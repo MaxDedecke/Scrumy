@@ -10,7 +10,7 @@
 // sich `app` und `worker` teilen: Der Worker schreibt (Agenten committen und
 // pushen), die App liest (Commit-Historie und Diffs in der Oberflaeche).
 import { execFile } from "node:child_process";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -571,6 +571,44 @@ export async function readRepoFile(dir: string, relativePath: string): Promise<s
   } catch {
     return null;
   }
+}
+
+/// Wie viele Bytes die Repo-Ansicht (Code-Tab) von einer Datei anzeigt, bevor
+/// sie abschneidet. Getrennt von `readRelevantSourceContext`s Zeichenbudget:
+/// dort geht es um Promptgröße, hier nur um eine vernünftige Browserseite.
+export const REPO_VIEWER_MAX_BYTES = 512 * 1024;
+
+export interface RepoFileView {
+  content: string;
+  size: number;
+  binary: boolean;
+  truncated: boolean;
+}
+
+/// Liest eine Datei fuer die Repo-Ansicht (Code-Tab): anders als `readRepoFile`
+/// bricht das hier bei Binaerdateien nicht einfach mit `null` ab (`readFile`
+/// mit `utf8` wuerde sie als kaputten Text anzeigen), sondern meldet das
+/// explizit, und schneidet sehr grosse Dateien statt den ganzen Server-Prozess
+/// mit einem mehrere-MB-grossen String zu belasten.
+export async function readRepoFileForViewer(dir: string, relativePath: string): Promise<RepoFileView | null> {
+  const target = safeRepoPath(dir, relativePath);
+  let info;
+  try {
+    info = await stat(target);
+  } catch {
+    return null;
+  }
+  if (!info.isFile()) return null;
+
+  const buffer = await readFile(target);
+  // Ein Null-Byte kommt in echtem Text praktisch nie vor – dieselbe Heuristik
+  // wie `git diff`/`git grep -I` nutzen, um Binaerdateien zu erkennen.
+  const binary = buffer.subarray(0, 8000).includes(0);
+  if (binary) return { content: "", size: info.size, binary: true, truncated: false };
+
+  const truncated = buffer.length > REPO_VIEWER_MAX_BYTES;
+  const content = buffer.subarray(0, REPO_VIEWER_MAX_BYTES).toString("utf8");
+  return { content, size: info.size, binary: false, truncated };
 }
 
 const SOURCE_EXTENSIONS = new Set([
