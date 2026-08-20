@@ -392,6 +392,99 @@ function extractBareJsonToolCalls(text: string): { text: string; toolCalls: Tool
   return { text: result, toolCalls };
 }
 
+/// Vierte beobachtete Form (wieder qwen2.5-coder über den RunPod-Ollama-Proxy,
+/// im OnePhoto-Projekt aufgefallen): gar keine Klammern/Tags mehr, nur der
+/// Werkzeugname allein auf einer Zeile, danach abwechselnd "feld"/"wert" oder
+/// "feld: wert" in einer Zeile, z.B.
+///   run_command
+///   command
+///   npm install
+///   cwd: frontend
+/// Tückisch: Ohne diesen Ausweich verschwindet so ein Aufruf spurlos als
+/// Fließtext, OHNE dass der Loop es merkt (worker/agentToolLoop.ts prüft nur
+/// `toolCalls.length === 0` für den ganzen Turn) – der Turn enthält meist noch
+/// einen echten, geklammerten Aufruf daneben, `toolCalls.length` bleibt also
+/// > 0. Das Modell hält npm install/test für erledigt, bekommt aber nie ein
+/// Tool-Ergebnis dazu und wiederholt dieselbe Absicht Runde für Runde, bis
+/// das Turn-Budget weg ist – Ursache für ungewöhnlich lang laufende Tickets
+/// ohne echten Fortschritt.
+const LABELED_TOOL_NAMES = new Set([
+  "read_file",
+  "list_files",
+  "search_files",
+  "write_file",
+  "edit_file",
+  "run_command",
+  "finish",
+]);
+const KNOWN_FIELD_NAMES = new Set([
+  "path",
+  "content",
+  "search",
+  "replace",
+  "command",
+  "cwd",
+  "query",
+  "commitMessage",
+  "summary",
+  "notes",
+  "clarification",
+  "clarificationOptions",
+]);
+// Erstes Pflichtfeld der Werkzeuge mit genau einem Kernparameter – nur für
+// die wird eine unbeschriftete erste Zeile als Wert übernommen. list_files
+// hat keins, write_file/edit_file/finish haben mehrere Pflichtfelder, da wäre
+// die Zuordnung geraten statt sicher.
+const PRIMARY_FIELD: Record<string, string> = { read_file: "path", search_files: "query", run_command: "command" };
+
+function parseLabeledToolCalls(text: string): { text: string; toolCalls: ToolCall[] } {
+  const lines = text.split("\n");
+  const toolCalls: ToolCall[] = [];
+  const consumed = new Array(lines.length).fill(false);
+
+  for (let i = 0; i < lines.length; i++) {
+    const name = lines[i].trim();
+    if (!LABELED_TOOL_NAMES.has(name)) continue;
+
+    const input: Record<string, unknown> = {};
+    let pendingKey: string | null = null;
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const trimmed = lines[j].trim();
+      if (!trimmed || LABELED_TOOL_NAMES.has(trimmed)) break;
+
+      const inline = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_]*):\s*(.*)$/);
+      if (inline && KNOWN_FIELD_NAMES.has(inline[1])) {
+        input[inline[1]] = inline[2];
+        pendingKey = null;
+      } else if (pendingKey) {
+        input[pendingKey] = trimmed;
+        pendingKey = null;
+      } else if (KNOWN_FIELD_NAMES.has(trimmed)) {
+        pendingKey = trimmed;
+      } else if (PRIMARY_FIELD[name] && !(PRIMARY_FIELD[name] in input)) {
+        input[PRIMARY_FIELD[name]] = trimmed;
+      } else {
+        // Weder erkanntes Feld noch (mehr) Platz für den Kernparameter –
+        // gehört nicht mehr zu diesem Aufruf, Block hier beenden.
+        break;
+      }
+    }
+
+    // Ohne mindestens ein Feld ist "Name allein auf der Zeile" zu häufig
+    // Zufallstreffer (z.B. eine Überschrift "### run_command" im Fließtext)
+    // – da lieber nichts erkennen als einen leeren Aufruf erfinden.
+    if (Object.keys(input).length === 0) continue;
+
+    toolCalls.push({ id: nextToolCallId(), name, input });
+    for (let k = i; k < j; k++) consumed[k] = true;
+    i = j - 1;
+  }
+
+  if (toolCalls.length === 0) return { text, toolCalls: [] };
+  return { text: lines.filter((_, idx) => !consumed[idx]).join("\n").trim(), toolCalls };
+}
+
 function parsePseudoToolCalls(text: string): { text: string; toolCalls: ToolCall[] } {
   const toolCalls: ToolCall[] = [];
   let cleaned = text;
@@ -420,6 +513,10 @@ function parsePseudoToolCalls(text: string): { text: string; toolCalls: ToolCall
   const bare = extractBareJsonToolCalls(cleaned);
   toolCalls.push(...bare.toolCalls);
   cleaned = bare.text;
+
+  const labeled = parseLabeledToolCalls(cleaned);
+  toolCalls.push(...labeled.toolCalls);
+  cleaned = labeled.text;
 
   // Umschließende Reste (<tool_call>, </tool_call>) weg – was übrig bleibt,
   // ist der echte Fließtext-Anteil der Antwort.
