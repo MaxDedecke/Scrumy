@@ -176,6 +176,15 @@ async function dockerCompose(args: string[], timeoutMs = 20_000): Promise<string
 /// nach Projekt-Loeschung, siehe purge.ts/reconcileOrphanLiveStacks).
 /// Volumes werden IMMER mitentfernt: aktuell keine Persistenz zwischen zwei
 /// Live-Laeufen (siehe liveKeepData-Kommentar in prisma/schema.prisma).
+/// Images ebenfalls: "docker compose ... up --build" versieht sie mit
+/// demselben Projekt-Label wie Container/Netz/Volumes (nachgeprueft per
+/// "docker inspect"), nur wurden sie hier nie mitentfernt – ein Projekt, das
+/// einmal live war, hinterliess seine 1-3 Images (frontend/backend/db) fuer
+/// immer, auch nach Terminate oder Projekt-Loeschung. Bei laufend neuen
+/// Kundenprojekten ohne Obergrenze summiert sich das unbemerkt zu vielen GB
+/// (beobachtet: mehrere GB verwaiste scrumy-live-*-Images auf dieser
+/// Maschine). "docker rmi" statt "image prune", damit gezielt nur die
+/// Images DIESES Stacks verschwinden, nicht versehentlich fremde.
 async function removeStackByLabel(name: string): Promise<void> {
   const label = `label=com.docker.compose.project=${name}`;
 
@@ -196,6 +205,12 @@ async function removeStackByLabel(name: string): Promise<void> {
     .map((line) => line.trim())
     .filter(Boolean);
   for (const volume of volumeNames) await docker(["volume", "rm", volume]).catch(() => {});
+
+  const imageIds = (await docker(["images", "-q", "--filter", label]).catch(() => ""))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (imageIds.length > 0) await docker(["rmi", "-f", ...imageIds]).catch(() => {});
 }
 
 // --- Sperre: nur ein Projekt gleichzeitig live -----------------------------
