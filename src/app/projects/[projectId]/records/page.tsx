@@ -17,8 +17,9 @@ import { splitIntoAttempts } from "@/lib/agentRunAttempts";
 // Zeile steht, lässt sich hier bis zur Quelle aufklappen – das ist der
 // Unterschied zwischen "das Team sagt, es sei fertig" und Nachvollziehbarkeit.
 //
-// Drei Panels statt drei Abschnitte untereinander: Die Commit-Liste links wird
-// mit jedem Sprint länger, ohne die beiden anderen Belegarten wegzuschieben.
+// Drei Panels statt drei Abschnitte untereinander: Die Liste der Agentenläufe
+// links wächst mit jedem Ticket, ohne die beiden anderen Belegarten
+// wegzuschieben – sie steht vorn, weil sie zeigt, wie ein Commit zustande kam.
 export const dynamic = "force-dynamic";
 
 export default async function ProjectRecordsPage({
@@ -51,44 +52,7 @@ export default async function ProjectRecordsPage({
 
   return (
     <PanelGrid className="lg:grid-cols-2 lg:grid-rows-2">
-      <Panel
-        title="Commits im Repository"
-        count={commits.length}
-        className="lg:row-span-2"
-        padded={false}
-        action={
-          project.workspacePath && (
-            <span className="truncate font-mono text-ink-4" title={project.workspacePath}>
-              {project.workspacePath}
-            </span>
-          )
-        }
-      >
-        {commits.length === 0 ? (
-          <PanelEmpty>Noch keine Commits – das Team hat das Repository noch nicht angelegt.</PanelEmpty>
-        ) : (
-          <ul className="divide-y divide-hairline">
-            {commits.map((commit) => (
-              <li key={commit.sha}>
-                <Link
-                  href={`/projects/${project.id}/records/commits/${commit.sha}`}
-                  className="flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-surface-2"
-                >
-                  <code className="mt-0.5 shrink-0 text-xs text-ink-4">{commit.shortSha}</code>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm text-ink">{commit.subject}</span>
-                    <span className="text-xs text-ink-3">
-                      {commit.author} · {formatTime(commit.date)} · {commit.files.length} Dateien
-                    </span>
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Panel>
-
-      <Panel title="Agentenläufe" count={runRows.length} padded={false}>
+      <Panel title="Agentenläufe" count={runRows.length} className="lg:row-span-2" padded={false}>
         {runRows.length === 0 ? (
           <PanelEmpty>Noch kein Agent tätig geworden.</PanelEmpty>
         ) : (
@@ -128,6 +92,42 @@ export default async function ProjectRecordsPage({
                 </li>
               );
             })}
+          </ul>
+        )}
+      </Panel>
+
+      <Panel
+        title="Commits im Repository"
+        count={commits.length}
+        padded={false}
+        action={
+          project.workspacePath && (
+            <span className="truncate font-mono text-ink-4" title={project.workspacePath}>
+              {project.workspacePath}
+            </span>
+          )
+        }
+      >
+        {commits.length === 0 ? (
+          <PanelEmpty>Noch keine Commits – das Team hat das Repository noch nicht angelegt.</PanelEmpty>
+        ) : (
+          <ul className="divide-y divide-hairline">
+            {commits.map((commit) => (
+              <li key={commit.sha}>
+                <Link
+                  href={`/projects/${project.id}/records/commits/${commit.sha}`}
+                  className="flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-surface-2"
+                >
+                  <code className="mt-0.5 shrink-0 text-xs text-ink-4">{commit.shortSha}</code>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-ink">{commit.subject}</span>
+                    <span className="text-xs text-ink-3">
+                      {commit.author} · {formatTime(commit.date)} · {commit.files.length} Dateien
+                    </span>
+                  </span>
+                </Link>
+              </li>
+            ))}
           </ul>
         )}
       </Panel>
