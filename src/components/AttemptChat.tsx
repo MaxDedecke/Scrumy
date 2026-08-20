@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useRef } from "react";
 import type { AgentRun } from "@/generated/prisma/client";
 import { AgentResponse } from "@/components/AgentResponse";
 
@@ -15,6 +18,16 @@ import { AgentResponse } from "@/components/AgentResponse";
 // als jeder Folge-Turn und bei jedem Versuch wortgleich, deshalb per
 // <details> eingeklappt statt den Verlauf zu dominieren.
 export function AttemptChat({ runs, className }: { runs: AgentRun[]; className?: string }) {
+  // Beim Öffnen interessiert nur der letzte Schritt – ohne das hier landet
+  // man immer oben beim "Ursprünglicher Auftrag" und muss sich erst durch den
+  // ganzen Verlauf scrollen. `scrollIntoView` statt `scrollTo(0, hoehe)`,
+  // weil so auch dann noch die richtige Stelle getroffen wird, wenn sich
+  // (z.B. durch spaeteres Nachladen) die Panelhoehe nochmal aendert.
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, []);
+
   return (
     // `min-h-[50vh]`: Auf dem Handy hebt <PanelGrid> die Höhenbegrenzung des
     // Panels bewusst auf (siehe dortiger Kommentar), der Verlauf waechst dort
@@ -48,6 +61,7 @@ export function AttemptChat({ runs, className }: { runs: AgentRun[]; className?:
           </div>
         </div>
       ))}
+      <div ref={endRef} />
     </div>
   );
 }
