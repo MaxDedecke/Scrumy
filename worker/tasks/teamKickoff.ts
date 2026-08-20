@@ -178,8 +178,10 @@ Schreibe das Dokument "Design-Konzept" als Markdown (ohne Code-Fence). Gliederun
 ## Typografie
 (Schriftfamilie, Größen-/Gewichts-Skala)
 ## Spacing & Layout-Raster
+## Navigation
+(Aufbau der Seitenleiste: welche Menüpunkte es zum Start gibt, wie der aktive Punkt aussieht, wie sie sich auf schmalen Breiten verhält. Die Seitenleiste ist laut Grundregeln Pflicht, auch bei nur einem Menüpunkt – hier legst du fest, wie sie konkret aussieht, nicht ob es sie gibt.)
 ## Kernkomponenten
-(welche shadcn/ui-Komponenten das Projekt durchgängig nutzt, z.B. Button, Card, Dialog, Table, Form)
+(welche shadcn/ui-Komponenten das Projekt durchgängig nutzt, z.B. Button, Card, Dialog, Table, Form, Sidebar)
 ## Zustände
 (wie leer/lädt/Fehler bei Ansichten mit Daten konkret aussehen)
 ## Responsive-Verhalten
