@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentRun } from "@/generated/prisma/client";
 import { AgentResponse } from "@/components/AgentResponse";
+import { ArrowDownIcon } from "@/components/icons";
 
 // Ein Umsetzungsversuch als Chatverlauf statt als Stapel einzelner Nachweise:
 // Jeder Turn (siehe worker/agentToolLoop.ts) war bisher ein eigener Nachweis
@@ -22,11 +23,50 @@ export function AttemptChat({ runs, className }: { runs: AgentRun[]; className?:
   // man immer oben beim "Ursprünglicher Auftrag" und muss sich erst durch den
   // ganzen Verlauf scrollen. `scrollIntoView` statt `scrollTo(0, hoehe)`,
   // weil so auch dann noch die richtige Stelle getroffen wird, wenn sich
-  // (z.B. durch spaeteres Nachladen) die Panelhoehe nochmal aendert.
+  // (z.B. durch spaeteres Nachladen) die Panelhoehe nochmal aendert – und
+  // weil der Verlauf gar nicht selbst scrollt: Das tut mal der Panelrumpf
+  // (ab lg), mal die ganze Seite (darunter, siehe <PanelGrid>).
   const endRef = useRef<HTMLDivElement>(null);
+
+  // Laeuft der Verlauf mit den neuen Schritten mit? Solange die Schlussmarke
+  // sichtbar ist ja – wer selbst nach oben scrollt, liest gerade etwas und
+  // will nicht beim naechsten <LiveRefresh>-Takt (6s, siehe dort) wieder ans
+  // Ende gerissen werden. Gemessen per IntersectionObserver statt per
+  // Scroll-Listener: Der rechnet die Sichtbarkeit ueber alle scrollenden
+  // Vorfahren hinweg aus, egal welcher davon hier gerade der scrollende ist.
+  const [atEnd, setAtEnd] = useState(true);
+  const atEndRef = useRef(true);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
+    const node = endRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        atEndRef.current = entry.isIntersecting;
+        setAtEnd(entry.isIntersecting);
+      },
+      // Etwas Spielraum: Ein Stueck ueber dem Ende zaehlt noch als "unten",
+      // sonst schaltet das Mitlaufen schon beim kleinsten Wischen ab.
+      { rootMargin: "0px 0px 120px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
   }, []);
+
+  // Beim Öffnen ans Ende springen, danach bei jedem neuen Schritt nachziehen –
+  // aber nur, wenn nicht gerade weiter oben gelesen wird. Die Signatur haengt
+  // nicht nur an der Zahl der Schritte: Der letzte Turn waechst noch, waehrend
+  // das Modell antwortet.
+  const last = runs[runs.length - 1];
+  const signature = `${runs.length}:${last?.id ?? ""}:${last?.response?.length ?? 0}:${last?.status ?? ""}`;
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      endRef.current?.scrollIntoView({ block: "end" });
+      return;
+    }
+    if (atEndRef.current) endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [signature]);
 
   return (
     // `min-h-[50vh]`: Auf dem Handy hebt <PanelGrid> die Höhenbegrenzung des
@@ -61,7 +101,30 @@ export function AttemptChat({ runs, className }: { runs: AgentRun[]; className?:
           </div>
         </div>
       ))}
-      <div ref={endRef} />
+      {/* Schlussmarke: einen Pixel hoch statt hoehenlos, damit der Observer
+          eine Flaeche zum Schneiden hat. */}
+      <div ref={endRef} className="h-px shrink-0" />
+
+      {/* Der Knopf zurueck ans Ende klebt (`sticky`) am unteren Rand des
+          scrollenden Bereichs, ohne eigene Hoehe (`h-0`) – so macht er den
+          Verlauf nicht laenger. Die Huelle steht immer, nur der Knopf kommt
+          und geht: Sonst wuechse der Verlauf beim Einblenden um die Luecke
+          (`gap-3`) und ruckte. Ans Ende scrollen genuegt zum Wiedereinschalten
+          – sobald die Schlussmarke sichtbar ist, meldet der Observer das, und
+          das Mitlaufen ist von selbst wieder an. */}
+      <div className="pointer-events-none sticky bottom-3 flex h-0 items-end justify-center">
+        {!atEnd && (
+          <button
+            type="button"
+            onClick={() => endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" })}
+            title="Zum neuesten Schritt springen – schaltet das automatische Mitlaufen wieder ein"
+            aria-label="Zum neuesten Schritt springen"
+            className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface-2 text-ink-2 shadow-lg transition-colors hover:bg-surface-3 hover:text-ink"
+          >
+            <ArrowDownIcon className="h-4 w-4" />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
