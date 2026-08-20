@@ -355,6 +355,15 @@ function toolCallFromJson(value: unknown): ToolCall | null {
 /// abgeschnitten wird. Trifft der Text zufällig ein JSON-Objekt mit `name`+
 /// `arguments`, das kein Aufruf sein sollte, wird es trotzdem als einer
 /// gelesen – das nimmt der bestehende `<function=>`-Fallback genauso in Kauf.
+///
+/// Die Zählung muss wissen, ob sie gerade in einem JSON-String steckt: Werte
+/// wie `edit_file`s `search`/`replace` sind oft Quelltext-Schnipsel und
+/// enthalten selbst unbalancierte `{`/`}` (z.B. ein `search`-Anker, der nur
+/// aus `foo() {` besteht, ohne schließende Klammer). Zählt man diese Zeichen
+/// blind mit, kommt die Tiefe nie wieder auf 0 zurück und der ganze Aufruf
+/// bleibt unerkannt als Fließtext stehen – beobachtet im DemoLogin-Projekt,
+/// wo genau so ein einzeiliger `search`-Anker den kompletten Tool-Aufruf zwei
+/// Runden lang verschluckt hat, bis das Turn-Budget aufgebraucht war.
 function extractBareJsonToolCalls(text: string): { text: string; toolCalls: ToolCall[] } {
   const toolCalls: ToolCall[] = [];
   let result = "";
@@ -363,9 +372,20 @@ function extractBareJsonToolCalls(text: string): { text: string; toolCalls: Tool
     if (text[i] === "{") {
       let depth = 0;
       let j = i;
+      let inString = false;
       for (; j < text.length; j++) {
-        if (text[j] === "{") depth++;
-        else if (text[j] === "}") {
+        const ch = text[j];
+        if (inString) {
+          if (ch === "\\") {
+            j++; // escapte Sequenz (\", \\, \n, \uXXXX-Start, …) – nächstes Zeichen ignorieren
+            continue;
+          }
+          if (ch === '"') inString = false;
+          continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === "{") depth++;
+        else if (ch === "}") {
           depth--;
           if (depth === 0) {
             j++;
@@ -485,7 +505,8 @@ function parseLabeledToolCalls(text: string): { text: string; toolCalls: ToolCal
   return { text: lines.filter((_, idx) => !consumed[idx]).join("\n").trim(), toolCalls };
 }
 
-function parsePseudoToolCalls(text: string): { text: string; toolCalls: ToolCall[] } {
+// exportiert nur für den Regressionstest (tests/llmPseudoToolCalls.test.ts)
+export function parsePseudoToolCalls(text: string): { text: string; toolCalls: ToolCall[] } {
   const toolCalls: ToolCall[] = [];
   let cleaned = text;
 
