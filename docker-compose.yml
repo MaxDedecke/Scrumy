@@ -38,6 +38,12 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
+      # Verschlüsselt Connector-Zugangsdaten (z.B. ein direkt im Formular
+      # eingegebenes GitHub-PAT statt einer env:NAME-Referenz), siehe
+      # src/lib/secret.ts. MUSS mit dem Wert im "worker"-Service unten
+      # übereinstimmen – app verschlüsselt beim Speichern, worker
+      # entschlüsselt beim Pushen.
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
       # Frontend-Vorschau (siehe src/lib/preview.ts): jede laufende Vorschau
       # ist ein eigener, ressourcenbegrenzter Sibling-Container aus dem Image
       # unten, verbunden mit "app" ueber ein eigenes, isoliertes Netz (siehe
@@ -157,6 +163,9 @@ services:
       # HTTPS-Schreibzugriff auf GitHub-Repositories. Der Token wird nur dem
       # Git-Prozess via Askpass gegeben und nie in der Remote-URL gespeichert.
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # Siehe Kommentar bei "app" oben – hier der Gegenpart, der einen per UI
+      # verschlüsselt gespeicherten Connector-Token wieder entschlüsselt.
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
       # Automatische Pruefungen (src/lib/testRun.ts): derselbe generische
       # Runner wie die Frontend-Vorschau (node+npm, richtige UID fuers
       # Workspace-Volume) – kein eigenes Netz noetig, der Lauf ist synchron

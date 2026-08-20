@@ -231,7 +231,10 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                   )}
                   {connector.credentialRef && (
                     <p className="mt-0.5 truncate font-mono text-xs text-ink-4">
-                      Zugang: {connector.credentialRef}
+                      Zugang:{" "}
+                      {connector.credentialRef.startsWith("enc:")
+                        ? "🔒 Token verschlüsselt hinterlegt"
+                        : connector.credentialRef}
                     </p>
                   )}
                 </div>
@@ -294,13 +297,18 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                 </select>
               </div>
               <div>
-                <label className={labelClass}>Credential-Referenz (optional)</label>
+                <label className={labelClass}>Zugang / Token (optional)</label>
                 <input
                   name="credentialRef"
+                  type="password"
+                  autoComplete="off"
                   className={inputClass}
-                  placeholder="z.B. env:KUNDE_A_GITHUB_TOKEN"
+                  placeholder="z.B. ghp_… oder env:KUNDE_A_GITHUB_TOKEN"
                 />
-                <p className="mt-1 text-xs text-ink-4">Der Variablenname steht hier, der Token ausschließlich in der .env-Datei.</p>
+                <p className="mt-1 text-xs text-ink-4">
+                  Direkt eingegebener Token wird verschlüsselt gespeichert. Alternativ &bdquo;env:NAME&rdquo; für einen
+                  Token, der schon als Umgebungsvariable im Worker gesetzt ist.
+                </p>
               </div>
               <div className="sm:col-span-2">
                 <label className={labelClass}>Config (JSON, optional)</label>

@@ -13,6 +13,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { decryptSecret } from "@/lib/secret";
 
 const execFileAsync = promisify(execFile);
 
@@ -50,8 +51,11 @@ export interface RemoteRepositoryOptions {
   /** Zielbranch im Remote. Ohne Angabe bleibt der beim Klonen ausgecheckte
    *  Default-Branch bzw. der aktuelle lokale Branch massgeblich. */
   defaultBranch?: string | null;
-  /** Aktuell unterstuetzt: `env:NAME`. Ohne Referenz verwendet GitHub
-   *  automatisch `GITHUB_TOKEN`. Der Wert selbst wird nie gespeichert. */
+  /** `env:NAME` verweist auf eine Umgebungsvariable im Worker (Wert wird nie
+   *  gespeichert); `enc:...` ist ein im Formular eingegebener Token,
+   *  verschluesselt in der DB abgelegt (siehe `src/lib/secret.ts`) – beide
+   *  Formen entstehen in `src/lib/actions/connectors.ts`. Ohne Referenz
+   *  verwendet GitHub automatisch `GITHUB_TOKEN` aus der Umgebung. */
   credentialRef?: string | null;
 }
 
@@ -90,21 +94,31 @@ function githubHttpsRemote(remoteUrl: string): boolean {
 
 /// Liefert den Namen einer referenzierten Umgebungsvariable, ohne ihren Wert
 /// zu lesen. Getrennt exportiert, damit die Connector-Maske dieselbe Syntax
-/// validiert wie spaeter der Worker.
+/// validiert wie spaeter der Worker. Alles ausser einer `env:`-Referenz
+/// (leer, `enc:...`-verschluesselter Token, oder gar kein Praefix) ist HIER
+/// kein Fehler mehr – nur ein tatsaechlich als `env:` gekennzeichneter, aber
+/// falsch geformter Name wird abgelehnt. Ein direkt eingegebener Klartext-
+/// Token wird von `resolveCredentialRef` (`src/lib/actions/connectors.ts`)
+/// VOR dem Speichern zu `enc:...` – diese Funktion sieht ihn hier also nie.
 export function gitCredentialEnvName(credentialRef?: string | null): string | null {
   const normalized = credentialRef?.trim();
-  if (!normalized) return null;
+  if (!normalized || !normalized.startsWith("env:")) return null;
   const match = /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(normalized);
   if (!match) {
     throw new WorkspaceError(
-      `Credential-Referenz „${normalized}" wird noch nicht unterstuetzt. Verwende env:GITHUB_TOKEN oder env:KUNDE_PROJEKT_GITHUB_TOKEN.`,
+      `Credential-Referenz „${normalized}" hat kein gueltiges Format. Nach "env:" muss ein Variablenname folgen, z.B. env:GITHUB_TOKEN.`,
     );
   }
   return match[1];
 }
 
 function remoteToken(remote: RemoteRepositoryOptions): string | undefined {
-  const envName = gitCredentialEnvName(remote.credentialRef) || (githubHttpsRemote(remote.remoteUrl) ? "GITHUB_TOKEN" : null);
+  const ref = remote.credentialRef?.trim();
+  if (ref?.startsWith("enc:")) {
+    return decryptSecret(ref.slice("enc:".length));
+  }
+
+  const envName = gitCredentialEnvName(ref) || (githubHttpsRemote(remote.remoteUrl) ? "GITHUB_TOKEN" : null);
 
   if (!envName) return undefined;
   const token = process.env[envName]?.trim();

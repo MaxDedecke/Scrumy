@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { CONNECTOR_STATUS_LABEL } from "@/lib/labels";
 import { fail, ok, type ActionResult } from "@/lib/actions/result";
 import { gitCredentialEnvName, WorkspaceError } from "@/lib/workspace";
+import { encryptSecret } from "@/lib/secret";
 import type { ConnectorProvider, ConnectorStatus } from "@/generated/prisma/client";
 
 function str(formData: FormData, key: string): string | null {
@@ -40,6 +41,18 @@ function validateGitCredentialRef(credentialRef: string | null): string | null {
   } catch (error) {
     return error instanceof WorkspaceError || error instanceof Error ? error.message : String(error);
   }
+}
+
+/// Ein direkt ins Formular eingegebener Token (nicht "env:NAME") wird
+/// verschlüsselt gespeichert – bislang zwang jeder Connector zur `env:`-
+/// Referenz, was ohne Server-/`.env`-Zugriff faktisch nicht nutzbar war.
+/// `env:`-Referenzen bleiben unverändert (ihr Wert steht ohnehin nie in der
+/// DB, nur im Worker). Gilt für alle Connector-Provider, nicht nur GIT – das
+/// Formularfeld ist dasselbe.
+function resolveCredentialRef(raw: string | null): string | null {
+  if (!raw) return null;
+  if (raw.startsWith("env:") || raw.startsWith("enc:")) return raw;
+  return `enc:${encryptSecret(raw)}`;
 }
 
 async function activeGitConnectorExists(projectId: string, exceptId?: string): Promise<boolean> {
@@ -91,7 +104,7 @@ export async function createConnector(formData: FormData): Promise<ActionResult>
 
   try {
     await prisma.connector.create({
-      data: { organizationId, projectId, name, provider, credentialRef, config },
+      data: { organizationId, projectId, name, provider, credentialRef: resolveCredentialRef(credentialRef), config },
     });
   } catch (error) {
     if (provider === "GIT" && isUniqueConstraintError(error)) {
