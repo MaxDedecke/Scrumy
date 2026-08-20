@@ -326,23 +326,76 @@ function parseOpenAiToolCalls(raw: OpenAiToolCall[] | undefined): ToolCall[] {
 /// Manche Modelle (beobachtet bei qwen3-coder über Ollamas eigenen
 /// "qwen3-coder"-Renderer/Parser, siehe RunPod-Setup) rutschen gelegentlich
 /// aus dem strukturierten `tool_calls`-Feld raus und schreiben den Aufruf
-/// stattdessen als Text in `message.content` – meist fehlt der öffnende
-/// `<tool_call>`-Tag, weshalb Ollamas Parser den Block nicht erkennt:
-///   <function=NAME>
-///   <parameter=PNAME>
-///   WERT
-///   </parameter>
-///   </function>
-///   </tool_call>
+/// stattdessen als Text in `message.content` – meist weil der Server hinter
+/// dem OpenAI-kompatiblen Endpunkt (z.B. vLLM ohne passenden
+/// `--tool-call-parser` fürs Modell) das gar nicht erst strukturiert
+/// zurückgibt. Drei beobachtete Formen, alle vom selben Modell möglich:
+///   <function=NAME><parameter=PNAME>WERT</parameter></function>
+///   <tool_call>{"name": "NAME", "arguments": {...}}</tool_call>   (Hermes/Qwen)
+///   {"name": "NAME", "arguments": {...}}                          (ganz ohne Hülle)
 /// Ohne diesen Ausweich sieht der Aufrufer "kein Werkzeugaufruf" und der
 /// Umsetzungs-Loop (worker/agentToolLoop.ts) dreht sich bis zum Turn-Limit im
 /// Kreis, bevor er ohne Ergebnis neu startet – deshalb hier selbst geparst.
 const FUNCTION_BLOCK_RE = /<function=([a-zA-Z0-9_]+)>([\s\S]*?)<\/function>/g;
 const PARAMETER_RE = /<parameter=([a-zA-Z0-9_]+)>([\s\S]*?)<\/parameter>/g;
+const TOOL_CALL_TAG_RE = /<tool_call>([\s\S]*?)<\/tool_call>/g;
+
+function toolCallFromJson(value: unknown): ToolCall | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.name !== "string" || !obj.name) return null;
+  const rawInput = obj.arguments ?? obj.parameters ?? {};
+  if (typeof rawInput !== "object" || rawInput === null || Array.isArray(rawInput)) return null;
+  return { id: nextToolCallId(), name: obj.name, input: rawInput as Record<string, unknown> };
+}
+
+/// Sucht im Rest-Text nach freistehenden `{...}`-Objekten ohne Tags drumherum
+/// und versucht sie einzeln als JSON-Werkzeugaufruf zu lesen. Klammerzählung
+/// statt Regex, damit ein verschachteltes `arguments`-Objekt nicht vorzeitig
+/// abgeschnitten wird. Trifft der Text zufällig ein JSON-Objekt mit `name`+
+/// `arguments`, das kein Aufruf sein sollte, wird es trotzdem als einer
+/// gelesen – das nimmt der bestehende `<function=>`-Fallback genauso in Kauf.
+function extractBareJsonToolCalls(text: string): { text: string; toolCalls: ToolCall[] } {
+  const toolCalls: ToolCall[] = [];
+  let result = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "{") {
+      let depth = 0;
+      let j = i;
+      for (; j < text.length; j++) {
+        if (text[j] === "{") depth++;
+        else if (text[j] === "}") {
+          depth--;
+          if (depth === 0) {
+            j++;
+            break;
+          }
+        }
+      }
+      if (depth === 0) {
+        try {
+          const call = toolCallFromJson(JSON.parse(text.slice(i, j)));
+          if (call) {
+            toolCalls.push(call);
+            i = j;
+            continue;
+          }
+        } catch {
+          // kein valides JSON – als normaler Text stehen lassen
+        }
+      }
+    }
+    result += text[i];
+    i++;
+  }
+  return { text: result, toolCalls };
+}
 
 function parsePseudoToolCalls(text: string): { text: string; toolCalls: ToolCall[] } {
   const toolCalls: ToolCall[] = [];
   let cleaned = text;
+
   for (const match of text.matchAll(FUNCTION_BLOCK_RE)) {
     const input: Record<string, unknown> = {};
     for (const paramMatch of match[2].matchAll(PARAMETER_RE)) {
@@ -351,6 +404,23 @@ function parsePseudoToolCalls(text: string): { text: string; toolCalls: ToolCall
     toolCalls.push({ id: nextToolCallId(), name: match[1], input });
     cleaned = cleaned.replace(match[0], "");
   }
+
+  for (const match of cleaned.matchAll(TOOL_CALL_TAG_RE)) {
+    try {
+      const call = toolCallFromJson(JSON.parse(match[1].trim()));
+      if (call) {
+        toolCalls.push(call);
+        cleaned = cleaned.replace(match[0], "");
+      }
+    } catch {
+      // kaputtes JSON im Tag – als Text stehen lassen statt zu crashen
+    }
+  }
+
+  const bare = extractBareJsonToolCalls(cleaned);
+  toolCalls.push(...bare.toolCalls);
+  cleaned = bare.text;
+
   // Umschließende Reste (<tool_call>, </tool_call>) weg – was übrig bleibt,
   // ist der echte Fließtext-Anteil der Antwort.
   cleaned = cleaned.replace(/<\/?tool_call>/g, "").trim();
@@ -381,7 +451,7 @@ async function chatTurnOllama(
 
   let text = pickString(data.message?.content) ?? "";
   let toolCalls = parseOpenAiToolCalls(data.message?.tool_calls);
-  if (toolCalls.length === 0 && text.includes("<function=")) {
+  if (toolCalls.length === 0 && text.trim()) {
     const fallback = parsePseudoToolCalls(text);
     if (fallback.toolCalls.length > 0) {
       toolCalls = fallback.toolCalls;
@@ -447,8 +517,19 @@ async function chatTurnOpenAiCompat(
   if (data.error?.message) throw new LlmError(data.error.message);
 
   const choice = data.choices?.[0];
-  const text = pickString(choice?.message?.content) ?? "";
-  const toolCalls = parseOpenAiToolCalls(choice?.message?.tool_calls);
+  let text = pickString(choice?.message?.content) ?? "";
+  let toolCalls = parseOpenAiToolCalls(choice?.message?.tool_calls);
+  if (toolCalls.length === 0 && text.trim()) {
+    // Server hinter dem OpenAI-kompatiblen Endpunkt liefert Tool-Aufrufe
+    // manchmal nicht strukturiert (siehe Kommentar bei `parsePseudoToolCalls`)
+    // – häufig bei lokalen/selbstgehosteten Modellen wie Qwen ohne
+    // passenden Tool-Call-Parser auf dem Server.
+    const fallback = parsePseudoToolCalls(text);
+    if (fallback.toolCalls.length > 0) {
+      toolCalls = fallback.toolCalls;
+      text = fallback.text;
+    }
+  }
 
   if (choice?.finish_reason === "length") {
     throw new LlmError(
