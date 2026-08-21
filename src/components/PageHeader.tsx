@@ -66,16 +66,13 @@ export function PageHeader({
       >
         <div className="flex min-w-0 items-center gap-3">
           {backInline && backHref && (
-            <>
-              <Link
-                href={backHref}
-                className="quiet-link inline-flex shrink-0 items-center gap-1.5 text-xs font-medium"
-              >
-                <ArrowLeftIcon className="h-3.5 w-3.5" />
-                {backLabel}
-              </Link>
-              <span className="text-ink-4">/</span>
-            </>
+            <Link
+              href={backHref}
+              className="quiet-link inline-flex shrink-0 items-center gap-1.5 text-xs font-medium"
+            >
+              <ArrowLeftIcon className="h-3.5 w-3.5" />
+              {backLabel}
+            </Link>
           )}
           <h1 className="truncate text-2xl font-semibold text-ink">{title}</h1>
           {status}
