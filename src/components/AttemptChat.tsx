@@ -78,7 +78,7 @@ export function AttemptChat({ runs, className }: { runs: AgentRun[]; className?:
     <div className={`flex min-h-[50vh] flex-col gap-3 ${className ?? ""}`}>
       {runs.map((run, i) => (
         <div key={run.id} className="flex flex-col gap-1.5">
-          <div className="max-w-[92%] self-end">
+          <div className="max-w-[92%] self-end rounded-2xl rounded-br-sm bg-accent-soft/60 px-3 py-2">
             <p className="text-[11px] font-medium text-ink-3">
               {i === 0 ? "Ursprünglicher Auftrag" : `Werkzeugergebnis · Schritt ${i + 1}`} ·{" "}
               {formatTime(run.startedAt)}
@@ -86,7 +86,7 @@ export function AttemptChat({ runs, className }: { runs: AgentRun[]; className?:
             <PromptBody text={run.prompt} collapseByDefault={i === 0} />
           </div>
 
-          <div className="max-w-[92%] self-start">
+          <div className="max-w-[92%] self-start rounded-2xl rounded-bl-sm bg-surface-2/70 px-3 py-2">
             <p className="text-[11px] font-medium text-ink-3">
               Schritt {i + 1}
               {run.durationMs ? ` · ${(run.durationMs / 1000).toFixed(1)} s` : ""}

@@ -79,12 +79,12 @@ export function TeamChatPanel({
         ) : (
           ordered.map((inquiry) => (
             <div key={inquiry.id} className="flex flex-col gap-1.5">
-              <div className="max-w-[88%] self-end">
+              <div className="max-w-[88%] self-end rounded-2xl rounded-br-sm bg-accent-soft/60 px-3 py-2">
                 <p className="text-sm text-ink">{inquiry.question}</p>
                 <p className="mt-1 text-[11px] text-ink-3">{formatTime(inquiry.createdAt)}</p>
               </div>
               {inquiry.answer ? (
-                <div className="max-w-[88%] self-start">
+                <div className="max-w-[88%] self-start rounded-2xl rounded-bl-sm bg-surface-2/70 px-3 py-2">
                   {inquiry.answeredByName && (
                     <p className="text-[11px] font-medium text-ink-3">{inquiry.answeredByName}</p>
                   )}
