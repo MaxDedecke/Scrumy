@@ -51,14 +51,34 @@ export async function updateAgentAssignment(formData: FormData): Promise<ActionR
     },
   });
 
-  await prisma.agentAssignment.update({
+  revalidatePath(`/projects/${projectId}/team`);
+  revalidatePath(`/projects/${projectId}`);
+  return ok(`Agent „${agent.name}“ gespeichert – Status: ${AGENT_STATUS_LABEL[agent.status]}.`);
+}
+
+// Eigene Action statt Teil von updateAgentAssignment: Der Connector-Dialog
+// schickt nur `connectorId` mit – hinge er am selben Formularfeld-Vertrag wie
+// updateAgentAssignment (das llmProfileId immer aus dem Formular übernimmt,
+// auch wenn es fehlt), würde ein Absenden ohne LLM-Profil-Feld dieses
+// versehentlich auf "kein Profil" zurücksetzen.
+export async function updateAgentConnector(formData: FormData): Promise<ActionResult> {
+  const assignmentId = str(formData, "assignmentId");
+  const projectId = str(formData, "projectId");
+  if (!assignmentId || !projectId) return fail("Kein Agenten-Einsatz angegeben.");
+
+  const assignment = await prisma.agentAssignment.update({
     where: { id: assignmentId },
     data: { connectorId: str(formData, "connectorId") },
+    include: { agent: true, connector: true },
   });
 
   revalidatePath(`/projects/${projectId}/team`);
   revalidatePath(`/projects/${projectId}`);
-  return ok(`Agent „${agent.name}“ gespeichert – Status: ${AGENT_STATUS_LABEL[agent.status]}.`);
+  return ok(
+    assignment.connector
+      ? `Connector „${assignment.connector.name}“ mit „${assignment.agent.name}“ verbunden.`
+      : `Connector von „${assignment.agent.name}“ entfernt.`,
+  );
 }
 
 export async function removeAgentAssignment(formData: FormData): Promise<ActionResult> {

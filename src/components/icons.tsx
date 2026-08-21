@@ -446,6 +446,21 @@ export function FileIcon({ className }: { className?: string }) {
   );
 }
 
+/// Diskette – für "Speichern"-Buttons ohne Beschriftung (z.B. dichte
+/// Listenzeilen wie das Agenten-Team).
+export function SaveIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M19.5 21H5.25a1.5 1.5 0 0 1-1.5-1.5V4.5a1.5 1.5 0 0 1 1.5-1.5h11.379a1.5 1.5 0 0 1 1.06.44l2.372 2.371a1.5 1.5 0 0 1 .439 1.061V19.5a1.5 1.5 0 0 1-1.5 1.5Z"
+      />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 21v-7.125a.375.375 0 0 0-.375-.375h-8.25a.375.375 0 0 0-.375.375V21M7.5 3v4.125c0 .207.168.375.375.375h6.75a.375.375 0 0 0 .375-.375V3" />
+    </svg>
+  );
+}
+
 export function SettingsIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>

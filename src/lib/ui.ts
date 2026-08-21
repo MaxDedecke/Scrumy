@@ -48,6 +48,10 @@ export const iconButtonClass = `${iconButtonBaseClass} text-ink-3 hover:bg-surfa
 /// Eingeschalteter Zustand (Autopilot an) – Farbe UND gefülltes Icon.
 export const iconButtonOnClass = `${iconButtonBaseClass} bg-accent-soft text-accent hover:bg-accent-soft`;
 
+/// Gefüllte Primärfarbe als Icon-Button (z.B. Speichern-Diskette in dichten
+/// Listenzeilen) – dieselbe Farbe wie buttonPrimaryClass, nur ohne Text.
+export const iconButtonPrimaryClass = `${iconButtonBaseClass} bg-accent-solid text-canvas hover:bg-accent-solid-hover`;
+
 /// Löschen/Entfernen in Listenzeilen: bleibt unauffällig, bis die Zeile
 /// überfahren wird (`group-hover` in der Zeile), und wird erst dann rot.
 export const iconButtonDangerClass = `${iconButtonBaseClass} text-ink-4 hover:bg-critical/10 hover:text-critical`;

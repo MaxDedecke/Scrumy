@@ -10,10 +10,11 @@ import {
   PROJECT_STATUS_LABEL,
 } from "@/lib/labels";
 import { ActionForm } from "@/components/ActionForm";
+import { AgentConnectorDialog } from "@/components/AgentConnectorDialog";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Panel, PanelEmpty, PanelGrid } from "@/components/Panel";
 import { Disclosure, formGridClass } from "@/components/Disclosure";
-import { TrashIcon } from "@/components/icons";
+import { SaveIcon, TrashIcon } from "@/components/icons";
 import { createAgentAndAssign, removeAgentAssignment, updateAgentAssignment } from "@/lib/actions/agents";
 import { createConnector, deleteConnector, updateConnectorStatus } from "@/lib/actions/connectors";
 import { deleteProject, updateProject } from "@/lib/actions/projects";
@@ -21,6 +22,7 @@ import {
   buttonDangerClass,
   buttonPrimaryClass,
   buttonSecondaryClass,
+  iconButtonPrimaryClass,
   iconButtonSmallDangerClass,
   inputClass,
   labelClass,
@@ -106,6 +108,18 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                       <span className={`${AGENT_STATUS_PILL[agent.status]} pill-dot shrink-0`}>
                         {AGENT_STATUS_LABEL[agent.status]}
                       </span>
+                      {/* Ohne angelegte Connectoren im Kunden/Projekt gäbe es
+                          im Dialog nur die Auswahl „— keiner —" – eine
+                          Einrichtung, die nichts zu entscheiden gibt. */}
+                      {connectors.length > 0 && (
+                        <AgentConnectorDialog
+                          assignmentId={assignmentId}
+                          projectId={project.id}
+                          agentName={agent.name}
+                          connectors={connectors}
+                          currentConnector={connector}
+                        />
+                      )}
                     </div>
 
                     {/* `key` erzwingt einen Neuaufbau des Formulars nach dem
@@ -116,7 +130,7 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                         bis man die Seite von Hand neu lädt. */}
                     <ActionForm
                       action={updateAgentAssignment}
-                      key={`${assignmentId}:${agent.status}:${agent.llmProfile?.id ?? ""}:${connector?.id ?? ""}`}
+                      key={`${assignmentId}:${agent.status}:${agent.llmProfile?.id ?? ""}`}
                       className="mt-2.5 grid grid-cols-1 items-end gap-3 sm:grid-cols-[1fr_1fr_auto]"
                     >
                       <input type="hidden" name="assignmentId" value={assignmentId} />
@@ -147,24 +161,9 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                           ))}
                         </select>
                       </div>
-                      <button type="submit" className={buttonPrimaryClass}>
-                        Speichern
+                      <button type="submit" title="Speichern" aria-label="Speichern" className={iconButtonPrimaryClass}>
+                        <SaveIcon className="h-4 w-4" />
                       </button>
-                      {/* Ohne angelegte Connectoren gäbe es hier nur die Auswahl
-                          „— keiner —" – eine Zeile, die nichts zu entscheiden gibt. */}
-                      {connectors.length > 0 && (
-                        <div className="sm:col-span-2">
-                          <label className={labelClass}>Connector</label>
-                          <select name="connectorId" defaultValue={connector?.id ?? ""} className={inputClass}>
-                            <option value="">— keiner —</option>
-                            {connectors.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {c.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
                     </ActionForm>
                   </div>
 
