@@ -123,7 +123,7 @@ export default async function ProjectBoardPage({
       )}
 
       <PanelStrip>
-        <div className="card grid grid-cols-2 divide-hairline sm:grid-cols-4 sm:divide-x">
+        <div className="card card-ghost grid grid-cols-2 divide-hairline sm:grid-cols-4 sm:divide-x">
           {stats.map((stat) => (
             <div key={stat.label} className="flex items-baseline gap-2 px-4 py-2.5">
               <span
@@ -171,6 +171,7 @@ export default async function ProjectBoardPage({
 
         <Panel
           title="Agenten-Team"
+          className="card-ghost"
           count={project.agents.length}
           padded={false}
           action={
@@ -209,6 +210,7 @@ export default async function ProjectBoardPage({
 
         <Panel
           title="Aktivität"
+          className="card-ghost"
           padded={false}
           action={
             <Link href={`/projects/${project.id}/records`} className="quiet-link font-medium">

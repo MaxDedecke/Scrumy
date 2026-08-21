@@ -70,7 +70,7 @@ export function TicketBoardPanel({
   }
 
   return (
-    <Panel title="Scrum-Board" className="lg:col-span-2" scroll={false} padded={false} action={action}>
+    <Panel title="Scrum-Board" className="card-ghost lg:col-span-2" scroll={false} padded={false} action={action}>
       {/* Jede Statusspalte scrollt für sich: Ein volles „Erledigt" schiebt
           damit nie das „Zu tun" aus dem Bild. */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-4">
