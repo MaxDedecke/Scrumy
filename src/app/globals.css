@@ -318,19 +318,23 @@
     color: var(--color-ink);
   }
 
+  /* "arbeitet" glüht im Marken-Mintgrün (--color-accent, siehe @theme oben),
+     nicht im allgemeinen Status-Grün (--color-good) – der Agent selbst ist
+     kein Status-Badge, sondern das lebendigste Element im Büro und darf
+     dafür das eigentliche Markengrün tragen. */
   .orb-bubble[data-state="working"] .orb-bubble-face {
-    border-color: color-mix(in oklab, var(--color-good) 70%, transparent);
+    border-color: color-mix(in oklab, var(--color-accent) 70%, transparent);
     background: radial-gradient(
       circle at 35% 30%,
-      color-mix(in oklab, var(--color-good) 65%, white 25%),
-      var(--color-good) 68%
+      color-mix(in oklab, var(--color-accent) 65%, white 25%),
+      var(--color-accent) 68%
     );
     opacity: 1;
     color: var(--color-canvas);
     box-shadow:
-      0 0 0.2rem 0.05rem color-mix(in oklab, var(--color-good) 70%, transparent),
-      0 0 1.1rem 0.2rem color-mix(in oklab, var(--color-good) 55%, transparent),
-      0 0 2.5rem 0.5rem color-mix(in oklab, var(--color-good) 30%, transparent);
+      0 0 0.2rem 0.05rem color-mix(in oklab, var(--color-accent) 70%, transparent),
+      0 0 1.1rem 0.2rem color-mix(in oklab, var(--color-accent) 55%, transparent),
+      0 0 2.5rem 0.5rem color-mix(in oklab, var(--color-accent) 30%, transparent);
   }
 
   .orb-bubble[data-state="blocked"] .orb-bubble-face {
