@@ -161,7 +161,17 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                           ))}
                         </select>
                       </div>
-                      <button type="submit" title="Speichern" aria-label="Speichern" className={iconButtonPrimaryClass}>
+                      {/* mb-0.5: gleicht 2px aus, um die 8px-Rasterhöhe des
+                          Icon-Buttons (h-8) bündig mit der etwas höheren
+                          Select-Box (inputClass: Padding+Zeilenhöhe+Rahmen)
+                          auszurichten – items-end allein reicht hier nicht
+                          ganz. */}
+                      <button
+                        type="submit"
+                        title="Speichern"
+                        aria-label="Speichern"
+                        className={`${iconButtonPrimaryClass} mb-0.5`}
+                      >
                         <SaveIcon className="h-4 w-4" />
                       </button>
                     </ActionForm>
