@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { LIVE_STATUS_LABEL, LIVE_STATUS_PILL, PROJECT_STATUS_LABEL, PROJECT_STATUS_PILL } from "@/lib/labels";
+import { PROJECT_STATUS_LABEL, PROJECT_STATUS_PILL } from "@/lib/labels";
 import { getOtherLiveProject } from "@/lib/liveStack";
 import { LiveAppControls } from "@/components/LiveAppControls";
 import { LiveRefresh } from "@/components/LiveRefresh";
@@ -121,11 +121,9 @@ export default async function ProjectLayout({
                 {PROJECT_STATUS_LABEL[project.status]}
               </span>
             )}
-            {(project.liveStatus === "RUNNING" || project.liveStatus === "STARTING") && (
-              <span className={`${LIVE_STATUS_PILL[project.liveStatus]} pill-dot`}>
-                {LIVE_STATUS_LABEL[project.liveStatus]}
-              </span>
-            )}
+            {/* Keine eigene "Live"-Pille mehr: der "Anwendung starten"-Knopf
+                in LiveAppControls zeigt seinen aktiven Zustand schon selbst
+                (grün hinterlegt), das war doppelt. */}
           </>
         }
         actions={
