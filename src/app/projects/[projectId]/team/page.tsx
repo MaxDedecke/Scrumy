@@ -84,7 +84,7 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
 
   return (
     <PanelGrid className="lg:grid-cols-2 lg:grid-rows-2">
-      <Panel title="Agenten-Team" count={project.agents.length} className="lg:row-span-2" padded={false}>
+      <Panel title="Agenten-Team" count={project.agents.length} className="card-ghost lg:row-span-2" padded={false}>
         {project.agents.length === 0 ? (
           <PanelEmpty>Noch keine Agenten im Team.</PanelEmpty>
         ) : (
@@ -246,7 +246,7 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
         </div>
       </Panel>
 
-      <Panel title="Connectoren" count={connectors.length} padded={false}>
+      <Panel title="Connectoren" count={connectors.length} padded={false} className="card-ghost">
         {lastRepoPush && (
           <p
             className={`border-b border-hairline px-4 py-2 text-xs ${
@@ -386,7 +386,7 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
         </div>
       </Panel>
 
-      <Panel title="Projekt-Einstellungen">
+      <Panel title="Projekt-Einstellungen" className="card-ghost">
         {/* `key` erzwingt einen Neuaufbau nach dem Speichern – sonst derselbe
             Darstellungsbug wie bei den Agenten-Feldern oben. */}
         <ActionForm
