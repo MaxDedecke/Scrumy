@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import {
   AGENT_ROLE_LABEL,
   AGENT_STATUS_LABEL,
+  AGENT_STATUS_PILL,
   CONNECTOR_PROVIDER_LABEL,
   CONNECTOR_STATUS_LABEL,
   CONNECTOR_STATUS_PILL,
@@ -87,75 +88,98 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
         ) : (
           <ul className="divide-y divide-hairline">
             {project.agents.map(({ id: assignmentId, agent, connector }) => (
-              // Zwei Formulare nebeneinander statt ineinander (verschachtelte
-              // <form> sind ungültig) – die Zeile bleibt trotzdem eine Zeile.
-              <li key={assignmentId} className="group flex flex-wrap items-end gap-x-3 gap-y-3 px-4 py-3">
-                <ActionForm
-                  action={updateAgentAssignment}
-                  className="grid min-w-0 flex-1 grid-cols-1 items-end gap-3 sm:grid-cols-[1.2fr_1fr_1fr_auto]"
-                >
-                  <input type="hidden" name="assignmentId" value={assignmentId} />
-                  <input type="hidden" name="agentId" value={agent.id} />
-                  <input type="hidden" name="projectId" value={project.id} />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-ink">{agent.name}</p>
-                    <p className="truncate text-xs text-ink-3">{AGENT_ROLE_LABEL[agent.role]}</p>
-                  </div>
-                  <div>
-                    <label className={labelClass}>Status</label>
-                    <select name="status" defaultValue={agent.status} className={inputClass}>
-                      {AGENT_STATUSES.map((status) => (
-                        <option key={status} value={status}>
-                          {AGENT_STATUS_LABEL[status]}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelClass}>LLM-Profil</label>
-                    <select
-                      name="llmProfileId"
-                      defaultValue={agent.llmProfile?.id ?? ""}
-                      className={inputClass}
-                    >
-                      <option value="">— kein Profil —</option>
-                      {llmProfiles.map((profile) => (
-                        <option key={profile.id} value={profile.id}>
-                          {profile.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <button type="submit" className={buttonPrimaryClass}>
-                    Speichern
-                  </button>
-                  {/* Ohne angelegte Connectoren gäbe es hier nur die Auswahl
-                      „— keiner —" – eine Zeile, die nichts zu entscheiden gibt. */}
-                  {connectors.length > 0 && (
-                    <div className="sm:col-span-4">
-                      <label className={labelClass}>Connector</label>
-                      <select name="connectorId" defaultValue={connector?.id ?? ""} className={inputClass}>
-                        <option value="">— keiner —</option>
-                        {connectors.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                </ActionForm>
-                <ActionForm action={removeAgentAssignment} className="pb-1.5">
-                  <input type="hidden" name="assignmentId" value={assignmentId} />
-                  <input type="hidden" name="projectId" value={project.id} />
-                  <ConfirmButton
-                    confirmText={`"${agent.name}" aus diesem Projekt entfernen? Der Agent bleibt an anderen Projekten bestehen.`}
-                    title={`${agent.name} aus dem Team nehmen`}
-                    className={iconButtonSmallDangerClass}
+              <li key={assignmentId} className="group px-4 py-3.5">
+                <div className="flex items-start gap-3">
+                  {/* Initialen statt einer weiteren Farbcodierung – Rolle und
+                      Zustand tragen die Pills schon eindeutig genug. */}
+                  <span
+                    aria-hidden
+                    className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-3 text-xs font-semibold text-ink-2"
                   >
-                    <TrashIcon className="h-4 w-4" />
-                  </ConfirmButton>
-                </ActionForm>
+                    {agent.name.trim().slice(0, 2).toUpperCase()}
+                  </span>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <p className="truncate text-sm font-medium text-ink">{agent.name}</p>
+                      <span className="pill pill-neutral shrink-0">{AGENT_ROLE_LABEL[agent.role]}</span>
+                      <span className={`${AGENT_STATUS_PILL[agent.status]} pill-dot shrink-0`}>
+                        {AGENT_STATUS_LABEL[agent.status]}
+                      </span>
+                    </div>
+
+                    {/* `key` erzwingt einen Neuaufbau des Formulars nach dem
+                        Speichern: Ohne ihn behalten die <select>-Felder als
+                        unkontrollierte Komponenten ihren alten `defaultValue`
+                        im DOM bei – der Toast meldet „gespeichert“, doch die
+                        Auswahl zeigt sichtbar weiter den Stand vor dem Klick,
+                        bis man die Seite von Hand neu lädt. */}
+                    <ActionForm
+                      action={updateAgentAssignment}
+                      key={`${assignmentId}:${agent.status}:${agent.llmProfile?.id ?? ""}:${connector?.id ?? ""}`}
+                      className="mt-2.5 grid grid-cols-1 items-end gap-3 sm:grid-cols-[1fr_1fr_auto]"
+                    >
+                      <input type="hidden" name="assignmentId" value={assignmentId} />
+                      <input type="hidden" name="agentId" value={agent.id} />
+                      <input type="hidden" name="projectId" value={project.id} />
+                      <div>
+                        <label className={labelClass}>Status</label>
+                        <select name="status" defaultValue={agent.status} className={inputClass}>
+                          {AGENT_STATUSES.map((status) => (
+                            <option key={status} value={status}>
+                              {AGENT_STATUS_LABEL[status]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelClass}>LLM-Profil</label>
+                        <select
+                          name="llmProfileId"
+                          defaultValue={agent.llmProfile?.id ?? ""}
+                          className={inputClass}
+                        >
+                          <option value="">— kein Profil —</option>
+                          {llmProfiles.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {profile.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <button type="submit" className={buttonPrimaryClass}>
+                        Speichern
+                      </button>
+                      {/* Ohne angelegte Connectoren gäbe es hier nur die Auswahl
+                          „— keiner —" – eine Zeile, die nichts zu entscheiden gibt. */}
+                      {connectors.length > 0 && (
+                        <div className="sm:col-span-2">
+                          <label className={labelClass}>Connector</label>
+                          <select name="connectorId" defaultValue={connector?.id ?? ""} className={inputClass}>
+                            <option value="">— keiner —</option>
+                            {connectors.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </ActionForm>
+                  </div>
+
+                  <ActionForm action={removeAgentAssignment} className="mt-0.5 shrink-0">
+                    <input type="hidden" name="assignmentId" value={assignmentId} />
+                    <input type="hidden" name="projectId" value={project.id} />
+                    <ConfirmButton
+                      confirmText={`"${agent.name}" aus diesem Projekt entfernen? Der Agent bleibt an anderen Projekten bestehen.`}
+                      title={`${agent.name} aus dem Team nehmen`}
+                      className={iconButtonSmallDangerClass}
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </ConfirmButton>
+                  </ActionForm>
+                </div>
               </li>
             ))}
           </ul>
@@ -257,7 +281,13 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <ActionForm action={updateConnectorStatus} className="flex items-center gap-2">
+                  {/* `key` erzwingt einen Neuaufbau nach dem Speichern – sonst
+                      derselbe Darstellungsbug wie bei den Agenten-Feldern. */}
+                  <ActionForm
+                    action={updateConnectorStatus}
+                    key={connector.status}
+                    className="flex items-center gap-2"
+                  >
                     <input type="hidden" name="id" value={connector.id} />
                     <select
                       name="status"
@@ -348,7 +378,13 @@ export default async function ProjectTeamPage({ params }: PageProps<"/projects/[
       </Panel>
 
       <Panel title="Projekt-Einstellungen">
-        <ActionForm action={updateProject} className="grid gap-3 sm:grid-cols-2">
+        {/* `key` erzwingt einen Neuaufbau nach dem Speichern – sonst derselbe
+            Darstellungsbug wie bei den Agenten-Feldern oben. */}
+        <ActionForm
+          action={updateProject}
+          key={`${project.name}:${project.status}:${project.repoUrl ?? ""}:${project.description ?? ""}`}
+          className="grid gap-3 sm:grid-cols-2"
+        >
           <input type="hidden" name="id" value={project.id} />
           <div>
             <label className={labelClass}>Name</label>
