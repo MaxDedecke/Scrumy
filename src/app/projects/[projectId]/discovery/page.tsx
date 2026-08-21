@@ -350,7 +350,7 @@ export default async function ProjectDiscoveryPage({
                 ? "Die Arbeit des Teams ruht gerade – "
                 : "Das Agenten-Team arbeitet bereits – "}
               <Link
-                href={`/projects/${project.id}/office`}
+                href={`/projects/${project.id}`}
                 className="font-medium text-accent underline underline-offset-2"
               >
                 ins Team-Büro

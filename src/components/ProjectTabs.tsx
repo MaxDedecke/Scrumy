@@ -14,9 +14,9 @@ export function ProjectTabs({ projectId, className = "" }: { projectId: string; 
   const base = `/projects/${projectId}`;
 
   const tabs = [
-    { label: "Übersicht", href: base },
+    { label: "Team-Büro", href: base },
+    { label: "Board", href: `${base}/board` },
     { label: "Anforderungen & Konzept", href: `${base}/discovery` },
-    { label: "Team-Büro", href: `${base}/office` },
     { label: "Benutzeroberfläche", href: `${base}/preview` },
     { label: "Code", href: `${base}/code` },
     { label: "Nachweise", href: `${base}/records` },
@@ -30,7 +30,8 @@ export function ProjectTabs({ projectId, className = "" }: { projectId: string; 
     >
       {tabs.map((tab) => {
         // Unterseiten zählen zu ihrem Tab (ein Commit-Diff liegt unter
-        // „Nachweise"); die Übersicht ist nur der Pfad selbst.
+        // „Nachweise"); das Team-Büro ist der initiale Tab und liegt direkt
+        // auf dem Projekt-Pfad, deshalb nur bei exaktem Treffer aktiv.
         const isActive = tab.href === base ? pathname === base : pathname.startsWith(tab.href);
         return (
           <Link

@@ -8,7 +8,7 @@ import { revalidatePath } from "next/cache";
 
 export function revalidateProject(projectId: string) {
   revalidatePath(`/projects/${projectId}`);
-  revalidatePath(`/projects/${projectId}/office`);
+  revalidatePath(`/projects/${projectId}/board`);
   revalidatePath(`/projects/${projectId}/records`);
   revalidatePath(`/projects/${projectId}/discovery`);
   revalidatePath(`/projects/${projectId}/preview`);
