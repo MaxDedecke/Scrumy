@@ -14,6 +14,12 @@ import { runAgentIntegrationCheck, type HttpProbeRequest } from "@/lib/liveStack
 export interface ToolContext {
   dir: string;
   projectId: string;
+  /** Volume-Subpath für die run_command-Sandbox (siehe src/lib/testRun.ts) –
+   *  normalerweise `projectId`, bei einem parallel laufenden Ticket (siehe
+   *  worker/ticketWorktree.ts) stattdessen der Name von dessen eigenem
+   *  Worktree-Geschwisterverzeichnis. MUSS zu `dir` passen, sonst sieht
+   *  run_command ein anderes Verzeichnis als read_file/edit_file. */
+  workspaceSubpath: string;
   /** Relative Pfade, die dieser Loop-Anlauf selbst per `write_file` angelegt
    *  hat – für die darf ein zweiter `write_file`-Aufruf überschreiben, für
    *  alles andere Bestehende ist `edit_file` Pflicht. */
@@ -276,7 +282,7 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       const requestedTimeout = 120_000;
       const timeoutMs = Math.max(1000, Math.min(requestedTimeout, remainingBudget));
       const startedAt = Date.now();
-      const result = await runInSandbox(ctx.projectId, `cd "${workdir}" && ${command}`, {
+      const result = await runInSandbox(ctx.workspaceSubpath, `cd "${workdir}" && ${command}`, {
         containerNamePrefix: "scrumy-agent-bash",
         timeoutMs,
       });

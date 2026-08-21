@@ -25,6 +25,7 @@ import clarificationPrep from "./clarificationPrep";
 import clarificationTriage from "./clarificationTriage";
 import reviewTriage from "./reviewTriage";
 import poSweep from "./poSweep";
+import parallelCheck from "./parallelCheck";
 
 /// Woran der Mensch im Buero erkennt, welcher Schritt gescheitert ist.
 const STEP_LABEL: Record<string, string> = {
@@ -148,4 +149,9 @@ export const taskList: TaskList = {
   // Glied der Arbeitskette – scheitert er, gibt es keinen eingefrorenen
   // Schritt, den eine Klärung wieder aufnehmen müsste.
   poSweep: poSweep as Task,
+  // Bewusst ohne Umschlag: Ein periodischer Check ist kein Glied der
+  // Arbeitskette – scheitert er, gibt es keinen eingefrorenen Schritt, den
+  // eine Klärung wieder aufnehmen müsste. Er plant sich selbst neu (siehe
+  // worker/tasks/parallelCheck.ts) und fängt seinen eigenen Fehler schon ab.
+  parallelCheck: parallelCheck as Task,
 };

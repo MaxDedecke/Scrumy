@@ -10,6 +10,7 @@
 // dazwischen ins selbe Repo schreiben, und ein Ticket ist entweder ganz
 // bearbeitet oder erkennbar hängengeblieben.
 import type { Task } from "graphile-worker";
+import path from "node:path";
 import { prisma } from "@/lib/prisma";
 import { extractJsonObject } from "@/lib/llm";
 import { commitAll, gitShow, readRelevantSourceContext, readRepoFile, repoOverview, writeFiles } from "@/lib/workspace";
@@ -30,6 +31,7 @@ import { continueSprint, loadWorkingProject } from "../orchestration";
 import { openClarification } from "../clarification";
 import { enqueueAgentJob } from "../queue";
 import { runImplementationLoop, type AttemptTrace } from "../agentToolLoop";
+import { integrateAndFinalizeTicket } from "../ticketWorktree";
 import type { TicketWorkPayload } from "../taskTypes";
 import { withWorkspaceLock } from "../workspaceLock";
 
@@ -311,19 +313,19 @@ interface AutomaticVerification {
 /// der richtige, weil wirklich niemand im Team das beantworten kann.
 async function attemptAutomaticVerification({
   dir,
-  projectId,
+  workspaceSubpath,
   ticket,
   reviewer,
 }: {
   dir: string;
-  projectId: string;
+  workspaceSubpath: string;
   ticket: { id: string; title: string };
   reviewer: Agent;
 }): Promise<AutomaticVerification | null> {
   const targets = await detectCheckTargets(dir);
   if (targets.length === 0) return null;
 
-  const results = await runChecks(projectId, targets);
+  const results = await runChecks(workspaceSubpath, targets);
   if (results.every((result) => result.unavailable)) return null;
 
   const allPassed = results.every((result) => !checkFailed(result));
@@ -521,23 +523,32 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
     });
     return;
   }
-  const dir = project.workspacePath;
-
-  // Ab hier wird gelesen und geschrieben (Planung, Umsetzungs-Loop,
-  // automatische Prüfung, Commit) – alles im selben Arbeitsverzeichnis wie
-  // ein zweites Ticket desselben Projekts, das gerade parallel bei einem
-  // anderen Kollegen läuft (Jobs sind nur pro Agent serialisiert, nicht pro
-  // Projekt, siehe worker/queue.ts). Ohne diese Sperre könnte ein
-  // fehlgeschlagener Anlauf (discardUncommittedChanges) den unfertigen, aber
-  // legitimen Stand des anderen Agenten wegreißen. Bewusst NICHT neu
-  // eingerückt, um den Diff auf die eigentliche Änderung zu beschränken.
-  return withWorkspaceLock(dir, async () => {
-
+  // Ticket-Load VOR dem Sperren, um zu wissen, welches Verzeichnis ueberhaupt
+  // gesperrt werden muss: Ein vom Scrum Master als parallele Zusatzarbeit
+  // gestartetes Ticket (siehe worker/tasks/parallelCheck.ts) hat ein eigenes
+  // Git-Worktree (`ticket.worktreePath`) und laeuft dort komplett unabhaengig
+  // vom Hauptverzeichnis – der Normalfall bleibt unveraendert direkt im
+  // Hauptverzeichnis.
   const ticket = await prisma.ticket.findUnique({ where: { id: ticketId }, include: { sprint: true } });
   if (!ticket || ticket.status === "DONE") {
     if (ticket?.sprintId) await continueSprint(projectId, ticket.sprintId);
     return;
   }
+  const dir = ticket.worktreePath ?? project.workspacePath;
+  const workspaceSubpath = ticket.worktreePath ? path.basename(ticket.worktreePath) : projectId;
+
+  // Ab hier wird gelesen und geschrieben (Planung, Umsetzungs-Loop,
+  // automatische Prüfung, Commit) – bei einem Ticket ohne eigenes Worktree
+  // im selben Hauptverzeichnis wie ein zweites Ticket desselben Projekts, das
+  // gerade parallel bei einem anderen Kollegen in dessen eigenem Worktree
+  // läuft (Jobs sind nur pro Agent serialisiert, nicht pro Projekt, siehe
+  // worker/queue.ts) – `withWorkspaceLock` ist pro VERZEICHNIS geschlüsselt,
+  // ein Worktree hat also nie Streit mit dem Hauptverzeichnis. Ohne diese
+  // Sperre könnte ein fehlgeschlagener Anlauf (discardUncommittedChanges) den
+  // unfertigen, aber legitimen Stand eines anderen, im selben Verzeichnis
+  // arbeitenden Agenten wegreißen. Bewusst NICHT neu eingerückt, um den Diff
+  // auf die eigentliche Änderung zu beschränken.
+  return withWorkspaceLock(dir, async () => {
 
   const implementer = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } });
 
@@ -568,10 +579,21 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
   if (totalAttempt === 1 && !ticket.isCritical && /##\s*Akzeptanzkriterien/i.test(ticket.description ?? "")) {
     const already = await checkAlreadySatisfied({ agent: implementer, projectId, ticket, dir });
     if (already?.satisfied) {
-      await prisma.ticket.update({
-        where: { id: ticketId },
-        data: { status: "DONE", result: `Bereits erfüllt (automatisch geprüft, kein neuer Anlauf nötig): ${already.reason}` },
+      const finalized = await integrateAndFinalizeTicket({
+        ticketId,
+        projectId,
+        extraData: { result: `Bereits erfüllt (automatisch geprüft, kein neuer Anlauf nötig): ${already.reason}` },
       });
+      if (!finalized.ok) {
+        await enqueueAgentJob("ticketWork", {
+          agentId: implementer.id,
+          projectId,
+          ticketId,
+          reason: `Zusammenführen mit dem Hauptbranch fehlgeschlagen: ${finalized.error.slice(0, 200)}`,
+          attempt: attempt + 1,
+        });
+        return;
+      }
       await logActivity({
         projectId,
         ticketId,
@@ -679,6 +701,7 @@ Schreibe einen knappen Umsetzungsplan als Markdown-Liste: welche Dateien angeleg
       agent: implementer,
       projectId,
       dir,
+      workspaceSubpath,
       ticketId,
       sprintId: ticket.sprintId ?? undefined,
       system: `${TEAM_GRUNDREGELN}
@@ -872,7 +895,7 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
     // vorzulegen (siehe attemptAutomaticVerification).
     if (!raisedQuestion && rejected.length === 0) {
       const verifier = (await agentForRole(projectId, "QA")) ?? implementer;
-      const verification = await attemptAutomaticVerification({ dir, projectId, ticket, reviewer: verifier });
+      const verification = await attemptAutomaticVerification({ dir, workspaceSubpath, ticket, reviewer: verifier });
       if (verification) {
         await prisma.ticket.update({
           where: { id: ticketId },
@@ -924,7 +947,17 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
             true,
           );
         } else {
-          await prisma.ticket.update({ where: { id: ticketId }, data: { status: "DONE" } });
+          const finalized = await integrateAndFinalizeTicket({ ticketId, projectId });
+          if (!finalized.ok) {
+            await enqueueAgentJob("ticketWork", {
+              agentId: implementer.id,
+              projectId,
+              ticketId,
+              reason: `Zusammenführen mit dem Hauptbranch fehlgeschlagen: ${finalized.error.slice(0, 200)}`,
+              attempt: attempt + 1,
+            });
+            return;
+          }
           await logActivity({
             projectId,
             ticketId,
@@ -961,7 +994,17 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
         if (ticket.isCritical) {
           await requestHumanReview(projectId, ticketId, ticket.title, `Kritisches Ticket, keine Änderung nötig – ${audit.reason}`, true);
         } else {
-          await prisma.ticket.update({ where: { id: ticketId }, data: { status: "DONE", result } });
+          const finalized = await integrateAndFinalizeTicket({ ticketId, projectId, extraData: { result } });
+          if (!finalized.ok) {
+            await enqueueAgentJob("ticketWork", {
+              agentId: implementer.id,
+              projectId,
+              ticketId,
+              reason: `Zusammenführen mit dem Hauptbranch fehlgeschlagen: ${finalized.error.slice(0, 200)}`,
+              attempt: attempt + 1,
+            });
+            return;
+          }
           await logActivity({
             projectId,
             ticketId,
@@ -1124,7 +1167,7 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
   // Lauf technisch (kein Docker erreichbar), bleibt QA nicht blind stehen –
   // dann urteilt es wie bisher allein aus dem Diff.
   const checkTargets = await detectCheckTargets(dir);
-  const checkResults = checkTargets.length > 0 ? await runChecks(projectId, checkTargets) : [];
+  const checkResults = checkTargets.length > 0 ? await runChecks(workspaceSubpath, checkTargets) : [];
   const checksRanForReal = checkResults.some((result) => !result.unavailable);
   const anyCheckFailed = checkResults.some((result) => checkFailed(result));
 
@@ -1331,7 +1374,11 @@ Antworte nur mit diesem JSON-Objekt:
   // Mensch, sonst gilt das Ticket als fertig – gebündelt in einer Funktion,
   // weil ab hier zwei Wege dorthin führen (direkt nach QA, oder erst nach
   // einem zusätzlichen Design-Review).
-  const finalizeQaApproved = async () => {
+  // Gibt `false` zurueck, wenn das Ticket in einem eigenen Worktree lief und
+  // sich nicht in den Hauptbranch uebernehmen liess – der Aufrufer schickt es
+  // dann wie jeden anderen technisch gescheiterten Anlauf zur Nacharbeit,
+  // statt es als fertig zu vermelden.
+  const finalizeQaApproved = async (): Promise<boolean> => {
     if (ticket.isCritical || risk === "high") {
       await requestHumanReview(
         projectId,
@@ -1342,17 +1389,28 @@ Antworte nur mit diesem JSON-Objekt:
           : `QA stuft das Risiko als hoch ein: ${comment}`,
         ticket.isCritical,
       );
-    } else {
-      await prisma.ticket.update({ where: { id: ticketId }, data: { status: "DONE" } });
-      await logActivity({
+      return true;
+    }
+    const finalized = await integrateAndFinalizeTicket({ ticketId, projectId });
+    if (!finalized.ok) {
+      await enqueueAgentJob("ticketWork", {
+        agentId: implementer.id,
         projectId,
         ticketId,
-        actor: reviewer.name,
-        agentId: reviewer.id,
-        action: "ticket_done",
-        detail: `„${ticket.title}" ist fertig`,
+        reason: `Zusammenführen mit dem Hauptbranch fehlgeschlagen: ${finalized.error.slice(0, 200)}`,
+        attempt: attempt + 1,
       });
+      return false;
     }
+    await logActivity({
+      projectId,
+      ticketId,
+      actor: reviewer.name,
+      agentId: reviewer.id,
+      action: "ticket_done",
+      detail: `„${ticket.title}" ist fertig`,
+    });
+    return true;
   };
 
   if (verdict === "rework") {
@@ -1407,8 +1465,8 @@ Antworte nur mit diesem JSON-Objekt:
         `Design sieht nach ${attempt} Anläufen weiter Mängel: ${designVerdict.comment}`,
         ticket.isCritical,
       );
-    } else {
-      await finalizeQaApproved();
+    } else if (!(await finalizeQaApproved())) {
+      return;
     }
   }
 

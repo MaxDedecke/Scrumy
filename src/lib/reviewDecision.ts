@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 import { agentForRole } from "@/lib/team";
 import { enqueueAgentJob } from "../../worker/queue";
 import { continueSprint } from "../../worker/orchestration";
+import { integrateAndFinalizeTicket } from "../../worker/ticketWorktree";
 import type { ReviewDecision } from "@/generated/prisma/client";
 
 export interface ResolveReviewInput {
@@ -44,10 +45,12 @@ export async function resolveReview(input: ResolveReviewInput): Promise<string> 
         reviewerName: decidedBy,
       },
     }),
-    prisma.ticket.update({
-      where: { id: ticket.id },
-      data: { status: decision === "APPROVED" ? "DONE" : "IN_PROGRESS" },
-    }),
+    // Bei REJECTED direkt hier auf IN_PROGRESS – bei APPROVED NICHT hier
+    // schon auf DONE: Lief das Ticket in einem eigenen Git-Worktree (siehe
+    // worker/ticketWorktree.ts), muss dessen Branch erst in den Hauptbranch
+    // übernommen werden. Das ist ein Git-Vorgang, der nicht in dieselbe
+    // Datenbank-Transaktion passt – siehe `integrateAndFinalizeTicket` unten.
+    ...(decision === "REJECTED" ? [prisma.ticket.update({ where: { id: ticket.id }, data: { status: "IN_PROGRESS" } })] : []),
     prisma.activityLogEntry.create({
       data: {
         projectId,
@@ -60,6 +63,39 @@ export async function resolveReview(input: ResolveReviewInput): Promise<string> 
       },
     }),
   ]);
+
+  if (decision === "APPROVED") {
+    const finalized = await integrateAndFinalizeTicket({ ticketId: ticket.id, projectId });
+    if (!finalized.ok) {
+      // Freigabe steht, aber das Zusammenführen mit dem Hauptbranch ist
+      // gescheitert (nicht auflösbarer Merge-Konflikt) – das Ticket bleibt
+      // bewusst NICHT auf DONE stehen. Derselbe Umsetzer bekommt einen
+      // weiteren Anlauf; dessen billige Vorprüfung (siehe ticketWork.ts,
+      // checkAlreadySatisfied) erkennt den bereits fertigen Code normalerweise
+      // sofort wieder und versucht nur die Übernahme erneut.
+      await prisma.activityLogEntry.create({
+        data: {
+          projectId,
+          ticketId: ticket.id,
+          actor: "Scrumy",
+          action: "step_failed",
+          detail: `„${ticket.title}" ist freigegeben, aber das Zusammenführen mit dem Hauptbranch ist gescheitert: ${finalized.error.slice(0, 300)}`,
+        },
+      });
+      const assignee = ticket.assigneeId
+        ? await prisma.agent.findUnique({ where: { id: ticket.assigneeId } })
+        : await agentForRole(projectId, "BACKEND");
+      if (assignee) {
+        await enqueueAgentJob("ticketWork", {
+          agentId: assignee.id,
+          projectId,
+          ticketId: ticket.id,
+          reason: `Zusammenführen mit dem Hauptbranch fehlgeschlagen: ${finalized.error.slice(0, 200)}`,
+        });
+      }
+      return `„${ticket.title}" ist freigegeben, aber das Zusammenführen mit dem Hauptbranch ist fehlgeschlagen – das Team versucht es erneut.`;
+    }
+  }
 
   // Zurueckgewiesen heisst: derselbe Kollege macht weiter, mit der
   // Begruendung als neuer Vorgabe.

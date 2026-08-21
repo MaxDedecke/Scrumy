@@ -10,7 +10,7 @@
 import { prisma } from "@/lib/prisma";
 import { agentForRole } from "@/lib/team";
 import { enqueueAgentJob } from "../../worker/queue";
-import { nextOpenTicket, nextOpenTickets } from "../../worker/orchestration";
+import { nextOpenTicket } from "../../worker/orchestration";
 
 export async function scheduleNextStep(projectId: string): Promise<string> {
   const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
@@ -48,32 +48,24 @@ export async function scheduleNextStep(projectId: string): Promise<string> {
   // Backend-Vorarbeit (siehe worker/clarification.ts#blockedTicketIds)
   // bleiben liegen – sonst schickt „weitermachen" das Team genau in die
   // Frage zurück, die noch niemand beantwortet hat, oder vor ein Ticket,
-  // dessen Voraussetzung laut Product Owner noch fehlt. SEQUENTIAL holt wie
-  // bisher genau ein Ticket, PARALLEL weckt alle gerade abholbaren auf einmal
-  // (siehe worker/orchestration.ts#continueSprint für dieselbe Fallunterscheidung
-  // im automatischen Ablauf).
-  const openTickets =
-    project.workMode === "PARALLEL"
-      ? await nextOpenTickets(sprint.id)
-      : await nextOpenTicket(sprint.id).then((ticket) => (ticket ? [ticket] : []));
+  // dessen Voraussetzung laut Product Owner noch fehlt. Immer genau ein
+  // Ticket, unabhängig vom Arbeitsmodus – ein zusätzliches paralleles Ticket
+  // startet ausschließlich der periodische Scrum-Master-Check (siehe
+  // worker/tasks/parallelCheck.ts), nicht dieser Weg.
+  const ticket = await nextOpenTicket(sprint.id);
 
-  if (openTickets.length > 0) {
-    const messages: string[] = [];
-    for (const ticket of openTickets) {
-      const assignee = ticket.assigneeId
-        ? await prisma.agent.findUnique({ where: { id: ticket.assigneeId } })
-        : await agentForRole(projectId, "BACKEND");
-      if (!assignee) continue;
-      await enqueueAgentJob("ticketWork", {
-        agentId: assignee.id,
-        projectId,
-        ticketId: ticket.id,
-        reason: "von Hand angestoßen",
-      });
-      messages.push(`${assignee.name} übernimmt „${ticket.title}".`);
-    }
-    if (messages.length > 0) return messages.join(" ");
-    return "Für das nächste Ticket ist niemand zuständig.";
+  if (ticket) {
+    const assignee = ticket.assigneeId
+      ? await prisma.agent.findUnique({ where: { id: ticket.assigneeId } })
+      : await agentForRole(projectId, "BACKEND");
+    if (!assignee) return "Für das nächste Ticket ist niemand zuständig.";
+    await enqueueAgentJob("ticketWork", {
+      agentId: assignee.id,
+      projectId,
+      ticketId: ticket.id,
+      reason: "von Hand angestoßen",
+    });
+    return `${assignee.name} übernimmt „${ticket.title}".`;
   }
 
   // Kein abholbares Ticket heisst noch nicht "fertig" – massgeblich ist

@@ -10,12 +10,13 @@
 // ist Absicht – bei mehreren Worker-Replicas darf ein frisch gestarteter
 // Prozess niemals einen Lauf abräumen, der bei einem anderen gerade läuft.
 import { prisma } from "@/lib/prisma";
-import { listWorkspaceProjectIds, removeWorkspace } from "@/lib/workspace";
+import { listWorkspaceProjectIds, removeWorkspace, runGitCommand } from "@/lib/workspace";
 import { deleteUnassignedAgents } from "@/lib/purge";
 import { reconcileOrphanPreviewContainers } from "@/lib/preview";
 import { reconcileOrphanLiveStacks } from "@/lib/liveStack";
 import { cancelJobsOfDeletedAgents, unlockStaleJobs } from "./queue";
 import { openClarification } from "./clarification";
+import { rm } from "node:fs/promises";
 
 /// Deutlich über dem längsten Zeitlimit eines Modellaufrufs (15 Minuten für
 /// Umsetzungsschritte, siehe worker/tasks/ticketWork.ts).
@@ -84,7 +85,47 @@ export async function reconcileOrphanWorkspaces(): Promise<number> {
   const liveStacks = await reconcileOrphanLiveStacks();
   if (liveStacks > 0) console.log(`[worker] ${liveStacks} verwaiste Live-Stacks entfernt.`);
 
+  // Und Ticket-Worktrees, deren Ticket laengst fertig oder deren Projekt
+  // nicht mehr aktiv ist – siehe reconcileOrphanTicketWorktrees.
+  const worktrees = await reconcileOrphanTicketWorktrees();
+  if (worktrees > 0) console.log(`[worker] ${worktrees} verwaiste Ticket-Worktrees entfernt.`);
+
   return orphans.length;
+}
+
+/// Tickets, deren Git-Worktree (siehe worker/ticketWorktree.ts) liegen
+/// geblieben ist, obwohl das Ticket laengst DONE ist – die Uebernahme in den
+/// Hauptbranch ist gecrasht NACH dem Setzen von DONE, aber VOR dem Aufraeumen
+/// des Worktrees. Bewusst NICHT an einen pausierten/archivierten Projektstatus
+/// gekoppelt: Ein noch nicht fertiges Ticket in einem eigenen Worktree ist
+/// legitime, unfertige Arbeit (z.B. waehrend das Projekt pausiert ist) – die
+/// darf hier nicht wegräumen, was ein spaeteres Fortsetzen noch braucht.
+export async function reconcileOrphanTicketWorktrees(): Promise<number> {
+  const candidates = await prisma.ticket.findMany({
+    where: { worktreePath: { not: null }, status: "DONE" },
+    select: {
+      id: true,
+      worktreePath: true,
+      project: { select: { workspacePath: true } },
+    },
+  });
+
+  let cleaned = 0;
+  for (const ticket of candidates) {
+    if (!ticket.worktreePath) continue;
+
+    if (ticket.project.workspacePath) {
+      await runGitCommand(ticket.project.workspacePath, ["worktree", "remove", ticket.worktreePath, "--force"]).catch(() => {});
+      await runGitCommand(ticket.project.workspacePath, ["branch", "-D", `ticket/${ticket.id}`]).catch(() => {});
+    }
+    // Zweite Sicherung, falls `git worktree remove` scheitert (z.B. weil das
+    // Hauptverzeichnis selbst schon weg ist) – dasselbe Prinzip wie
+    // `removeWorkspace`.
+    await rm(ticket.worktreePath, { recursive: true, force: true });
+    await prisma.ticket.update({ where: { id: ticket.id }, data: { worktreePath: null } });
+    cleaned += 1;
+  }
+  return cleaned;
 }
 
 export async function reconcileStaleRuns(staleAfterMs: number = STALE_AFTER_MS): Promise<number> {

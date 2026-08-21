@@ -173,16 +173,12 @@ Antworte nur mit diesem JSON-Objekt:
   // der Modellaufruf (z.B. Anbieter überlastet), soll das Team trotzdem
   // nicht stehen bleiben. Arbeitet gerade schon jemand, ist hier nichts zu
   // tun – die Prüfung ist nur, um im Log nicht staendig ein folgenloses
-  // "nächster Schritt: läuft schon" zu vermelden. Im parallelen Modus (siehe
-  // `Project.workMode`) kann trotz eines laufenden Agenten noch ein zweites,
-  // unabhängiges Ticket abholbar sein – dort greift die Prüfung nicht,
-  // `scheduleNextStep` entscheidet selbst (idempotent dank
-  // `nextOpenTickets`/`activeTicketJobIds`, siehe worker/queue.ts).
-  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { workMode: true } });
-  const alreadyRunning =
-    project?.workMode === "SEQUENTIAL"
-      ? await prisma.agentRun.findFirst({ where: { projectId, status: "RUNNING" } })
-      : null;
+  // "nächster Schritt: läuft schon" zu vermelden. Ein zusätzliches,
+  // unabhängiges zweites Ticket (Parallel-Modus, siehe `Project.workMode`)
+  // startet ausschließlich der periodische Scrum-Master-Check
+  // (worker/tasks/parallelCheck.ts) mit seiner eigenen, genaueren
+  // Unabhängigkeits-Prüfung – hier reicht "läuft schon irgendwas".
+  const alreadyRunning = await prisma.agentRun.findFirst({ where: { projectId, status: "RUNNING" } });
   if (!alreadyRunning) {
     try {
       const resumeMessage = await scheduleNextStep(projectId);

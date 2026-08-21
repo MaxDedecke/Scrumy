@@ -20,6 +20,11 @@ const execFileAsync = promisify(execFile);
 /// Absichtlich ohne Shell (`execFile`, kein `exec`): Commit-Messages und
 /// Dateinamen kommen aus Modellantworten und duerfen niemals als Shell-Code
 /// interpretiert werden.
+///
+/// Exportiert als `runGitCommand` fuer worker/ticketWorktree.ts – dieselbe
+/// abgeschottete Git-Umgebung (keine globale Config, kein Askpass ausser
+/// explizit uebergeben) soll es fuer Worktree-Operationen NICHT zweimal
+/// geben.
 async function git(cwd: string, args: string[], token?: string): Promise<string> {
   const { stdout } = await execFileAsync("git", args, {
     cwd,
@@ -181,7 +186,7 @@ export async function configureRepoRemote(
   else await unsetLocalGitConfig(dir, "scrumy.credentialRef");
 }
 
-async function currentBranch(dir: string): Promise<string> {
+export async function currentBranch(dir: string): Promise<string> {
   try {
     return (await git(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"])).trim();
   } catch {
@@ -208,8 +213,36 @@ export async function pushRepo(dir: string): Promise<PushResult> {
   const remoteBranch = remote.defaultBranch || localBranch;
   const token = remoteToken(remote);
 
+  // Vor dem eigentlichen Push erst pruefen, ob `origin` inzwischen Commits
+  // hat, die lokal fehlen – z.B. weil parallel ein zweites Ticket gemergt und
+  // gepusht wurde (siehe worker/ticketWorktree.ts), oder weil jemand
+  // ausserhalb von Scrumy direkt ins Remote geschrieben hat. Ein blinder Push
+  // waere sonst bestenfalls ein abgelehnter Non-Fast-Forward-Push, im
+  // schlechteren Fall (Branch-Schutz erlaubt Force-Push) ein stiller Verlust
+  // fremder Arbeit. `git fetch` schlaegt folgenlos fehl, wenn es den Branch im
+  // Remote noch gar nicht gibt (allererster Push).
+  await git(dir, ["fetch", "origin", remoteBranch], token).catch(() => {});
+  const remoteRef = `refs/remotes/origin/${remoteBranch}`;
+  const remoteAhead = await git(dir, ["rev-list", "--count", `HEAD..${remoteRef}`])
+    .then((out) => Number(out.trim()) > 0)
+    .catch(() => false); // kein Tracking-Ref – noch nichts zum Vergleichen, erster Push
+  if (remoteAhead) {
+    try {
+      await git(dir, ["merge", remoteRef, "--no-edit"]);
+    } catch {
+      const conflicted = (await git(dir, ["diff", "--name-only", "--diff-filter=U"]))
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      throw new MergeConflictError(
+        `origin/${remoteBranch} enthält Commits, die sich nicht automatisch mit dem lokalen Stand zusammenführen lassen.`,
+        conflicted,
+      );
+    }
+  }
+
   const head = (await git(dir, ["rev-parse", "HEAD"])).trim();
-  const previousRemoteSha = await git(dir, ["rev-parse", `refs/remotes/origin/${remoteBranch}`])
+  const previousRemoteSha = await git(dir, ["rev-parse", remoteRef])
     .then((sha) => sha.trim())
     .catch(() => null); // noch kein Tracking-Ref – erster Push in dieses Remote/Branch
 
@@ -224,6 +257,8 @@ export async function pushRepo(dir: string): Promise<PushResult> {
 
   return { pushed: previousRemoteSha !== head, commit: head };
 }
+
+export { git as runGitCommand };
 
 export function workspaceRoot(): string {
   return process.env.WORKSPACE_ROOT || path.join(process.cwd(), ".workspaces");
@@ -372,6 +407,13 @@ export async function removeWorkspace(projectId: string, storedPath?: string | n
   if (storedPath && path.isAbsolute(storedPath) && path.basename(storedPath) === projectId) {
     targets.add(path.resolve(storedPath));
   }
+  // Ticket-Worktrees (siehe worker/ticketWorktree.ts) liegen als
+  // Geschwisterverzeichnisse NEBEN dem Hauptverzeichnis, nicht darunter –
+  // ohne diese Ergaenzung wuerde ein geloeschtes Projekt sie im Volume
+  // zurücklassen (siehe [[scrumy-loeschen-raeumt-dateisystem]]).
+  for (const dir of await readdir(workspaceRoot()).catch(() => [] as string[])) {
+    if (dir.startsWith(`${projectId}__wt__`)) targets.add(path.join(workspaceRoot(), dir));
+  }
 
   for (const target of targets) {
     // `force`: Ein Projekt, an dem nie ein Team gearbeitet hat, hat kein
@@ -399,6 +441,21 @@ export class WorkspaceError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WorkspaceError";
+  }
+}
+
+/// Wirft `pushRepo`, wenn `origin` Commits enthaelt, die sich nicht ohne
+/// Konflikt in den lokalen Stand einmergen lassen (siehe dort). Getrennt von
+/// `WorkspaceError`, weil Aufrufer mit Zugriff auf einen Umsetzer-Agenten
+/// (siehe worker/ticketWorktree.ts) das hier gezielt abfangen und den
+/// Konflikt aufloesen koennen, statt den Fehler nur durchzureichen.
+export class MergeConflictError extends WorkspaceError {
+  constructor(
+    message: string,
+    readonly conflictedFiles: string[],
+  ) {
+    super(message);
+    this.name = "MergeConflictError";
   }
 }
 

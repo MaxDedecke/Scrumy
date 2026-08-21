@@ -14,6 +14,7 @@ import { revalidateProject } from "@/lib/actions/revalidate";
 import { resolveReview } from "@/lib/reviewDecision";
 import { enqueueAgentJob } from "../../../worker/queue";
 import { reconcileStaleLocksNow } from "../../../worker/reconcile";
+import { scheduleParallelCheck } from "../../../worker/tasks/parallelCheck";
 
 /// Anlass-Kennung der Beschluesse, mit denen eine Ausbaustufe beauftragt wird.
 /// Ueber sie wird gezaehlt, die wievielte es ist – und sie taucht in der
@@ -266,14 +267,16 @@ export async function setWorkMode(formData: FormData): Promise<ActionResult> {
     },
   });
 
-  // Auf Parallel umgeschaltet, waehrend der Sprint schon laeuft: sofort
-  // nachsehen, ob dadurch weitere Tickets abholbar geworden sind, statt bis
-  // zum naechsten zufaelligen Anstoss zu warten (`scheduleNextStep` ist dank
-  // `nextOpenTickets`/`activeTicketJobIds` idempotent – ein schon laufendes
-  // Ticket wird dabei nie doppelt eingereiht, siehe worker/queue.ts).
+  // Auf Parallel umgeschaltet, waehrend der Sprint schon laeuft: sofort den
+  // periodischen Scrum-Master-Check anstossen (siehe worker/tasks/parallelCheck.ts),
+  // statt bis zum naechsten Sprint-Start zu warten. `scheduleNextStep` sorgt
+  // zusaetzlich dafuer, dass ein evtl. gerade brachliegendes Ticket ueberhaupt
+  // erst laeuft – ohne ein laufendes primaeres Ticket hat der Parallel-Check
+  // nichts, wonach er ein zweites, unabhaengiges Ticket ausrichten koennte.
   if (parallel) {
     try {
       await scheduleNextStep(projectId);
+      await scheduleParallelCheck(projectId);
     } catch {
       // Kein Sprint aktiv o.ä. – nichts zu tun, der naechste normale Anstoss
       // greift ohnehin.

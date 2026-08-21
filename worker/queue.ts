@@ -61,6 +61,29 @@ export async function enqueueAgentJob<TIdentifier extends keyof GraphileWorker.T
   });
 }
 
+/// Reiht einen Job mit Verzoegerung ein, unter einem festen `jobKey` – ein
+/// zweiter Aufruf mit demselben Key ERSETZT den noch wartenden ersten, statt
+/// eine zweite Kette daneben aufzubauen. Gedacht fuer selbst-nachplanende
+/// periodische Jobs (siehe worker/tasks/parallelCheck.ts): Jeder Lauf plant am
+/// Ende seinen eigenen Nachfolger, und ein doppelter Anstoss (Sprint-Start UND
+/// Umschalten auf PARALLEL kurz danach) soll keine zweite, parallele Kette
+/// erzeugen.
+export async function enqueueDelayedAgentJob<TIdentifier extends keyof GraphileWorker.Tasks>(
+  taskIdentifier: TIdentifier,
+  payload: GraphileWorker.Tasks[TIdentifier],
+  { runAt, jobKey }: { runAt: Date; jobKey: string },
+) {
+  const utils = await getWorkerUtils();
+  const agentId = (payload as { agentId: string }).agentId;
+  await utils.addJob(taskIdentifier, payload as never, {
+    queueName: `agent:${agentId}`,
+    runAt,
+    jobKey,
+    jobKeyMode: "replace",
+    maxAttempts: 2,
+  });
+}
+
 /// Tickets, die gerade schon einen `ticketWork`-Job in der Warteschlange haben
 /// – egal ob noch wartend oder bereits gesperrt/laufend. Nur im parallelen
 /// Arbeitsmodus gebraucht (`Project.workMode`, siehe

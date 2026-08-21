@@ -22,6 +22,7 @@ import { logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
 import { continueSprint, loadWorkingProject } from "../orchestration";
 import { openClarification } from "../clarification";
+import { scheduleParallelCheck } from "./parallelCheck";
 import type { SprintPlanningPayload } from "../taskTypes";
 
 /// Wie viele Tickets ein Sprint hoechstens bekommt. Kleine Sprints halten die
@@ -140,6 +141,7 @@ const sprintPlanning: Task<"sprintPlanning"> = async (payload: SprintPlanningPay
     // jobKey-Deduping der Ticket-Queue macht den Aufruf auch für einen echten
     // Doppel-Anstoß sicher.
     await continueSprint(projectId, latestSprint.id);
+    if (project.workMode === "PARALLEL") await scheduleParallelCheck(projectId);
     return;
   }
 
@@ -579,6 +581,7 @@ Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwort
 
   helpers.logger.info(`Sprint ${sprint.number} für Projekt ${projectId} geplant (${reason}).`);
   await continueSprint(projectId, sprint.id);
+  if (project.workMode === "PARALLEL") await scheduleParallelCheck(projectId);
 };
 
 /// Wie viele Weiterentwicklungs-Vorschlaege der Product Owner hoechstens

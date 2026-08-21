@@ -123,6 +123,7 @@ export async function runImplementationLoop({
   agent,
   projectId,
   dir,
+  workspaceSubpath = projectId,
   ticketId,
   sprintId,
   system,
@@ -132,6 +133,9 @@ export async function runImplementationLoop({
   agent: Agent;
   projectId: string;
   dir: string;
+  /** Siehe `ToolContext.workspaceSubpath` – Standard `projectId` (Normalfall:
+   *  `dir` ist das Hauptverzeichnis des Projekts). */
+  workspaceSubpath?: string;
   ticketId: string;
   sprintId?: string;
   system: string;
@@ -141,6 +145,7 @@ export async function runImplementationLoop({
   const ctx: ToolContext = {
     dir,
     projectId,
+    workspaceSubpath,
     createdThisAttempt: new Set(),
     bashTimeUsedMs: 0,
     bashTimeBudgetMs: BASH_TIME_BUDGET_MS,

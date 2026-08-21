@@ -85,6 +85,16 @@ export interface PoSweepPayload {
   reason: string;
 }
 
+/** Scrum Master prüft periodisch, ob neben dem laufenden Ticket noch ein
+ *  zweites, unabhängiges Ticket parallel gestartet werden kann (siehe
+ *  worker/tasks/parallelCheck.ts). Plant sich am Ende immer selbst neu, solange
+ *  das Projekt im PARALLEL-Modus aktiv ist. */
+export interface ParallelCheckPayload {
+  agentId: string;
+  projectId: string;
+  reason: string;
+}
+
 declare global {
   // Von graphile-worker vorgegebener Mechanismus fuer typisierte Task-Payloads
   // (Declaration Merging), kein selbst gewaehltes Namespace-Pattern.
@@ -100,6 +110,7 @@ declare global {
       clarificationTriage: ClarificationTriagePayload;
       reviewTriage: ReviewTriagePayload;
       poSweep: PoSweepPayload;
+      parallelCheck: ParallelCheckPayload;
     }
   }
 }

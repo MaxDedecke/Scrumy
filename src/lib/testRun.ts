@@ -31,20 +31,25 @@ function testRunnerVolume(): string {
 }
 
 /// Führt ein Shell-Skript in einem frischen, ressourcenbegrenzten Sibling-
-/// Container aus, der NUR das Arbeitsverzeichnis eines einzelnen Projekts
-/// sieht – nicht das ganze geteilte Workspace-Volume. Grundlage für die
+/// Container aus, der NUR EIN Arbeitsverzeichnis im geteilten Workspace-
+/// Volume sieht – normalerweise das Hauptverzeichnis eines Projekts, bei
+/// einem parallel laufenden Ticket (siehe worker/ticketWorktree.ts) dessen
+/// eigenes Git-Worktree-Geschwisterverzeichnis. Grundlage für die
 /// automatischen Prüfungen unten UND für das `run_command`-Werkzeug des
 /// Umsetzer-Agenten (siehe worker/agentTools.ts).
 ///
-/// Bewusst `--mount ... volume-subpath=<projectId>` statt `-v volume:/workspaces`
-/// mit anschliessendem `cd` im Skript: Bei den Prüfungen unten ist der
-/// `cd`-Zielpfad zwar serverseitig fest, aber `run_command` fuehrt
-/// MODELLGENERIERTE Befehle aus. Ein "cd .." oder "ls /workspaces" waere ohne
-/// den Subpath-Mount ein Mandanten-uebergreifendes Datenleck – mit ihm sieht
-/// der Container strukturell nur noch das eigene Projektverzeichnis als "/",
-/// unabhaengig davon, was der Befehl tut. Braucht Docker >= 24.
+/// Bewusst `--mount ... volume-subpath=<workspaceSubpath>` statt
+/// `-v volume:/workspaces` mit anschliessendem `cd` im Skript: Bei den
+/// Prüfungen unten ist der `cd`-Zielpfad zwar serverseitig fest, aber
+/// `run_command` fuehrt MODELLGENERIERTE Befehle aus. Ein "cd .." oder "ls
+/// /workspaces" waere ohne den Subpath-Mount ein Mandanten-uebergreifendes
+/// Datenleck – mit ihm sieht der Container strukturell nur noch das
+/// angegebene Verzeichnis als "/", unabhaengig davon, was der Befehl tut.
+/// `workspaceSubpath` muss deshalb IMMER ein direktes Kindverzeichnis der
+/// Volume-Wurzel sein (Projekt-ID oder `<projektId>__wt__<ticketId>`), nie
+/// ein tieferer, zusammengesetzter Pfad. Braucht Docker >= 24.
 export async function runInSandbox(
-  projectId: string,
+  workspaceSubpath: string,
   script: string,
   {
     containerNamePrefix = "scrumy-run",
@@ -62,7 +67,7 @@ export async function runInSandbox(
     maxOutputChars?: number;
   } = {},
 ): Promise<{ exitCode: number | null; timedOut: boolean; unavailable: boolean; output: string }> {
-  const containerName = `${containerNamePrefix}-${projectId}-${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 128);
+  const containerName = `${containerNamePrefix}-${workspaceSubpath}-${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 128);
 
   const args = [
     "run",
@@ -70,7 +75,7 @@ export async function runInSandbox(
     "--name",
     containerName,
     "--mount",
-    `type=volume,source=${testRunnerVolume()},target=/workspaces,volume-subpath=${projectId}`,
+    `type=volume,source=${testRunnerVolume()},target=/workspaces,volume-subpath=${workspaceSubpath}`,
     "--memory",
     memory,
     "--cpus",
@@ -216,19 +221,19 @@ function clipOutput(text: string, maxChars: number): string {
 /// Container aus – für jedes Ziel einen eigenen Lauf, damit ein hängender
 /// Test die anderen Ziele nicht blockiert.
 export async function runChecks(
-  projectId: string,
+  workspaceSubpath: string,
   targets: CheckTarget[],
   { timeoutMs = 480_000, maxOutputChars = 8000 } = {},
 ): Promise<CheckRunResult[]> {
   const results: CheckRunResult[] = [];
   for (const target of targets) {
-    results.push(await runSingleCheck(projectId, target, timeoutMs, maxOutputChars));
+    results.push(await runSingleCheck(workspaceSubpath, target, timeoutMs, maxOutputChars));
   }
   return results;
 }
 
 async function runSingleCheck(
-  projectId: string,
+  workspaceSubpath: string,
   target: CheckTarget,
   timeoutMs: number,
   maxOutputChars: number,
@@ -245,7 +250,7 @@ async function runSingleCheck(
     ...target.scripts.map((name) => `npm run ${name} --if-present; echo "${MARKER} ${name} exit=$?"`),
   ].join("\n");
 
-  const run = await runInSandbox(projectId, script, {
+  const run = await runInSandbox(workspaceSubpath, script, {
     containerNamePrefix: `scrumy-check-${target.relDir.replace(/[^a-zA-Z0-9_-]/g, "_") || "root"}`,
     timeoutMs,
     maxOutputChars,
