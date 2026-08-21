@@ -50,9 +50,12 @@ export default async function ProjectRecordsPage({
   const commits = project.workspacePath ? await gitLog(project.workspacePath, 100) : [];
   const runRows = buildRunRows(runs);
 
+  // `card-ghost` (siehe Büroplan in AgentWorkspacePanel.tsx): nur der Rahmen
+  // bleibt sichtbar, die Kartenfläche wird transparent – dasselbe Geisterkarten-
+  // Design jetzt auch hier, damit die Nachweis-Panels optisch zum Team-Büro passen.
   return (
     <PanelGrid className="lg:grid-cols-2 lg:grid-rows-2">
-      <Panel title="Agentenläufe" count={runRows.length} className="lg:row-span-2" padded={false}>
+      <Panel title="Agentenläufe" count={runRows.length} className="card-ghost lg:row-span-2" padded={false}>
         {runRows.length === 0 ? (
           <PanelEmpty>Noch kein Agent tätig geworden.</PanelEmpty>
         ) : (
@@ -100,6 +103,7 @@ export default async function ProjectRecordsPage({
         title="Commits im Repository"
         count={commits.length}
         padded={false}
+        className="card-ghost"
         action={
           project.workspacePath && (
             <span className="truncate font-mono text-ink-4" title={project.workspacePath}>
@@ -132,7 +136,7 @@ export default async function ProjectRecordsPage({
         )}
       </Panel>
 
-      <Panel title="Sprints" count={sprints.length} padded={false}>
+      <Panel title="Sprints" count={sprints.length} padded={false} className="card-ghost">
         {sprints.length === 0 ? (
           <PanelEmpty>Noch kein Sprint abgeschlossen.</PanelEmpty>
         ) : (
