@@ -38,7 +38,7 @@ export default async function ProjectCodePage({
 
   return (
     <PanelGrid className="lg:grid-cols-[20rem_minmax(0,1fr)]">
-      <Panel title="Dateien" count={files.length} padded={false} scroll={false}>
+      <Panel title="Dateien" className="card-ghost" count={files.length} padded={false} scroll={false}>
         {files.length === 0 ? (
           <PanelEmpty>Repository ist noch leer – das Team hat noch nichts committet.</PanelEmpty>
         ) : (
@@ -46,7 +46,12 @@ export default async function ProjectCodePage({
         )}
       </Panel>
 
-      <Panel title={selectedPath ?? "Datei"} padded={false} action={fileView && <FileMeta view={fileView} />}>
+      <Panel
+        title={selectedPath ?? "Datei"}
+        className="card-ghost"
+        padded={false}
+        action={fileView && <FileMeta view={fileView} />}
+      >
         {!selectedPath ? (
           <PanelEmpty>Wähle links eine Datei aus, um sie anzuschauen.</PanelEmpty>
         ) : fileView!.binary ? (
