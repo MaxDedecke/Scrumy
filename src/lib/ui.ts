@@ -24,7 +24,9 @@ export const labelClass = "mb-1.5 block text-xs font-medium text-ink-3";
 const buttonBaseClass =
   "inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors";
 
-export const buttonPrimaryClass = `${buttonBaseClass} bg-accent-solid text-white hover:bg-accent-solid-hover`;
+// Dunkler statt weißer Text: accent-solid ist ein sehr helles Grün, Weiß
+// darauf wäre kaum lesbar.
+export const buttonPrimaryClass = `${buttonBaseClass} bg-accent-solid text-canvas hover:bg-accent-solid-hover`;
 
 export const buttonSecondaryClass = `${buttonBaseClass} border border-hairline-strong text-ink-2 hover:bg-surface-2 hover:text-ink`;
 

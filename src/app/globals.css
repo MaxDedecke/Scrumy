@@ -26,15 +26,18 @@
   --color-ink-4: #56566a;
 
   /* Akzent: accent für Text/Rahmen auf dunklem Grund, accent-solid für
-     gefüllte Buttons (Weiß darauf bleibt lesbar). */
-  --color-accent: #7aa5f7;
-  --color-accent-solid: #2f6fe0;
-  --color-accent-solid-hover: #3d7cf0;
-  --color-accent-soft: rgba(122, 165, 247, 0.12);
-  --color-accent-border: rgba(122, 165, 247, 0.32);
+     gefüllte Buttons. Dasselbe Giftgrün wie die Wortmarke (--color-brand) –
+     UI-Akzent und Marke sind bewusst NICHT mehr getrennt. Weil das Grün sehr
+     hell ist, braucht ein gefüllter Button dunklen statt weißen Text
+     (siehe buttonPrimaryClass in src/lib/ui.ts). */
+  --color-accent: #c6ff0a;
+  --color-accent-solid: #c6ff0a;
+  --color-accent-solid-hover: #b3e600;
+  --color-accent-soft: rgba(198, 255, 10, 0.12);
+  --color-accent-border: rgba(198, 255, 10, 0.32);
 
-  /* Marke: das giftgrüne S im Logo – bewusst getrennt vom UI-Akzent (Blau),
-     nur fürs Wortmarken-Icon in der Kopfzeile. */
+  /* Marke: dasselbe Giftgrün wie der UI-Akzent oben, fürs Wortmarken-Icon in
+     der Kopfzeile. */
   --color-brand: #c6ff0a;
 
   /* Feste Status-Palette (nie für Kategorien wiederverwendet). */
