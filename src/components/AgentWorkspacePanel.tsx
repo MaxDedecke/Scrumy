@@ -1,20 +1,33 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
-import type { AgentRole, AgentStatus } from "@/generated/prisma/client";
-import { AGENT_ROLE_LABEL, AGENT_STATUS_LABEL, AGENT_STATUS_PILL, RUN_KIND_LABEL } from "@/lib/labels";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { AgentRole, AgentStatus, InquiryStatus } from "@/generated/prisma/client";
+import {
+  AGENT_ROLE_LABEL,
+  AGENT_STATUS_LABEL,
+  AGENT_STATUS_PILL,
+  INQUIRY_STATUS_LABEL,
+  RUN_KIND_LABEL,
+} from "@/lib/labels";
+import { ActionForm } from "@/components/ActionForm";
+import { AgentResponse } from "@/components/AgentResponse";
+import { IconSubmit } from "@/components/IconSubmit";
 import { Panel, PanelEmpty } from "@/components/Panel";
 import {
   BooksIcon,
   ChairIcon,
+  ChatIcon,
   FrameIcon,
   GridIcon,
   ListIcon,
   MugIcon,
   PersonIcon,
   PlantIcon,
+  SendIcon,
   SteamIcon,
 } from "@/components/icons";
+import { askTeam } from "@/lib/actions/team";
+import { iconButtonClass, inputClass } from "@/lib/ui";
 
 export type AgentWorkspaceEntry = {
   id: string;
@@ -25,35 +38,79 @@ export type AgentWorkspaceEntry = {
   last: { headline: string; startedAt: Date } | null;
 };
 
-type ViewMode = "list" | "office";
+export type TeamInquiryEntry = {
+  id: string;
+  question: string;
+  answer: string | null;
+  status: InquiryStatus;
+  createdAt: Date;
+  answeredByName: string | null;
+};
 
-// „Wer gerade woran arbeitet": Liste (bewährt, textlich dicht) oder Büroplan
-// (ein Blick genügt). Der Umschalter sitzt oben rechts auf Titelhöhe, wie bei
-// jedem <Panel>-`action` – nur dass hier zwei Ansichten um denselben Platz
+type ViewMode = "list" | "office" | "chat";
+
+// Titel folgt dem Tab: Liste/Büroplan zeigen dieselbe Frage ("wer arbeitet
+// woran"), der Chat-Tab ist inhaltlich ein anderes Thema (Rückfragen) und
+// bekommt deshalb einen eigenen Titel statt eines generischen Oberbegriffs.
+const MODE_TITLE: Record<ViewMode, string> = {
+  list: "Wer gerade woran arbeitet",
+  office: "Wer gerade woran arbeitet",
+  chat: "Rückfragen ans Team",
+};
+
+// „Wer gerade woran arbeitet" + „Rückfragen ans Team" in einer Karte, drei
+// gleichberechtigte Tabs (Liste, Büroplan, Rückfragen) statt zweier
+// getrennter Panels: beide drehen sich um dasselbe Team, nur der Blickwinkel
+// wechselt. Der Umschalter sitzt oben rechts auf Titelhöhe, wie bei jedem
+// <Panel>-`action` – nur dass hier drei Ansichten um denselben Platz
 // konkurrieren, statt eine feste Aktion zu sein.
 export function AgentWorkspacePanel({
   agents,
+  projectId,
+  inquiries,
   className,
 }: {
   agents: AgentWorkspaceEntry[];
+  projectId: string;
+  inquiries: TeamInquiryEntry[];
   /** z.B. `lg:col-span-2`, wenn das Panel nicht die ganze Rasterzeile einnimmt. */
   className?: string;
 }) {
   const [mode, setMode] = useState<ViewMode>("list");
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const orderedInquiries = [...inquiries].reverse();
+  const openInquiries = inquiries.filter((inquiry) => inquiry.answer === null).length;
+
+  useEffect(() => {
+    if (mode !== "chat") return;
+    const node = scrollRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [mode, inquiries.length]);
 
   // Eingeklappt reicht die Namenszeile: einmal auf den Blick lesbar, wer
   // gerade zum Team gehört, ohne Status und Aufgaben mitzuschleppen.
   // `line-clamp-2` kappt bei mehr Namen als Platz automatisch mit „…".
   const namesLine = agents.length === 0 ? "Niemand zugeordnet." : agents.map((agent) => agent.name).join(", ");
+  const latestInquiry = inquiries[0];
 
   return (
     <Panel
-      title="Wer gerade woran arbeitet"
-      count={agents.length}
+      title={MODE_TITLE[mode]}
+      count={mode === "chat" ? inquiries.length : agents.length}
       padded={false}
+      scroll={mode !== "chat"}
       className={className}
       collapsible
-      collapsedView={<p className="line-clamp-2 px-4 py-3 text-sm text-ink-2">{namesLine}</p>}
+      collapsedView={
+        mode === "chat" ? (
+          <p className="line-clamp-2 px-4 py-3 text-sm text-ink-2">
+            {latestInquiry ? latestInquiry.question : "Noch keine Rückfrage gestellt."}
+          </p>
+        ) : (
+          <p className="line-clamp-2 px-4 py-3 text-sm text-ink-2">{namesLine}</p>
+        )
+      }
       action={
         <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
           <button
@@ -80,10 +137,67 @@ export function AgentWorkspacePanel({
           >
             <GridIcon className="h-4 w-4" />
           </button>
+          <button
+            type="button"
+            onClick={() => setMode("chat")}
+            title="Rückfragen ans Team"
+            aria-label="Rückfragen ans Team"
+            aria-pressed={mode === "chat"}
+            className={`relative inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
+              mode === "chat" ? "bg-surface text-ink shadow-sm" : "text-ink-3 hover:text-ink"
+            }`}
+          >
+            <ChatIcon className="h-4 w-4" />
+            {openInquiries > 0 && (
+              <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-accent" />
+            )}
+          </button>
         </div>
       }
+      footer={
+        mode === "chat" ? (
+          <ActionForm action={askTeam} className="flex items-end gap-2">
+            <input type="hidden" name="projectId" value={projectId} />
+            <textarea
+              name="question"
+              rows={1}
+              required
+              placeholder="Rückfrage ans Team – z.B. „Was blockiert euch?“"
+              className={`${inputClass} min-h-9 resize-none py-2`}
+            />
+            <IconSubmit title="Frage an das Team schicken" className={iconButtonClass}>
+              <SendIcon className="h-4 w-4" />
+            </IconSubmit>
+          </ActionForm>
+        ) : undefined
+      }
     >
-      {agents.length === 0 ? (
+      {mode === "chat" ? (
+        <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-4">
+          {orderedInquiries.length === 0 ? (
+            <PanelEmpty>Noch keine Rückfrage gestellt – frag direkt unten.</PanelEmpty>
+          ) : (
+            orderedInquiries.map((inquiry) => (
+              <div key={inquiry.id} className="flex flex-col gap-1.5">
+                <div className="max-w-[88%] self-end rounded-2xl rounded-br-sm bg-accent-soft/60 px-3 py-2">
+                  <p className="text-sm text-ink">{inquiry.question}</p>
+                  <p className="mt-1 text-[11px] text-ink-3">{formatTime(inquiry.createdAt)}</p>
+                </div>
+                {inquiry.answer ? (
+                  <div className="max-w-[88%] self-start rounded-2xl rounded-bl-sm bg-surface-2/70 px-3 py-2">
+                    {inquiry.answeredByName && (
+                      <p className="text-[11px] font-medium text-ink-3">{inquiry.answeredByName}</p>
+                    )}
+                    <AgentResponse text={inquiry.answer} className="mt-0.5" />
+                  </div>
+                ) : (
+                  <p className="self-start px-1 text-xs text-ink-4">{INQUIRY_STATUS_LABEL[inquiry.status]} …</p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      ) : agents.length === 0 ? (
         <PanelEmpty>Diesem Projekt ist noch niemand zugeordnet.</PanelEmpty>
       ) : mode === "list" ? (
         <AgentListView agents={agents} />

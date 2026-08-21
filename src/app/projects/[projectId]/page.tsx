@@ -17,7 +17,6 @@ import { ClarificationChoice } from "@/components/ClarificationChoice";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { IconSubmit } from "@/components/IconSubmit";
 import { Panel, PanelEmpty, PanelGrid } from "@/components/Panel";
-import { TeamChatPanel } from "@/components/TeamChatPanel";
 import { ArchiveIcon, ArrowRightIcon, BanIcon, ForwardIcon, SendIcon } from "@/components/icons";
 import { decideReview, delegateReview } from "@/lib/actions/team";
 import {
@@ -295,9 +294,12 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
   return (
     <>
       <PanelGrid className="lg:grid-cols-3 lg:grid-rows-[minmax(0,6fr)_minmax(0,4fr)]">
-        <AgentWorkspacePanel className="lg:col-span-2" agents={agentEntries} />
-
-        <TeamChatPanel className="lg:col-span-1" projectId={project.id} inquiries={inquiryEntries} />
+        <AgentWorkspacePanel
+          className="lg:col-span-3"
+          agents={agentEntries}
+          projectId={project.id}
+          inquiries={inquiryEntries}
+        />
 
         <Panel
           title="Aktueller Sprint"

@@ -12,7 +12,7 @@ import { ArrowDownIcon } from "@/components/icons";
 // nacheinander aufzuklappen. Hier stehen alle Turns eines Versuchs
 // untereinander: das Werkzeugergebnis, das den Turn ausgeloest hat, rechts
 // (wie eine Nachricht an das Modell), die Antwort des Modells links – gleiche
-// Bildsprache wie <TeamChatPanel>.
+// Bildsprache wie der Rückfragen-Tab in <AgentWorkspacePanel>.
 //
 // Turn 1 traegt den vollen Auftrag ("# Projekt...", siehe
 // `buildProjectContext`) statt eines Werkzeugergebnisses – deutlich laenger
