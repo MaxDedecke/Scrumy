@@ -92,6 +92,7 @@ export default async function ProjectLayout({
         className="mb-5"
         backHref="/"
         backLabel={project.organization.name}
+        backInline
         title={project.name}
         status={
           <>
