@@ -112,15 +112,9 @@ export default async function ProjectLayout({
                 {statusMessage.text}
               </span>
             )}
-            {/* Aktiv/Pausiert nicht mehr als eigene Pille: ein Projekt ist
-                standardmäßig aktiv, das Play/Pause-Icon in TeamControls
-                zeigt den abweichenden Zustand bereits an. Discovery/Konzept/
-                Archiviert bleiben sichtbar, das sind echte Phasen. */}
-            {project.status !== "ACTIVE" && project.status !== "PAUSED" && (
-              <span className={`${PROJECT_STATUS_PILL[project.status]} pill-dot`}>
-                {PROJECT_STATUS_LABEL[project.status]}
-              </span>
-            )}
+            <span className={`${PROJECT_STATUS_PILL[project.status]} pill-dot`}>
+              {PROJECT_STATUS_LABEL[project.status]}
+            </span>
             {(project.liveStatus === "RUNNING" || project.liveStatus === "STARTING") && (
               <span className={`${LIVE_STATUS_PILL[project.liveStatus]} pill-dot`}>
                 {LIVE_STATUS_LABEL[project.liveStatus]}
