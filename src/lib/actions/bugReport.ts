@@ -97,9 +97,15 @@ export async function reportBug(formData: FormData): Promise<ActionResult> {
   // Dieselbe Vorab-Aufräumung + Lauf-Prüfung wie beim „Macht weiter"-Knopf
   // (nudgeTeam in team.ts): eine tote Job-Sperre soll das Melden nicht
   // zusätzlich blockieren, und läuft schon etwas, holt sich das Team das neue
-  // Ticket von allein, sobald es dran ist.
+  // Ticket von allein, sobald es dran ist. Im parallelen Modus (siehe
+  // `Project.workMode`) gilt das nicht – dort kann trotz eines laufenden
+  // Agenten noch Platz für das neue Ticket sein, `scheduleNextStep`
+  // entscheidet selbst (idempotent dank `nextOpenTickets`/`activeTicketJobIds`).
   await reconcileStaleLocksNow();
-  const running = await prisma.agentRun.findFirst({ where: { projectId, status: "RUNNING" } });
+  const running =
+    project.workMode === "SEQUENTIAL"
+      ? await prisma.agentRun.findFirst({ where: { projectId, status: "RUNNING" } })
+      : null;
   const next = running
     ? "Das Team arbeitet gerade – das neue Ticket kommt automatisch dran."
     : await scheduleNextStep(projectId);

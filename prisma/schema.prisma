@@ -70,6 +70,16 @@ model Project {
   /// ein (siehe `Clarification`) statt einfach stehenzubleiben; der Mensch kann
   /// dort aufstocken.
   sprintBudget           Int           @default(12)
+  /// SEQUENTIAL (Standard): der Product Owner zieht immer nur EIN Ticket auf
+  /// einmal vom Board, das naechste erst nach dessen Abschluss (siehe
+  /// worker/orchestration.ts#continueSprint). PARALLEL: mehrere Agenten
+  /// duerfen gleichzeitig an verschiedenen, voneinander unabhaengigen Tickets
+  /// arbeiten - gedacht als spaeter zu gatendes Premium-Feature, aktuell noch
+  /// ohne Freischaltbeschraenkung. In BEIDEN Modi gilt hart: ein
+  /// FRONTEND-Ticket startet nie, solange im selben Sprint noch ein
+  /// BACKEND-Ticket offen ist (siehe backendGatedTicketIds in
+  /// worker/clarification.ts) - Backend-Arbeit geht immer vor Frontend-Arbeit.
+  workMode               WorkMode      @default(SEQUENTIAL)
 
   /// Zustand der Frontend-Vorschau (siehe src/lib/preview.ts). Getrennt vom
   /// Projektstatus: die Vorschau wird von Hand gestartet/gestoppt und lebt nur
@@ -135,6 +145,12 @@ enum ProjectStatus {
   ACTIVE
   PAUSED
   ARCHIVED
+}
+
+/// Arbeitsweise des Teams (siehe `Project.workMode`).
+enum WorkMode {
+  SEQUENTIAL
+  PARALLEL
 }
 
 /// Lebenszyklus eines laufenden Sibling-Docker-Prozesses eines Projekts –

@@ -34,6 +34,11 @@ export type BoardTicket = {
   /// worker/tasks/sprintPlanning.ts, "dependsOn"). Erst wenn alle hier DONE
   /// sind, zieht das Team dieses Ticket – siehe worker/orchestration.ts.
   blockedBy: { id: string; title: string; status: TicketStatus }[];
+  /// Frontend-Ticket, das wartet, weil im selben Sprint noch Backend-Arbeit
+  /// offen ist (siehe worker/clarification.ts#backendGatedTicketIds) – anders
+  /// als `blockedBy` keine explizite Verknüpfung, sondern das feste Prinzip
+  /// „Backend vor Frontend".
+  backendGated: boolean;
   reviews: {
     id: string;
     reviewerName: string;
@@ -109,6 +114,14 @@ export function TicketBoardPanel({
                           title={`Wartet auf: ${openBlockers.map((b) => b.title).join(", ")}`}
                         >
                           Blockiert durch {openBlockers.length}
+                        </span>
+                      )}
+                      {ticket.backendGated && (
+                        <span
+                          className="pill pill-warning pill-dot"
+                          title="Backend-Arbeit im Sprint ist noch nicht fertig – Frontend startet erst danach"
+                        >
+                          Wartet auf Backend
                         </span>
                       )}
                     </div>

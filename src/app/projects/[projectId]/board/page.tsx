@@ -11,6 +11,7 @@ import {
 import { Panel, PanelEmpty, PanelGrid, PanelStrip } from "@/components/Panel";
 import { WarningIcon } from "@/components/icons";
 import { TicketBoardPanel } from "@/components/TicketBoardPanel";
+import { backendGatedTicketIds } from "@/lib/ticketGate";
 
 // Immer live aus der DB rendern, nicht zur Build-Zeit einfrieren.
 export const dynamic = "force-dynamic";
@@ -49,9 +50,18 @@ export default async function ProjectBoardPage({
     }),
   ]);
 
+  // Frontend-Tickets, die wegen unfertiger Backend-Vorarbeit im Sprint noch
+  // nicht gezogen werden (siehe worker/clarification.ts#backendGatedTicketIds)
+  // – sonst sieht das Board ein liegen gebliebenes Frontend-Ticket ohne
+  // erkennbaren Grund, weil dafür (anders als bei `dependsOn`) keine
+  // explizite `Ticket.blockedBy`-Verknüpfung existiert.
+  const backendGated = new Set(sprint ? await backendGatedTicketIds(sprint.id) : []);
+
   const ticketsByStatus = TICKET_STATUS_ORDER.map((status) => ({
     status,
-    tickets: project.tickets.filter((t) => t.status === status),
+    tickets: project.tickets
+      .filter((t) => t.status === status)
+      .map((t) => ({ ...t, backendGated: backendGated.has(t.id) })),
   }));
 
   const openTickets = project.tickets.filter((t) => t.status !== "DONE");

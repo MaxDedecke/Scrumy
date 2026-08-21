@@ -149,7 +149,7 @@ export async function sprintBlocker(sprintId: string): Promise<Clarification | n
 /// in einem frueheren Sprint haengen), die Suche danach schon – hier interessiert
 /// nur, was in DIESEM Sprint liegen bleibt.
 export async function blockedTicketIds(sprintId: string): Promise<string[]> {
-  const [byClarification, byDependency] = await Promise.all([
+  const [byClarification, byDependency, byBackendGate] = await Promise.all([
     prisma.clarification.findMany({
       where: { status: "OPEN", ticketId: { not: null }, ticket: { sprintId } },
       select: { ticketId: true },
@@ -158,9 +158,40 @@ export async function blockedTicketIds(sprintId: string): Promise<string[]> {
       where: { sprintId, blockedBy: { some: { status: { not: "DONE" } } } },
       select: { id: true },
     }),
+    backendGatedTicketIds(sprintId),
   ]);
   const ids = new Set<string>();
   for (const entry of byClarification) if (entry.ticketId) ids.add(entry.ticketId);
   for (const entry of byDependency) ids.add(entry.id);
+  for (const id of byBackendGate) ids.add(id);
   return [...ids];
+}
+
+/// Hartes Prinzip, unabhaengig vom Arbeitsmodus (siehe `Project.workMode`):
+/// Backend-Arbeit geht immer vor Frontend-Arbeit. Ein FRONTEND-Ticket bleibt
+/// liegen, solange im selben Sprint noch IRGENDEIN BACKEND-Ticket offen ist
+/// (nicht DONE) – unabhaengig davon, ob der Product Owner in der
+/// Sprint-Planung zusaetzlich eine explizite Abhaengigkeit dazu gesetzt hat
+/// (`dependsOn`/`Ticket.blockedBy`, siehe worker/tasks/sprintPlanning.ts).
+///
+/// Im sequenziellen Modus faellt das kaum auf – es arbeitet ohnehin nur eine
+/// Person gleichzeitig, hoechstens zieht das Board dadurch ein Backend- statt
+/// eines gleichrangigen Frontend-Tickets zuerst. Im parallelen Modus ist es
+/// die Leitplanke: ohne sie koennte ein Frontend-Agent gleichzeitig mit dem
+/// Backend-Agenten an derselben, noch unfertigen Vorarbeit lostippern.
+///
+/// Rollen-Zuordnung laeuft ueber den Assignee (`Ticket.assigneeId` ->
+/// `Agent.role`), nicht ueber ein eigenes Feld am Ticket – die Sprint-Planung
+/// setzt den Assignee schon anhand der geplanten Rolle (siehe `roleForTicket`
+/// in sprintPlanning.ts). Ein Ticket ohne Assignee zaehlt hier als weder
+/// Backend noch Frontend – `continueSprint` faengt es beim Ziehen ohnehin als
+/// Backend-Generalist auf.
+export async function backendGatedTicketIds(sprintId: string): Promise<string[]> {
+  const openTickets = await prisma.ticket.findMany({
+    where: { sprintId, status: { not: "DONE" } },
+    select: { id: true, assignee: { select: { role: true } } },
+  });
+  const backendStillOpen = openTickets.some((ticket) => ticket.assignee?.role === "BACKEND");
+  if (!backendStillOpen) return [];
+  return openTickets.filter((ticket) => ticket.assignee?.role === "FRONTEND").map((ticket) => ticket.id);
 }

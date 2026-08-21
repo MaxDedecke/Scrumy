@@ -245,6 +245,49 @@ export async function setAutopilot(formData: FormData): Promise<ActionResult> {
   return ok(on ? "Autopilot an – das Team plant nach dem Review direkt weiter." : "Autopilot aus – das Team hält nach dem laufenden Sprint an.");
 }
 
+/// SEQUENTIAL (Standard) <-> PARALLEL – siehe `Project.workMode` und
+/// worker/orchestration.ts#continueSprint. Gedacht als spaeter zu gatendes
+/// Premium-Feature, aktuell noch ohne Freischaltbeschraenkung.
+export async function setWorkMode(formData: FormData): Promise<ActionResult> {
+  const projectId = str(formData, "projectId");
+  if (!projectId) return fail("Kein Projekt angegeben.");
+  const parallel = String(formData.get("workMode") ?? "") === "PARALLEL";
+  const workMode = parallel ? "PARALLEL" : "SEQUENTIAL";
+
+  await prisma.project.update({ where: { id: projectId }, data: { workMode } });
+  await prisma.activityLogEntry.create({
+    data: {
+      projectId,
+      actor: "Mensch",
+      action: parallel ? "work_mode_parallel" : "work_mode_sequential",
+      detail: parallel
+        ? "Team darf jetzt mehrere Tickets gleichzeitig ziehen – Backend geht dabei immer vor Frontend"
+        : "Team zieht wieder immer nur ein Ticket gleichzeitig",
+    },
+  });
+
+  // Auf Parallel umgeschaltet, waehrend der Sprint schon laeuft: sofort
+  // nachsehen, ob dadurch weitere Tickets abholbar geworden sind, statt bis
+  // zum naechsten zufaelligen Anstoss zu warten (`scheduleNextStep` ist dank
+  // `nextOpenTickets`/`activeTicketJobIds` idempotent – ein schon laufendes
+  // Ticket wird dabei nie doppelt eingereiht, siehe worker/queue.ts).
+  if (parallel) {
+    try {
+      await scheduleNextStep(projectId);
+    } catch {
+      // Kein Sprint aktiv o.ä. – nichts zu tun, der naechste normale Anstoss
+      // greift ohnehin.
+    }
+  }
+
+  revalidateProject(projectId);
+  return ok(
+    parallel
+      ? "Paralleler Modus an – mehrere Agenten arbeiten gleichzeitig, Backend immer vor Frontend."
+      : "Sequenzieller Modus – das Team zieht wieder nur ein Ticket auf einmal.",
+  );
+}
+
 /// „Macht weiter" von Hand: reiht den Schritt ein, der laut Board dran ist.
 export async function nudgeTeam(formData: FormData): Promise<ActionResult> {
   const projectId = str(formData, "projectId");
@@ -262,8 +305,17 @@ export async function nudgeTeam(formData: FormData): Promise<ActionResult> {
   // beobachtet im iPhoto-Projekt).
   const cleaned = await reconcileStaleLocksNow();
 
-  const running = await prisma.agentRun.findFirst({ where: { projectId, status: "RUNNING" } });
-  if (running) return note("Das Team arbeitet gerade – der nächste Schritt kommt von allein.");
+  // Im parallelen Modus (`Project.workMode`) darf trotz eines schon
+  // laufenden Agenten noch ein ZWEITES, unabhängiges Ticket abholbar sein –
+  // dort bricht der Anstoß nicht einfach ab, sondern lässt `scheduleNextStep`
+  // selbst entscheiden (dank `nextOpenTickets`/`activeTicketJobIds` reiht das
+  // ein schon laufendes Ticket ohnehin nie doppelt ein, siehe worker/queue.ts).
+  // Im sequenziellen Standardmodus bleibt es beim alten kurzen Weg: läuft
+  // gerade etwas, kommt der nächste Schritt ohnehin von allein danach.
+  if (project.workMode === "SEQUENTIAL") {
+    const running = await prisma.agentRun.findFirst({ where: { projectId, status: "RUNNING" } });
+    if (running) return note("Das Team arbeitet gerade – der nächste Schritt kommt von allein.");
+  }
 
   const message = await scheduleNextStep(projectId);
   revalidateProject(projectId);

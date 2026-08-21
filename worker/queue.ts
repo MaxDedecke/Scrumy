@@ -61,6 +61,26 @@ export async function enqueueAgentJob<TIdentifier extends keyof GraphileWorker.T
   });
 }
 
+/// Tickets, die gerade schon einen `ticketWork`-Job in der Warteschlange haben
+/// – egal ob noch wartend oder bereits gesperrt/laufend. Nur im parallelen
+/// Arbeitsmodus gebraucht (`Project.workMode`, siehe
+/// worker/orchestration.ts#nextOpenTickets): dort holt ein einziger Aufruf
+/// mehrere Tickets auf einmal, und ohne diese Pruefung wuerde ein Ticket,
+/// dessen Job gerade laeuft, beim naechsten Aufruf (z.B. weil ein ANDERES
+/// Ticket parallel fertig wird und `continueSprint` erneut anstoesst) ein
+/// zweites Mal eingereiht. Der neue Job wartet dann brav in derselben
+/// Agenten-Queue – `jobKey`/`jobKeyMode: "replace"` kann einen bereits
+/// GESPERRTEN Job naemlich nicht ersetzen (siehe Kommentar zu `jobKey` oben) –
+/// und der Umsetzer faesst dasselbe Ticket kurz danach ein zweites Mal an.
+export async function activeTicketJobIds(ticketIds: string[]): Promise<Set<string>> {
+  if (ticketIds.length === 0) return new Set();
+  const jobKeys = ticketIds.map((ticketId) => `ticketWork:${ticketId}`);
+  const rows = await prisma.$queryRaw<{ job_key: string }[]>`
+    select job_key from graphile_worker.jobs where job_key = any(${jobKeys}::text[])
+  `;
+  return new Set(rows.map((row) => row.job_key.slice("ticketWork:".length)));
+}
+
 /// Nimmt alle noch wartenden Jobs der genannten Agenten aus der Queue. Wird
 /// beim Loeschen eines Projekts gebraucht: Ein eingereihter Job wuerde sonst
 /// noch anlaufen, sein Arbeitsverzeichnis neu anlegen (`ensureRepo`) und danach

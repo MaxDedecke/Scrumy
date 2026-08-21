@@ -1,10 +1,10 @@
 import { ActionForm } from "@/components/ActionForm";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { IconSubmit } from "@/components/IconSubmit";
-import { BoltIcon, ForwardIcon, PauseIcon, PlayIcon, SearchIcon } from "@/components/icons";
-import { nudgeProductOwner, nudgeTeam, pauseTeam, resumeTeam, setAutopilot } from "@/lib/actions/team";
+import { BoltIcon, ForwardIcon, LanesIcon, PauseIcon, PlayIcon, SearchIcon } from "@/components/icons";
+import { nudgeProductOwner, nudgeTeam, pauseTeam, resumeTeam, setAutopilot, setWorkMode } from "@/lib/actions/team";
 import { iconButtonClass, iconButtonOnClass } from "@/lib/ui";
-import type { ProjectStatus } from "@/generated/prisma/client";
+import type { ProjectStatus, WorkMode } from "@/generated/prisma/client";
 
 // Die Steuerung des Teams – anhalten, fortsetzen, anstoßen, Klarheits-Check,
 // Autopilot – als Icon-Gruppe im Seitenkopf, direkt neben dem Projektnamen.
@@ -21,11 +21,14 @@ export function TeamControls({
   projectId,
   status,
   autopilot,
+  workMode,
 }: {
   projectId: string;
   status: ProjectStatus;
   autopilot: boolean;
+  workMode: WorkMode;
 }) {
+  const parallel = workMode === "PARALLEL";
   // Vor dem Start gibt es nichts zu steuern; die Freigaben und der Startknopf
   // liegen auf dem Anforderungs-Tab.
   if (status !== "ACTIVE" && status !== "PAUSED") return null;
@@ -80,6 +83,21 @@ export function TeamControls({
           className={autopilot ? iconButtonOnClass : iconButtonClass}
         >
           <BoltIcon className="h-4 w-4" filled={autopilot} />
+        </IconSubmit>
+      </ActionForm>
+
+      <ActionForm action={setWorkMode}>
+        <input type="hidden" name="projectId" value={projectId} />
+        <input type="hidden" name="workMode" value={parallel ? "SEQUENTIAL" : "PARALLEL"} />
+        <IconSubmit
+          title={
+            parallel
+              ? "Paralleler Modus – mehrere Agenten arbeiten gleichzeitig (Backend immer vor Frontend). Jetzt auf sequenziell umschalten."
+              : "Sequenzieller Modus – das Team zieht ein Ticket nach dem anderen. Jetzt auf parallel umschalten."
+          }
+          className={parallel ? iconButtonOnClass : iconButtonClass}
+        >
+          <LanesIcon className="h-4 w-4" />
         </IconSubmit>
       </ActionForm>
     </div>

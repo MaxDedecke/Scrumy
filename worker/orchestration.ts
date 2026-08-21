@@ -10,7 +10,7 @@
 import { prisma } from "@/lib/prisma";
 import { agentForRole } from "@/lib/team";
 import type { AgentRole, Project } from "@/generated/prisma/client";
-import { enqueueAgentJob } from "./queue";
+import { activeTicketJobIds, enqueueAgentJob } from "./queue";
 import { logActivity } from "./agentRun";
 import { blockedTicketIds, openClarification, projectBlocker, sprintBlocker } from "./clarification";
 import { TICKET_ATTEMPT_GRANT } from "@/lib/clarificationOptions";
@@ -77,11 +77,12 @@ export async function handOverTo<TIdentifier extends keyof GraphileWorker.Tasks>
   return true;
 }
 
-/// Naechstes offenes Ticket des aktiven Sprints – die Reihenfolge ist die
-/// Backlog-Reihenfolge (Prioritaet, dann Erstellung), wie beim Ziehen vom
-/// Board. Tickets mit offener Klaerung bleiben liegen: Sie warten auf einen
-/// Beschluss, das Team zieht solange das naechste.
-export async function nextOpenTicket(sprintId: string) {
+/// Alle Tickets des Sprints, die sich grundsaetzlich ziehen liessen – die
+/// Reihenfolge ist die Backlog-Reihenfolge (Prioritaet, dann Erstellung), wie
+/// beim Ziehen vom Board. Tickets mit offener Klaerung, unerledigter
+/// Abhaengigkeit oder (siehe `blockedTicketIds`) unfertiger Backend-Vorarbeit
+/// bleiben liegen.
+async function pullableTickets(sprintId: string) {
   const blocked = await blockedTicketIds(sprintId);
   const candidates = await prisma.ticket.findMany({
     where: {
@@ -98,7 +99,27 @@ export async function nextOpenTicket(sprintId: string) {
   // Umsetzer laengst bei "Anlauf 16" war. Zwei Spalten vergleicht Prisma nicht
   // in `where`; bei einer Handvoll Tickets je Sprint ist das hier billiger als
   // ein Roh-SQL.
-  return candidates.find((ticket) => ticket.attempts < ticket.attemptBudget) ?? null;
+  return candidates.filter((ticket) => ticket.attempts < ticket.attemptBudget);
+}
+
+/// Naechstes einzelnes offenes Ticket – fuer den sequenziellen Arbeitsmodus
+/// (`Project.workMode`), in dem immer nur ein Ticket gleichzeitig laeuft.
+export async function nextOpenTicket(sprintId: string) {
+  const [ticket] = await pullableTickets(sprintId);
+  return ticket ?? null;
+}
+
+/// Alle gerade abholbaren Tickets des Sprints – fuer den parallelen
+/// Arbeitsmodus (siehe `continueSprint`). Anders als `nextOpenTicket`
+/// scheidet das hier zusaetzlich Tickets aus, die schon einen Job in der
+/// Warteschlange haben (siehe `activeTicketJobIds`): Ohne diesen Ausschluss
+/// wuerde ein Ticket, das gerade laeuft, bei jedem weiteren Aufruf – z.B. weil
+/// ein ANDERES Ticket parallel fertig wird – ein zweites Mal eingereiht.
+export async function nextOpenTickets(sprintId: string) {
+  const candidates = await pullableTickets(sprintId);
+  if (candidates.length === 0) return [];
+  const active = await activeTicketJobIds(candidates.map((ticket) => ticket.id));
+  return candidates.filter((ticket) => !active.has(ticket.id));
 }
 
 /// Sagt Bescheid, wenn ein Ticket nur noch am aufgebrauchten Budget haengt.
@@ -155,22 +176,31 @@ export async function continueSprint(projectId: string, sprintId: string): Promi
 
   await reportStalledTickets(sprintId);
 
-  const ticket = await nextOpenTicket(sprintId);
+  // SEQUENTIAL (Standard): wie bisher genau ein Ticket. PARALLEL: alle
+  // gerade abholbaren Tickets auf einmal – jedes geht an seinen eigenen
+  // Agenten, dessen Job-Queue (siehe worker/queue.ts, `queueName:
+  // agent:<agentId>`) sie ohnehin seriell abarbeitet, verschiedene Agenten
+  // laufen im selben Worker-Prozess nebenläufig.
+  const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId }, select: { workMode: true } });
+  const tickets =
+    project.workMode === "PARALLEL" ? await nextOpenTickets(sprintId) : await nextOpenTicket(sprintId).then((t) => (t ? [t] : []));
 
-  if (ticket) {
-    const reason = `nächstes Ticket im Sprint: ${ticket.title}`;
+  if (tickets.length > 0) {
+    for (const ticket of tickets) {
+      const reason = `nächstes Ticket im Sprint: ${ticket.title}`;
 
-    // Ohne Zustaendigen zieht der Generalist (Backend) – ein Ticket bleibt
-    // nicht liegen, nur weil die Planung niemanden zugeordnet hat.
-    if (ticket.assigneeId) {
-      await enqueueAgentJob("ticketWork", {
-        agentId: ticket.assigneeId,
-        projectId,
-        ticketId: ticket.id,
-        reason,
-      });
-    } else {
-      await handOverTo("BACKEND", "ticketWork", projectId, { ticketId: ticket.id, reason });
+      // Ohne Zustaendigen zieht der Generalist (Backend) – ein Ticket bleibt
+      // nicht liegen, nur weil die Planung niemanden zugeordnet hat.
+      if (ticket.assigneeId) {
+        await enqueueAgentJob("ticketWork", {
+          agentId: ticket.assigneeId,
+          projectId,
+          ticketId: ticket.id,
+          reason,
+        });
+      } else {
+        await handOverTo("BACKEND", "ticketWork", projectId, { ticketId: ticket.id, reason });
+      }
     }
     return;
   }

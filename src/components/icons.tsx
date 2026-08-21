@@ -215,6 +215,23 @@ export function BoltIcon({ className, filled = false }: { className?: string; fi
   );
 }
 
+/// Arbeitsmodus (Project.workMode): zwei parallele Pfeile stehen für
+/// „mehrere Agenten gleichzeitig" statt einem. Anders als beim
+/// Autopilot-Blitz gibt es hier keine sinnvoll gefüllte Variante – der
+/// Zustand kommt allein über die Button-Farbe (siehe iconButtonOnClass in
+/// TeamControls).
+export function LanesIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className={className} aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M4 8h13m0 0-3.5-3.5M17 8l-3.5 3.5M4 16h13m0 0-3.5-3.5M17 16l-3.5 3.5"
+      />
+    </svg>
+  );
+}
+
 /// „Vorschau stoppen" – ein gefülltes Quadrat, wie die Stopptaste eines Players.
 export function StopIcon({ className }: { className?: string }) {
   return (

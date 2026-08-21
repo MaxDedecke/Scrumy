@@ -42,6 +42,7 @@ export default async function ProjectLayout({
         name: true,
         status: true,
         autopilot: true,
+        workMode: true,
         repoUrl: true,
         organizationId: true,
         organization: { select: { name: true } },
@@ -133,6 +134,7 @@ export default async function ProjectLayout({
               projectId={project.id}
               status={project.status}
               autopilot={project.autopilot}
+              workMode={project.workMode}
             />
             <Link
               href={`/organizations/${project.organizationId}/inbox`}
