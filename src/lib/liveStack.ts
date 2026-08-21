@@ -752,10 +752,18 @@ async function runHttpProbe(port: number, request: HttpProbeRequest, timeoutMs =
 // --- Ticket-Integrationspruefung (Agent) --------------------------------------
 
 export interface AgentIntegrationCheckResult {
-  /// War der Stack am Ende erreichbar? false = kein Befund ueber den Bug,
-  /// sondern ein Grund, warum ueberhaupt nicht geprueft werden konnte
-  /// (anderes Projekt live, kein Compose-File, Zeitlimit, Startfehler).
+  /// War der Stack am Ende erreichbar?
   reachable: boolean;
+  /// true = kein Befund über den CODE möglich, sondern ein reiner
+  /// Infrastruktur-/Verfuegbarkeitsgrund (anderes Projekt live, kein
+  /// Workspace/Compose-File, Sandbox-Prozess konnte nicht gestartet werden).
+  /// Dasselbe Muster wie `CheckRunResult.unavailable` in src/lib/testRun.ts:
+  /// ein automatischer Aufrufer (z.B. QA-Gate in ticketWork.ts) darf das
+  /// NICHT als Mangel werten und muss auf ein Modellurteil zurueckfallen.
+  /// false bei `reachable: false` heisst dagegen: es WURDE geprueft, der
+  /// Stack kam aber nicht sauber hoch (Zeitlimit oder Absturz) – ein echter
+  /// Befund, gleichwertig zu einem fehlgeschlagenen Test.
+  unavailable: boolean;
   blockedReason: string | null;
   port: number | null;
   probe: HttpProbeResult | null;
@@ -782,18 +790,26 @@ export async function runAgentIntegrationCheck(
 ): Promise<AgentIntegrationCheckResult> {
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { workspacePath: true } });
   if (!project?.workspacePath) {
-    return { reachable: false, blockedReason: "Kein Arbeitsverzeichnis.", port: null, probe: null, logs: "" };
+    return { reachable: false, unavailable: true, blockedReason: "Kein Arbeitsverzeichnis.", port: null, probe: null, logs: "" };
   }
 
   const composeFile = await findComposeFile(project.workspacePath);
   if (!composeFile) {
-    return { reachable: false, blockedReason: "Kein docker-compose.yml im Repository gefunden.", port: null, probe: null, logs: "" };
+    return {
+      reachable: false,
+      unavailable: true,
+      blockedReason: "Kein docker-compose.yml im Repository gefunden.",
+      port: null,
+      probe: null,
+      logs: "",
+    };
   }
 
   const blocker = await getOtherLiveProject(projectId);
   if (blocker) {
     return {
       reachable: false,
+      unavailable: true,
       blockedReason: `„${blocker.name}" ist gerade live – aktuell kann nur ein Projekt gleichzeitig live sein, jetzt nicht prüfbar. Später erneut versuchen.`,
       port: null,
       probe: null,
@@ -803,7 +819,10 @@ export async function runAgentIntegrationCheck(
 
   const started = await startLiveStack(projectId, "AGENT_CHECK");
   if (started.status === "error") {
-    return { reachable: false, blockedReason: started.message, port: null, probe: null, logs: "" };
+    // Kommt aus startLiveStack nur bei einem Fehler, den Docker/Compose selbst
+    // NICHT ausloest (z.B. Sandbox-Prozess liess sich nicht spawnen) – eine
+    // Infrastrukturluecke, kein Befund ueber den Code.
+    return { reachable: false, unavailable: true, blockedReason: started.message, port: null, probe: null, logs: "" };
   }
   const ownsLifecycle = started.status === "success";
 
@@ -816,11 +835,15 @@ export async function runAgentIntegrationCheck(
     }
 
     if (info.status !== "RUNNING" || !info.port) {
+      // Zeitlimit oder Absturz WAEHREND des Starts – der Stack wurde
+      // tatsaechlich gebaut und gestartet, kam aber nicht sauber hoch. Das ist
+      // ein echter Befund ueber die Aenderung (unavailable: false), kein
+      // Infrastrukturproblem.
       const reason =
         info.status === "STARTING"
           ? "Zeitlimit erreicht, bevor der Stack erreichbar war."
           : (info.error ?? "Unbekannter Fehler beim Start.");
-      return { reachable: false, blockedReason: reason, port: null, probe: null, logs: info.log };
+      return { reachable: false, unavailable: false, blockedReason: reason, port: null, probe: null, logs: info.log };
     }
 
     const probe = request ? await runHttpProbe(info.port, request, probeTimeoutMs) : null;
@@ -828,7 +851,7 @@ export async function runAgentIntegrationCheck(
     const name = liveProjectName(projectId);
     const logs = await dockerCompose(["-p", name, "logs", "--tail", String(LOG_LINES)]).catch(() => "");
 
-    return { reachable: true, blockedReason: null, port: info.port, probe, logs };
+    return { reachable: true, unavailable: false, blockedReason: null, port: info.port, probe, logs };
   } finally {
     if (ownsLifecycle) await stopLiveStack(projectId);
   }

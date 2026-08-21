@@ -17,6 +17,7 @@ import { agentForRole, roleForTicket } from "@/lib/team";
 import { PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
 import { optionsFromAgent, type ClarificationOption } from "@/lib/clarificationOptions";
 import { checkFailed, detectCheckTargets, formatCheckResults, runChecks, type CheckRunResult } from "@/lib/testRun";
+import { runAgentIntegrationCheck, type AgentIntegrationCheckResult } from "@/lib/liveStack";
 import type { Agent } from "@/generated/prisma/client";
 import { AgentRunError, logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
@@ -1122,6 +1123,50 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
   const checksRanForReal = checkResults.some((result) => !result.unavailable);
   const anyCheckFailed = checkResults.some((result) => checkFailed(result));
 
+  // Zusaetzlich zu den Skript-Checks oben (isolierte Sandbox, kein Compose-
+  // Netz/DB, siehe testRun.ts): Bei BUG-/INTEGRATION-Tickets, oder wenn diese
+  // Aenderung mehrere Dienste zugleich beruehrt (z.B. Frontend UND Backend),
+  // faehrt QA den echten Docker-Compose-Stack hoch, statt sich allein auf
+  // "Tests liefen durch" zu verlassen – genau die Luecke, die dazu fuehrte,
+  // dass ein Upload-Bug (nur im Zusammenspiel mehrerer Dienste sichtbar)
+  // unverifiziert als "vermutlich Docker-Problem" liegen blieb, siehe
+  // [[scrumy-projekt]]. Bewusst NICHT bei jedem Ticket (Stack-Neubau dauert
+  // Minuten) – FEATURE-/CHORE-Tickets innerhalb eines Diensts bleiben bei der
+  // guenstigeren Sandbox-Pruefung, die volle Integrationsprüfung deckt sie am
+  // Sprintende ohnehin ab (runSprintIntegrationCheck).
+  const serviceTargets = checkTargets.filter((target) => target.relDir !== ".");
+  const touchedServices = new Set(
+    serviceTargets
+      .filter((target) => written.some((file) => file === target.relDir || file.startsWith(`${target.relDir}/`)))
+      .map((target) => target.relDir),
+  );
+  const needsIntegrationCheck = commit !== null && (ticket.type === "BUG" || ticket.type === "INTEGRATION" || touchedServices.size >= 2);
+  const integrationResult: AgentIntegrationCheckResult | null = needsIntegrationCheck
+    ? await runAgentIntegrationCheck(projectId, null)
+    : null;
+  // Wie bei checkFailed(): "unavailable" (anderes Projekt live, kein Compose-
+  // File) ist ein Infrastrukturgrund, kein Mangel an der Aenderung – nur ein
+  // ECHTER Fehlschlag beim Hochfahren zaehlt als Befund.
+  const integrationFailed = integrationResult !== null && !integrationResult.reachable && !integrationResult.unavailable;
+  const integrationReport = !integrationResult
+    ? null
+    : integrationResult.unavailable
+      ? `Übersprungen: ${integrationResult.blockedReason}`
+      : integrationResult.reachable
+        ? `Bestanden – voller Stack (Frontend+Backend+DB) kam sauber hoch (Port ${integrationResult.port}).`
+        : `NICHT bestanden – voller Stack kam nicht sauber hoch: ${integrationResult.blockedReason}\n\nLog:\n${integrationResult.logs}`;
+
+  if (integrationResult && !integrationResult.unavailable) {
+    await logActivity({
+      projectId,
+      ticketId,
+      actor: reviewer.name,
+      agentId: reviewer.id,
+      action: "integration_check",
+      detail: `„${ticket.title}": ${integrationReport}`,
+    });
+  }
+
   const review = await runAgent({
     agent: reviewer,
     projectId,
@@ -1148,7 +1193,7 @@ ${diff}
 ${checksRanForReal
   ? formatCheckResults(checkResults)
   : "(kein package.json mit test-/lint-/build-Skript gefunden, oder die automatische Prüfung war technisch nicht erreichbar – urteile allein aus dem Diff)"}
-
+${integrationReport ? `\n## Integrationsprüfung (echter Docker-Compose-Stack, Frontend+Backend+DB)\n${integrationReport}\n` : ""}
 Prüfe: Erfüllt die Änderung das Ticket? Ist der Code in sich stimmig und passt er zum bestehenden Stand? Fehlt etwas Offensichtliches?
 
 Antworte nur mit diesem JSON-Objekt:
@@ -1159,7 +1204,7 @@ Antworte nur mit diesem JSON-Objekt:
   "wege": [{ "label": "kurzer Titel", "detail": "was das konkret heißt, mit Für und Wider in 1-2 Sätzen" }]
 }
 
-"rework" nur bei echten Mängeln, nicht für Geschmacksfragen. Ein fehlgeschlagenes Prüf-Skript oben ist ein echter Mangel – "rework", nicht "needs_decision": ob Tests/Build/Lint durchlaufen, ist keine Entscheidung für den Auftraggeber, das ist eure Arbeit.
+"rework" nur bei echten Mängeln, nicht für Geschmacksfragen. Ein fehlgeschlagenes Prüf-Skript oder eine NICHT bestandene Integrationsprüfung oben ist ein echter Mangel – "rework", nicht "needs_decision": ob Tests/Build/Lint/der volle Stack durchlaufen, ist keine Entscheidung für den Auftraggeber, das ist eure Arbeit.
 "needs_decision", wenn das Team die Frage gar nicht selbst beantworten kann – wenn Auftrag und Anforderungen sich widersprechen oder etwas Fachliches offen lassen. Schreibe dann in "comment" die Frage, die der Auftraggeber entscheiden muss. Nacharbeit hilft in dem Fall nicht: Ein zweiter Anlauf würde dieselbe Lücke nur anders raten. Fehlende oder nicht erreichbare Prüfung ist NIEMALS ein Grund für "needs_decision" – dann urteile aus dem Diff wie zuvor.
 "wege" nur bei "needs_decision": zwei bis vier fachliche Möglichkeiten, zwischen denen der Auftraggeber wählt – nicht „nochmal versuchen" oder „abbrechen", die kennt Scrumy selbst. Sonst leer lassen.`,
   });
@@ -1186,7 +1231,13 @@ Antworte nur mit diesem JSON-Objekt:
           verdict: "rework" as const,
           comment: `Automatische Prüfung ist fehlgeschlagen (siehe Ergebnis oben) – das sticht die Einschätzung von ${reviewer.name}: ${parsedVerdict.comment}`,
         }
-      : parsedVerdict;
+      : integrationFailed && parsedVerdict.verdict !== "rework"
+        ? {
+            ...parsedVerdict,
+            verdict: "rework" as const,
+            comment: `Integrationsprüfung (voller Docker-Compose-Stack) ist fehlgeschlagen: ${integrationResult?.blockedReason} – das sticht die Einschätzung von ${reviewer.name}: ${parsedVerdict.comment}`,
+          }
+        : parsedVerdict;
 
   await logActivity({
     projectId,
