@@ -128,6 +128,20 @@
     background-color: transparent;
   }
 
+  /* Fußzeile eines <Panel> (siehe Panel.tsx) – eigene Klasse statt der
+     bisherigen Utility `bg-surface-2/40` direkt im Markup, weil die
+     Fußzeile ein eigenes Element ist (nicht das `.card`/`.card-ghost`
+     tragende `<section>`) und deshalb von `.card-ghost` allein nicht erfasst
+     wird. Normalerweise die übliche leichte Absetzung, innerhalb einer
+     Geisterkarte transparent wie der Rest der Karte. */
+  .panel-footer {
+    background-color: color-mix(in oklab, var(--color-surface-2) 40%, transparent);
+  }
+
+  .card-ghost .panel-footer {
+    background-color: transparent;
+  }
+
   /* Abschnittsüberschrift über einer Karten-/Listengruppe. */
   .section-title {
     font-size: 0.6875rem;

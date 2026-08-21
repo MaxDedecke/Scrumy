@@ -105,7 +105,7 @@ export function Panel({
           </div>
 
           {footer && (
-            <div className="shrink-0 border-t border-hairline bg-surface-2/40 px-4 py-3">{footer}</div>
+            <div className="panel-footer shrink-0 border-t border-hairline px-4 py-3">{footer}</div>
           )}
         </>
       )}

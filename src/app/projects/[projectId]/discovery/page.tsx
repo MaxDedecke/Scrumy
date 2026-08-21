@@ -195,6 +195,14 @@ export default async function ProjectDiscoveryPage({
             name="content"
             defaultValue={project.concept?.content ?? ""}
             placeholder="Konzept als Freitext, ausgearbeitet aus den Anforderungen …"
+            // Bewusst nur hier per Inline-Style transparent statt über eine
+            // globale Klasse: `inputClass` ist die gemeinsame Feldfarbe für
+            // ALLE Formulare der App, die sollen opak bleiben. Nur dieses
+            // eine Textfeld sitzt in einer Geisterkarte (`card-ghost` oben)
+            // und soll wie der Rest der Karte transparent sein – ein
+            // Inline-Style gewinnt garantiert gegen `inputClass`s
+            // `bg-surface-2`-Utility, unabhängig von Layer-Reihenfolge.
+            style={{ backgroundColor: "transparent" }}
             className={`${inputClass} min-h-48 flex-1 resize-none font-mono text-xs leading-relaxed`}
           />
           <button type="submit" className={`${buttonSecondaryClass} self-start`}>
