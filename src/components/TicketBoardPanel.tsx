@@ -90,7 +90,7 @@ export function TicketBoardPanel({
                     key={ticket.id}
                     type="button"
                     onClick={() => openTicket(ticket)}
-                    className="card-interactive block w-full p-2.5 text-left"
+                    className="card-interactive card-ghost block w-full p-2.5 text-left"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <p className="text-xs font-medium leading-snug text-ink">{ticket.title}</p>

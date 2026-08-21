@@ -117,9 +117,13 @@
      bleibt stehen. Für den Büroplan, dessen Agenten-Bällchen frei über dem
      Canvas-Hintergrund schweben sollen statt auf einer sichtbaren
      Kartenfläche zu sitzen. Eigene Klasse statt der Utility `bg-transparent`,
-     weil `.card` dieselbe Eigenschaft schon im `components`-Layer setzt –
-     hier gewinnt die spätere Regel in derselben Kaskadenebene zuverlässig,
-     unabhängig von Tailwinds Layer-Reihenfolge. */
+     weil `.card`/`.card-interactive` dieselbe Eigenschaft schon im
+     `components`-Layer setzen – hier gewinnt die spätere Regel in derselben
+     Kaskadenebene zuverlässig, unabhängig von Tailwinds Layer-Reihenfolge.
+     Kombinierbar mit `.card-interactive` (siehe Ticket-Karten im Board):
+     `:hover` hat als Pseudoklasse höhere Spezifität und bleibt deshalb auch
+     mit `.card-ghost` als Hover-Rückmeldung erhalten, nur der Ruhezustand
+     wird transparent. */
   .card-ghost {
     background-color: transparent;
   }
