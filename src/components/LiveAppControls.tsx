@@ -39,6 +39,11 @@ export function LiveAppControls({
 
   function handlePlay() {
     window.open(`/live/${projectId}`, "_blank", "noopener");
+    // Läuft (oder startet) die Anwendung hier bereits, ist der Klick nur ein
+    // "Tab erneut öffnen" – kein zweiter startLiveAction-Aufruf, sonst
+    // meldet der (korrekte, aber überflüssige) "läuft bereits"-Toast sich
+    // ausgerechnet während der eben geöffnete Tab live beim Hochfahren zusieht.
+    if (isLiveHere) return;
     startTransition(async () => {
       const formData = new FormData();
       formData.set("projectId", projectId);

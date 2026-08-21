@@ -143,7 +143,7 @@ export function LiveBoot({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 pb-10">
-        <div className="live-terminal flex w-full max-w-3xl flex-col">
+        <div className="live-terminal flex max-h-[55vh] w-full max-w-3xl flex-col">
           <div className="flex shrink-0 items-center gap-2 border-b border-hairline-strong px-4 py-3">
             <span className={`h-2 w-2 rounded-full ${dotClass(status, ready)}`} aria-hidden />
             <span className="font-mono text-xs text-ink-3">{headline(status, projectName, ready)}</span>
