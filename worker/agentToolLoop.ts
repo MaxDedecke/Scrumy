@@ -20,7 +20,7 @@ import { ALL_TOOLS, executeTool, type ToolContext } from "./agentTools";
 /// search), bevor überhaupt geschrieben wird – bei ~3-5s je Turn bleibt im
 /// 15-Minuten-Budget (siehe LOOP_BUDGET_MS) reichlich Luft nach oben, ohne
 /// die Zielsetzung ("gezielt, ein Aufruf pro Turn") aufzugeben.
-const MAX_TOOL_TURNS = 32;
+const MAX_TOOL_TURNS = 50;
 /// Gesamtbudget ueber alle Turns UND Bash-Aufrufe zusammen, entspricht dem
 /// bisherigen Zeitlimit des einzelnen Umsetzungs-Aufrufs.
 const LOOP_BUDGET_MS = 900_000;
@@ -33,7 +33,7 @@ const BASH_TIME_BUDGET_MS = 600_000;
 /// waren Lesen (293 read_file gegen 96 Schreibaufrufe), und knapp die Haelfte
 /// aller Anlaeufe lief ins Limit, ohne je etwas zu aendern – der Agent merkt
 /// von sich aus nicht, dass ihm die Schritte ausgehen.
-const NUDGE_AFTER_TURN = 18;
+const NUDGE_AFTER_TURN = 28;
 /// So viele Schritte vor Schluss wird zum Abschluss aufgefordert. Ohne diese
 /// letzte Runde endet ein Anlauf am Limit stumm, und `discardUncommittedChanges`
 /// wirft auch fertige Arbeit weg – ein "finish" mit dem, was da ist, ist immer

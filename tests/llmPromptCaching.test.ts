@@ -110,8 +110,8 @@ test("der Anfangsprompt und der mitwachsende Teil bekommen eigene Markierer", as
 });
 
 test("das Limit von vier Markierern wird auch bei langer Historie nie gerissen", async () => {
-  // 32 Turns ist die Obergrenze aus worker/agentToolLoop.ts (MAX_TOOL_TURNS).
-  for (const turns of [0, 1, 2, 5, 32]) {
+  // 50 Turns ist die Obergrenze aus worker/agentToolLoop.ts (MAX_TOOL_TURNS).
+  for (const turns of [0, 1, 2, 5, 50]) {
     const body = await captureRequest(() =>
       chatTurn({ profile: ANTHROPIC_PROFILE, system: "TEAM_GRUNDREGELN …", messages: loopHistory(turns) }),
     );
