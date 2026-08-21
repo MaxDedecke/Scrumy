@@ -575,7 +575,19 @@ interface ComposePsEntry {
   /// (+ Healthcheck, falls vorhanden) ist der pragmatischere Signalgeber.
   Health?: string;
   ExitCode?: number;
+  /// Freitext wie "Up 3 minutes" oder "Restarting (127) 32 seconds ago" – bei
+  /// State "restarting" steht hier der einzige verlaessliche Exit-Code (siehe
+  /// unten): "ExitCode" selbst bleibt in dem Zustand auf dem Stand des
+  /// letzten ERFOLGREICHEN Starts stehen, nicht des Absturzes.
+  Status?: string;
   Publishers?: ComposePublisher[];
+}
+
+/// Zieht den Exit-Code aus "Restarting (127) 32 seconds ago". `ComposePsEntry.
+/// ExitCode` ist dafuer nicht nutzbar (siehe Feldkommentar oben).
+function restartExitCode(status: string | undefined): number | null {
+  const match = status?.match(/Restarting \((-?\d+)\)/);
+  return match ? Number(match[1]) : null;
 }
 
 function parseComposePs(raw: string): ComposePsEntry[] {
@@ -709,6 +721,26 @@ export async function getLiveStackInfo(projectId: string): Promise<LiveStackInfo
   const failed = entries.find((entry) => entry.State === "exited" && (entry.ExitCode ?? 0) !== 0);
   if (failed) {
     const message = `Dienst „${failed.Service}" ist unerwartet beendet worden (Code ${failed.ExitCode}). Log unten prüft die Ursache.`;
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { liveStatus: "ERROR", liveError: message, livePort: null, liveService: null },
+    });
+    return { ...base, status: "ERROR", port: null, service: null, error: message, log };
+  }
+  // Ein Dienst mit Docker-Restart-Policy (Regelfall in generierten Compose-
+  // Dateien) landet nach einem Absturz NIE bei State "exited" – er wird
+  // sofort neu gestartet und zeigt "restarting". Ohne diese Prüfung blieb der
+  // Status faelschlich "STARTING", bis das Zeitlimit in runAgentIntegrationCheck/
+  // runSprintIntegrationCheck (bis zu 5 Minuten) ablief, und in genau dem
+  // kurzen Fenster zwischen zwei Abstuerzen, in dem Docker den Container kurz
+  // als "running" fuehrt, konnte ein Poll sogar RUNNING melden, obwohl der
+  // Dienst Sekunden spaeter schon wieder abgestuerzt war – ein Nachweis, der
+  // faelschlich als bestanden galt (siehe [[scrumy-projekt]], OwnToggle:
+  // "sh: vite: not found" in Dauerschleife).
+  const restarting = entries.find((entry) => entry.State === "restarting");
+  if (restarting) {
+    const code = restartExitCode(restarting.Status);
+    const message = `Dienst „${restarting.Service}" stürzt in Dauerschleife ab (${code !== null ? `Exit-Code ${code}` : "Absturzschleife"}). Log unten prüft die Ursache.`;
     await prisma.project.update({
       where: { id: projectId },
       data: { liveStatus: "ERROR", liveError: message, livePort: null, liveService: null },
@@ -936,6 +968,36 @@ export interface AgentIntegrationCheckResult {
   logs: string;
 }
 
+/// Gemeinsamer Poll-Kern fuer runAgentIntegrationCheck/runSprintIntegrationCheck:
+/// wartet, bis der Stack entweder erreichbar ist oder das Zeitlimit reisst.
+///
+/// Ein einzelnes "RUNNING" reicht NICHT als Nachweis: Ein Dienst mit Docker-
+/// Restart-Policy (Regelfall in generierten Compose-Dateien), der in einer
+/// Dauerschleife abstuerzt, ist zwischen zwei Abstuerzen kurz tatsaechlich
+/// "running" – die "restarting"-Erkennung in getLiveStackInfo greift erst,
+/// sobald Docker das SELBST so meldet, nicht in dieser Luecke davor. Deshalb
+/// wird "RUNNING" hier erst nach einer zweiten, bestaetigenden Abfrage nach
+/// `pollIntervalMs` als wirklich erreichbar gewertet – beobachtet im
+/// OwnToggle-Projekt: `run_integration_check` ohne "path" meldete "Stack
+/// erreichbar", obwohl der Frontend-Dienst Sekunden zuvor/danach mit
+/// "sh: vite: not found" abstuerzte (siehe [[scrumy-projekt]]).
+async function waitForStackRunning(projectId: string, deadline: number, pollIntervalMs: number): Promise<LiveStackInfo> {
+  let info = await getLiveStackInfo(projectId);
+  while (info.status === "STARTING" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    info = await getLiveStackInfo(projectId);
+  }
+  if (info.status === "RUNNING") {
+    // Nur ein erneutes "RUNNING" bestaetigt den Fund; jeder andere Zustand
+    // (z.B. "ERROR", weil der Dienst inzwischen als Dauerschleife erkannt
+    // wurde) gilt als noch nicht stabil erreichbar und wird als solcher
+    // zurueckgegeben – der Aufrufer wertet ihn ohnehin als Fehlschlag.
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    return getLiveStackInfo(projectId);
+  }
+  return info;
+}
+
 /// Fuer worker/agentTools.ts ("run_integration_check"): laesst den Umsetzer-
 /// Agenten einen im laufenden System gemeldeten Fehler (typischerweise ein
 /// BUG-Ticket aus src/lib/actions/bugReport.ts) selbst nachstellen, statt aus
@@ -991,12 +1053,7 @@ export async function runAgentIntegrationCheck(
   const ownsLifecycle = started.status === "success";
 
   try {
-    const deadline = Date.now() + timeoutMs;
-    let info = await getLiveStackInfo(projectId);
-    while (info.status === "STARTING" && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      info = await getLiveStackInfo(projectId);
-    }
+    const info = await waitForStackRunning(projectId, Date.now() + timeoutMs, pollIntervalMs);
 
     if (info.status !== "RUNNING" || !info.port) {
       // Zeitlimit oder Absturz WAEHREND des Starts – der Stack wurde
@@ -1054,12 +1111,7 @@ export async function runSprintIntegrationCheck(
   const ownsLifecycle = started.status === "success";
 
   try {
-    const deadline = Date.now() + timeoutMs;
-    let info = await getLiveStackInfo(projectId);
-    while (info.status === "STARTING" && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      info = await getLiveStackInfo(projectId);
-    }
+    const info = await waitForStackRunning(projectId, Date.now() + timeoutMs, pollIntervalMs);
 
     if (info.status === "RUNNING") {
       return {
