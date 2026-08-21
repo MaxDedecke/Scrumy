@@ -244,28 +244,29 @@ function hash(input: string): number {
   return h;
 }
 
-// Position + Wander-Bahn eines Bällchens, komplett aus der Agenten-ID
-// abgeleitet: Startpunkt irgendwo im Feld (mit Rand, damit der 7rem-Kreis nie
-// mittig am Panelrand startet), zwei Drift-Ziele in unterschiedliche
-// Richtungen, plus eine eigene Umlaufdauer/Startverzögerung, damit nicht alle
-// Bällchen synchron "atmen". `--dx*`/`--dy*` sind CSS-Variablen, die
-// `@keyframes orb-drift` (globals.css) an zwei Zwischenpunkten einsetzt – der
-// Browser interpoliert zwischen den daraus entstehenden, für jedes Bällchen
-// fixen `transform`-Werten ganz normal weiter.
-function floatStyle(id: string): CSSProperties {
-  const left = 12 + (hash(`${id}:x`) % 72);
-  const top = 14 + (hash(`${id}:y`) % 64);
+// Nur noch die Wander-Bahn INNERHALB der eigenen Grid-Zelle (siehe
+// AgentOfficeView) – keine Position mehr, die kommt jetzt vom Grid-Platz
+// selbst. `--dx*`/`--dy*` bleiben absichtlich klein: `.orb-cell` garantiert
+// per CSS-Grid-Minimum (9rem) mindestens 1rem Rand um den 7rem-Kreis, die
+// Werte hier bleiben darunter (max. 0.9rem), damit der Kreis (nicht nur die
+// Schrift darin) niemals in die Nachbarzelle reicht oder am Feldrand
+// verschwindet – selbst wenn die tatsächliche Zelle breiter ist, bleibt das
+// konservativ und damit garantiert sicher. `@keyframes orb-drift`
+// (globals.css) setzt die Werte an zwei Zwischenpunkten ein, der Browser
+// interpoliert zwischen den daraus entstehenden, für jedes Bällchen fixen
+// `transform`-Werten ganz normal weiter. Dauer/Verzögerung ebenfalls pro
+// Agent, damit nicht alle Bällchen synchron "atmen".
+function driftStyle(id: string): CSSProperties {
   const sign = (n: number) => (n % 2 === 0 ? 1 : -1);
-  const dx1 = sign(hash(`${id}:dx1`)) * (2.5 + (hash(`${id}:dx1`) % 4));
-  const dy1 = sign(hash(`${id}:dy1`)) * (2 + (hash(`${id}:dy1`) % 3));
-  const dx2 = sign(hash(`${id}:dx2`)) * (2 + (hash(`${id}:dx2`) % 4));
-  const dy2 = sign(hash(`${id}:dy2`)) * (2.5 + (hash(`${id}:dy2`) % 3));
+  const rem = (h: number, base: number, span: number) => sign(h) * (base + ((h >> 3) % span) * 0.1);
+  const dx1 = rem(hash(`${id}:dx1`), 0.3, 5);
+  const dy1 = rem(hash(`${id}:dy1`), 0.3, 5);
+  const dx2 = rem(hash(`${id}:dx2`), 0.3, 5);
+  const dy2 = rem(hash(`${id}:dy2`), 0.3, 5);
   const duration = 16 + (hash(`${id}:dur`) % 11);
   const delay = -(hash(`${id}:delay`) % duration);
 
   return {
-    left: `${left}%`,
-    top: `${top}%`,
     animationDuration: `${duration}s`,
     animationDelay: `${delay}s`,
     "--dx1": `${dx1}rem`,
@@ -276,20 +277,29 @@ function floatStyle(id: string): CSSProperties {
 }
 
 // Die Ampel-Ansicht (22.08.2026, löst zuerst den Büroplan mit
-// Tischen/Monitoren, dann das feste Raster ab): jeder Agent ist ein Bällchen,
-// das frei im verfügbaren Platz der Karte treibt statt in einer Zeile zu
-// stehen – Name, Rolle und (bei "arbeitet"/"blockiert") der Grund stehen
-// direkt im Bällchen. Drei Farben tragen den Zustand – neutral (nichts zu
-// tun), grün-glühend (arbeitet), rot-glühend-pulsierend (blockiert). Innerhalb
-// von "neutral" bleibt ein Detail erhalten, ohne die Farbe zu verlassen: Ring
-// mit dünner Füllung = noch nie etwas getan, matt gefüllt = zuletzt aktiv.
-// "blocked" hat Vorrang vor allem anderen, unabhängig davon, ob gerade ein
-// Lauf offen ist.
+// Tischen/Monitoren, dann ein frei treibendes Feld ohne Kollisionsschutz ab):
+// jeder Agent bekommt eine eigene Grid-Zelle (`.orb-cell`, mindestens 9rem ×
+// 9rem, per `auto-fit` responsiv über die volle Feldbreite/-höhe verteilt) –
+// das Bällchen wandert nur INNERHALB dieser Zelle, nie darüber hinaus. Damit
+// ist Überlappung zwischen zwei Bällchen (und ein Verschwinden am Feldrand)
+// nicht nur unwahrscheinlich, sondern durch das Layout ausgeschlossen: jede
+// Zelle ist exklusiv, die Sicherheitsmarge in `driftStyle` bezieht sich auf
+// den KREIS (nicht auf den Text darin), also auch dann sicher, wenn der Name
+// so lang ist, dass die Schrift selbst schon am Rand kappt. Name, Rolle und
+// bei "arbeitet"/"blockiert" der Grund stehen direkt im Bällchen. Drei
+// Farben tragen den Zustand – neutral (nichts zu tun), grün-glühend
+// (arbeitet), rot-glühend-pulsierend (blockiert). Innerhalb von "neutral"
+// bleibt ein Detail erhalten, ohne die Farbe zu verlassen: Ring mit dünner
+// Füllung = noch nie etwas getan, matt gefüllt = zuletzt aktiv. "blocked"
+// hat Vorrang vor allem anderen, unabhängig davon, ob gerade ein Lauf offen
+// ist.
 function AgentOfficeView({ agents }: { agents: AgentWorkspaceEntry[] }) {
   return (
     <div className="orb-field">
       {agents.map((agent) => (
-        <AgentOrb key={agent.id} agent={agent} />
+        <div key={agent.id} className="orb-cell">
+          <AgentOrb agent={agent} />
+        </div>
       ))}
     </div>
   );
@@ -322,7 +332,7 @@ function AgentOrb({ agent }: { agent: AgentWorkspaceEntry }) {
               : "noch nichts getan"
       }
       className="orb-bubble"
-      style={floatStyle(agent.id)}
+      style={driftStyle(agent.id)}
     >
       <div className="orb-bubble-face flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-full px-2 text-center">
         <span className="orb-bubble-name w-full truncate text-[0.8rem] font-semibold leading-tight">

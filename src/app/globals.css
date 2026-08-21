@@ -229,35 +229,52 @@
 
   /* -------------------------------------------------------------------
      Ampel-Ansicht (AgentWorkspacePanel, Ansicht "office"; 22.08.2026, löst
-     zuerst den Büroplan mit Tischen/Monitoren, dann ein festes Raster ab):
-     jeder Agent ist ein großes, glühendes Bällchen, das frei im Feld treibt
-     – Name, Rolle und (bei "arbeitet"/"blockiert") der Grund stehen direkt
-     im Bällchen, kein Text mehr daneben. Drei Farben tragen den Zustand –
-     neutral (nichts zu tun), grün-glühend (arbeitet), rot-glühend-
-     pulsierend (blockiert, wartet auf eine Klärung). Innerhalb von
-     "neutral" bleibt ein Detail erhalten, ohne die Farbe zu verlassen: ein
-     dünn gefüllter Ring heißt "hat noch nie etwas getan", matt gefüllt
-     heißt "zuletzt aktiv".
+     zuerst den Büroplan mit Tischen/Monitoren, dann ein frei (und
+     kollisionsfrei unkontrolliert) treibendes Feld ab): jeder Agent ist ein
+     großes, glühendes Bällchen – Name, Rolle und (bei "arbeitet"/
+     "blockiert") der Grund stehen direkt im Bällchen, kein Text mehr
+     daneben. Drei Farben tragen den Zustand – neutral (nichts zu tun),
+     grün-glühend (arbeitet), rot-glühend-pulsierend (blockiert, wartet auf
+     eine Klärung). Innerhalb von "neutral" bleibt ein Detail erhalten, ohne
+     die Farbe zu verlassen: ein dünn gefüllter Ring heißt "hat noch nie
+     etwas getan", matt gefüllt heißt "zuletzt aktiv".
 
-     Die Wander-Bewegung ist reines CSS, kein JS-Loop: `floatStyle()` in
-     AgentWorkspacePanel.tsx setzt pro Bällchen eine Startposition (`left`/
-     `top`, aus der Agenten-ID gehasht) plus vier Richtungswerte `--dx1/--dy1/
-     --dx2/--dy2`. `@keyframes orb-drift` benutzt diese Variablen an zwei
-     Zwischenpunkten – der Browser interpoliert zwischen den daraus
-     entstehenden, für jedes Bällchen fixen `transform`-Werten ganz normal
-     weiter, ohne dass `--dx*`/`--dy*` selbst animierbar sein müssen (kein
-     `@property` nötig). Dauer/Verzögerung kommen ebenfalls pro Bällchen aus
-     der ID, damit nicht alle synchron treiben.
+     Kollisionsfreiheit per Konstruktion statt per Physik: `.orb-field` ist
+     ein Grid aus `auto-fit`-Zellen (mind. 9rem × 9rem, in beide Richtungen –
+     bei genug Höhe verteilen sich die Zellen über die GANZE Feldhöhe, nicht
+     nur so viele Zeilen wie nötig), jeder Agent bekommt genau eine Zelle
+     exklusiv. Das Bällchen (7rem) wandert per `@keyframes orb-drift` nur
+     innerhalb seiner eigenen Zelle – `driftStyle()` in
+     AgentWorkspacePanel.tsx hält die Auslenkung unter 0.9rem, deutlich unter
+     dem garantierten 1rem-Rand der 9rem-Mindestzelle. Damit kann der KREIS
+     (nicht nur die Schrift darin) nie in eine Nachbarzelle reichen oder am
+     Feldrand verschwinden, selbst im ungünstigsten Fall (kleinste erlaubte
+     Zelle, größte erlaubte Auslenkung). `--dx*`/`--dy*` sind CSS-Variablen,
+     die die Keyframes an zwei Zwischenpunkten einsetzen – der Browser
+     interpoliert zwischen den daraus entstehenden, für jedes Bällchen fixen
+     `transform`-Werten ganz normal weiter, ohne dass `--dx*`/`--dy*` selbst
+     animierbar sein müssen (kein `@property` nötig). Dauer/Verzögerung
+     kommen ebenfalls pro Bällchen aus der ID, damit nicht alle synchron
+     treiben.
      ------------------------------------------------------------------- */
   .orb-field {
-    position: relative;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    grid-template-rows: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 0.5rem;
     flex: 1 1 auto;
-    min-height: 20rem;
-    overflow: hidden;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .orb-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .orb-bubble {
-    position: absolute;
     width: 7rem;
     height: 7rem;
     animation-name: orb-drift;
@@ -269,13 +286,13 @@
   @keyframes orb-drift {
     0%,
     100% {
-      transform: translate(-50%, -50%) translate(0, 0);
+      transform: translate(0, 0);
     }
     33% {
-      transform: translate(-50%, -50%) translate(var(--dx1), var(--dy1));
+      transform: translate(var(--dx1), var(--dy1));
     }
     66% {
-      transform: translate(-50%, -50%) translate(var(--dx2), var(--dy2));
+      transform: translate(var(--dx2), var(--dy2));
     }
   }
 
@@ -449,7 +466,7 @@
 
     .orb-bubble {
       animation: none;
-      transform: translate(-50%, -50%);
+      transform: none;
     }
 
     .orb-bubble[data-state="blocked"] .orb-bubble-face {
