@@ -207,7 +207,12 @@ export async function generateRequirementsFromConcept(formData: FormData): Promi
 
   let answer: string;
   try {
-    answer = await chat({ profile, system: GENERATE_SYSTEM_PROMPT, prompt });
+    // Der Default (180s, siehe chat() in src/lib/llm.ts) reichte bei
+    // Reasoning-Modellen öfter nicht: Der Aufruf bricht ab, bevor das Modell
+    // mit dem Nachdenken über das ganze Konzept fertig ist. 480s wie beim
+    // Sprint-Refinement (worker/tasks/sprintPlanning.ts), das vor demselben
+    // Problem stand.
+    answer = await chat({ profile, system: GENERATE_SYSTEM_PROMPT, prompt, timeoutMs: 480_000 });
   } catch (error) {
     const message = error instanceof LlmError ? error.message : String(error);
     return fail(`Profil „${profile.name}“: ${message}`);
