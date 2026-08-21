@@ -303,6 +303,7 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
 
         <Panel
           title="Aktueller Sprint"
+          className="card-ghost"
           padded={false}
           collapsible
           collapsedView={sprint && <div className="px-4 py-3">{sprintSummary}</div>}
@@ -350,6 +351,7 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
 
         <Panel
           title="Aktuelle Themen"
+          className="card-ghost"
           count={waitingCount}
           tone={waitingCount > 0 ? "attention" : undefined}
           collapsible
@@ -542,6 +544,7 @@ export default async function TeamOfficePage({ params }: PageProps<"/projects/[p
 
           <Panel
             title="Protokoll"
+            className="card-ghost"
             padded={false}
             collapsible
             collapsedView={activityCollapsed}
