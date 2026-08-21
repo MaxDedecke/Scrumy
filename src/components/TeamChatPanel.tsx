@@ -5,6 +5,7 @@ import type { InquiryStatus } from "@/generated/prisma/client";
 import { INQUIRY_STATUS_LABEL } from "@/lib/labels";
 import { ActionForm } from "@/components/ActionForm";
 import { IconSubmit } from "@/components/IconSubmit";
+import { AgentResponse } from "@/components/AgentResponse";
 import { Panel, PanelEmpty } from "@/components/Panel";
 import { SendIcon } from "@/components/icons";
 import { askTeam } from "@/lib/actions/team";
@@ -87,9 +88,7 @@ export function TeamChatPanel({
                   {inquiry.answeredByName && (
                     <p className="text-[11px] font-medium text-ink-3">{inquiry.answeredByName}</p>
                   )}
-                  <pre className="mt-0.5 whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink-2">
-                    {inquiry.answer}
-                  </pre>
+                  <AgentResponse text={inquiry.answer} className="mt-0.5" />
                 </div>
               ) : (
                 <p className="self-start px-1 text-xs text-ink-4">{INQUIRY_STATUS_LABEL[inquiry.status]} …</p>

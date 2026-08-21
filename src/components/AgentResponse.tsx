@@ -7,9 +7,10 @@
 //     Argumente (Dateiinhalt, Suchen/Ersetzen, Shell-Befehl, …) je als
 //     eigener Block MIT echten Zeilenumbrüchen statt der von
 //     JSON.stringify escapten "\n".
-// Kein Markdown-Parser für Ueberschriften/Listen – Agentenantworten sind
-// kurze Statusprosa, dafuer lohnt sich keine zusaetzliche Abhaengigkeit; nur
-// Code ist das, was hier tatsaechlich unlesbar wird.
+// Kein vollstaendiger Markdown-Parser (Listen, Tabellen, …) – Agentenantworten
+// sind kurze Statusprosa, dafuer lohnt sich keine zusaetzliche Abhaengigkeit.
+// "# Ueberschrift" und "**fett**" rutschen dem Modell trotzdem regelmaessig
+// rein, deshalb werden die beiden zusaetzlich zu Code erkannt.
 import type { ReactNode } from "react";
 
 /// Passt exakt auf eine Zeile aus `→ ${call.name}(${JSON.stringify(call.input)})`
@@ -26,7 +27,15 @@ const TOOL_CALL_LINE = /^→ ([\w.]+)\((.*)\)$/;
 const CODE_ARG_KEYS = new Set(["content", "search", "replace", "command", "query"]);
 
 const FENCE = /```(\w*)\n?([\s\S]*?)```/g;
-const INLINE_CODE = /`([^`\n]+)`/g;
+/// Inline-Code UND **fett** in einem Rutsch, damit sich beide Muster nicht
+/// gegenseitig zerschneiden (z.B. `**`Code``**` wäre mit zwei getrennten
+/// Regexes falsch geklammert).
+const INLINE_FORMAT = /`([^`\n]+)`|\*\*([^*\n]+)\*\*/g;
+/// Markdown-Ueberschrift als eigene Zeile ("# Titel", "## Titel", …) –
+/// Agentenantworten sind zwar kurze Statusprosa (siehe Kommentar oben), aber
+/// das Modell haelt sich nicht immer daran; unformatiert steht sonst ein
+/// nacktes "#" vor dem Text.
+const HEADING_LINE = /^(#{1,6})\s+(.*)$/;
 
 type Segment =
   | { kind: "prose"; text: string }
@@ -71,14 +80,22 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
   let i = 0;
-  for (const match of text.matchAll(INLINE_CODE)) {
+  for (const match of text.matchAll(INLINE_FORMAT)) {
     const index = match.index ?? 0;
     if (index > last) nodes.push(text.slice(last, index));
-    nodes.push(
-      <code key={`${keyPrefix}-i${i}`} className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[0.8125em]">
-        {match[1]}
-      </code>,
-    );
+    if (match[1] !== undefined) {
+      nodes.push(
+        <code key={`${keyPrefix}-i${i}`} className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[0.8125em]">
+          {match[1]}
+        </code>,
+      );
+    } else {
+      nodes.push(
+        <strong key={`${keyPrefix}-b${i}`} className="font-semibold text-ink">
+          {match[2]}
+        </strong>,
+      );
+    }
     last = index + match[0].length;
     i++;
   }
@@ -112,6 +129,45 @@ function CodeBlock({ code, label, nested = false }: { code: string; label?: stri
   );
 }
 
+/// Ein Fliesstext-Abschnitt (zwischen/um Codebloecke herum) kann selbst
+/// Ueberschriftszeilen enthalten – die werden hier herausgeschnitten und als
+/// eigenes, fett gesetztes Element gerendert statt als Teil des
+/// Fliesstext-Absatzes (sonst bliebe das "#" stehen).
+function renderProseChunk(text: string, keyPrefix: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let buffer: string[] = [];
+  let i = 0;
+
+  const flush = () => {
+    const joined = buffer.join("\n").trim();
+    buffer = [];
+    if (!joined) return;
+    nodes.push(
+      <p key={`${keyPrefix}-t${i}`} className="whitespace-pre-wrap text-sm leading-relaxed text-ink-2">
+        {renderInline(joined, `${keyPrefix}-t${i}`)}
+      </p>,
+    );
+    i++;
+  };
+
+  for (const line of text.split("\n")) {
+    const heading = line.match(HEADING_LINE);
+    if (!heading) {
+      buffer.push(line);
+      continue;
+    }
+    flush();
+    nodes.push(
+      <p key={`${keyPrefix}-h${i}`} className="text-sm font-semibold text-ink">
+        {renderInline(heading[2], `${keyPrefix}-h${i}`)}
+      </p>,
+    );
+    i++;
+  }
+  flush();
+  return nodes;
+}
+
 function renderProse(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
@@ -120,26 +176,14 @@ function renderProse(text: string, keyPrefix: string): ReactNode[] {
     const index = match.index ?? 0;
     if (index > last) {
       const chunk = text.slice(last, index).trim();
-      if (chunk) {
-        nodes.push(
-          <p key={`${keyPrefix}-t${i}`} className="whitespace-pre-wrap text-sm leading-relaxed text-ink-2">
-            {renderInline(chunk, `${keyPrefix}-t${i}`)}
-          </p>,
-        );
-      }
+      if (chunk) nodes.push(...renderProseChunk(chunk, `${keyPrefix}-t${i}`));
     }
     nodes.push(<CodeBlock key={`${keyPrefix}-c${i}`} code={match[2].replace(/\n$/, "")} label={match[1] || undefined} />);
     last = index + match[0].length;
     i++;
   }
   const rest = text.slice(last).trim();
-  if (rest) {
-    nodes.push(
-      <p key={`${keyPrefix}-t${i}`} className="whitespace-pre-wrap text-sm leading-relaxed text-ink-2">
-        {renderInline(rest, `${keyPrefix}-t${i}`)}
-      </p>,
-    );
-  }
+  if (rest) nodes.push(...renderProseChunk(rest, `${keyPrefix}-t${i}`));
   return nodes;
 }
 
