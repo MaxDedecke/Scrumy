@@ -113,6 +113,17 @@
     background-color: var(--color-surface-2);
   }
 
+  /* Geisterkarte (21.08.2026): wie `.card`, nur ohne Fläche – nur der Rahmen
+     bleibt stehen. Für den Büroplan, dessen Agenten-Bällchen frei über dem
+     Canvas-Hintergrund schweben sollen statt auf einer sichtbaren
+     Kartenfläche zu sitzen. Eigene Klasse statt der Utility `bg-transparent`,
+     weil `.card` dieselbe Eigenschaft schon im `components`-Layer setzt –
+     hier gewinnt die spätere Regel in derselben Kaskadenebene zuverlässig,
+     unabhängig von Tailwinds Layer-Reihenfolge. */
+  .card-ghost {
+    background-color: transparent;
+  }
+
   /* Abschnittsüberschrift über einer Karten-/Listengruppe. */
   .section-title {
     font-size: 0.6875rem;
@@ -274,12 +285,23 @@
     justify-content: center;
   }
 
-  .orb-bubble {
+  /* Umhüllt Bällchen + Partikelschwarm (21.08.2026) als eine Bewegungseinheit:
+     Die Wander-Bahn (`orb-drift`) sitzt hier statt auf `.orb-bubble` selbst,
+     damit der Schwarm mit seinem Agenten mitzieht statt zurückzubleiben.
+     Gleiche Größe wie `.orb-bubble` (deckungsgleich), `position: relative`
+     macht sie zum Bezugspunkt für die absolut positionierten `.orb-particle`. */
+  .orb-cluster {
+    position: relative;
     width: 7rem;
     height: 7rem;
     animation-name: orb-drift;
     animation-timing-function: ease-in-out;
     animation-iteration-count: infinite;
+  }
+
+  .orb-bubble {
+    width: 100%;
+    height: 100%;
     cursor: default;
   }
 
@@ -294,6 +316,74 @@
     66% {
       transform: translate(var(--dx2), var(--dy2));
     }
+  }
+
+  /* Partikelschwarm (21.08.2026): pro Agent 5 kleine Punkte, die auf eigenen
+     Kreisbahnen um sein Bällchen wandern – Radius/Tempo/Richtung/Größe kommen
+     hash-stabil aus `particleStyle()` in AgentWorkspacePanel.tsx, derselbe
+     Ansatz wie bei `driftStyle()` (kein Math.random, sonst würde jeder
+     Server-Render neu mischen). Orbit-Trick: `translate(-50%, -50%)`
+     zentriert den Punkt auf den Mittelpunkt von `.orb-cluster` (== Mittelpunkt
+     des Bällchens, da `.orb-bubble` die Zelle deckungsgleich ausfüllt),
+     `rotate()` VOR `translateX(--orbit-r)` dreht diesen ausgelenkten Punkt auf
+     einer Kreisbahn um genau diesen Mittelpunkt – die Rotation selbst ist die
+     einzige animierte Größe, kein `@property` nötig. Zwei Keyframes
+     (`-orbit`/`-orbit-reverse`) für Uhrzeigersinn/Gegenrichtung, plus ein
+     zweites, unabhängiges `orb-particle-twinkle` für Helligkeit – zwei
+     Animationen auf demselben Element, weil sie unterschiedliche
+     Eigenschaften animieren. Der Radius bleibt laut `particleStyle()` unter
+     4.3rem, also innerhalb der 4.5rem-Zellenhälfte (`.orb-cell`, min. 9rem) –
+     der Schwarm verlässt nie die eigene Zelle, genau wie das Bällchen selbst. */
+  .orb-particle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    border-radius: 9999px;
+    background: var(--color-ink-4);
+    opacity: 0.35;
+    pointer-events: none;
+    animation-timing-function: linear, ease-in-out;
+    animation-iteration-count: infinite, infinite;
+    transform: translate(-50%, -50%) rotate(0deg) translateX(var(--orbit-r, 4rem));
+  }
+
+  @keyframes orb-particle-orbit {
+    from {
+      transform: translate(-50%, -50%) rotate(0deg) translateX(var(--orbit-r, 4rem));
+    }
+    to {
+      transform: translate(-50%, -50%) rotate(360deg) translateX(var(--orbit-r, 4rem));
+    }
+  }
+
+  @keyframes orb-particle-orbit-reverse {
+    from {
+      transform: translate(-50%, -50%) rotate(0deg) translateX(var(--orbit-r, 4rem));
+    }
+    to {
+      transform: translate(-50%, -50%) rotate(-360deg) translateX(var(--orbit-r, 4rem));
+    }
+  }
+
+  @keyframes orb-particle-twinkle {
+    0%,
+    100% {
+      opacity: 0.15;
+    }
+    50% {
+      opacity: 0.55;
+    }
+  }
+
+  /* Schwarmfarbe folgt dem Agentenzustand, genau wie `.orb-bubble-face` –
+     neutral bleibt dezenter Staub (`--color-ink-4`, Grundregel oben), aktiv
+     glüht er im selben Markengrün wie das Bällchen, blockiert im selben Rot. */
+  .orb-cluster[data-state="working"] .orb-particle {
+    background: var(--color-accent);
+  }
+
+  .orb-cluster[data-state="blocked"] .orb-particle {
+    background: var(--color-critical);
   }
 
   .orb-bubble-face {
@@ -355,7 +445,7 @@
 
   /* Nur die Helligkeit pulsiert, nicht die Größe – der Text im Bällchen
      soll dabei ruhig lesbar bleiben, die Wander-Animation sitzt bereits auf
-     `transform` des äußeren `.orb-bubble`. */
+     `transform` des umhüllenden `.orb-cluster`. */
   @keyframes orb-alert {
     0%,
     100% {
@@ -468,13 +558,18 @@
       animation: none;
     }
 
-    .orb-bubble {
+    .orb-cluster {
       animation: none;
       transform: none;
     }
 
     .orb-bubble[data-state="blocked"] .orb-bubble-face {
       animation: none;
+    }
+
+    .orb-particle {
+      animation: none;
+      opacity: 0.35;
     }
 
     .live-cursor {

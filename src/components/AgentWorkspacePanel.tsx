@@ -88,7 +88,11 @@ export function AgentWorkspacePanel({
       count={mode === "chat" ? inquiries.length : agents.length}
       padded={false}
       scroll={mode === "list"}
-      className={className}
+      // `card-ghost`: nur der Rahmen bleibt sichtbar, die Fläche wird
+      // transparent (siehe globals.css) – die Agenten-Bällchen im Büroplan
+      // sollen frei über dem Canvas-Hintergrund schweben statt auf einer
+      // eigenen Kartenfläche zu sitzen.
+      className={`card-ghost ${className ?? ""}`.trim()}
       collapsible
       collapsedView={
         mode === "chat" ? (
@@ -255,7 +259,10 @@ function hash(input: string): number {
 // (globals.css) setzt die Werte an zwei Zwischenpunkten ein, der Browser
 // interpoliert zwischen den daraus entstehenden, für jedes Bällchen fixen
 // `transform`-Werten ganz normal weiter. Dauer/Verzögerung ebenfalls pro
-// Agent, damit nicht alle Bällchen synchron "atmen".
+// Agent, damit nicht alle Bällchen synchron "atmen". Wandert jetzt auf
+// `.orb-cluster` (Bällchen + Partikelschwarm zusammen), nicht mehr auf
+// `.orb-bubble` allein – der Schwarm soll mit seinem Agenten mitziehen statt
+// stehen zu bleiben, während das Bällchen wegdriftet.
 function driftStyle(id: string): CSSProperties {
   const sign = (n: number) => (n % 2 === 0 ? 1 : -1);
   const rem = (h: number, base: number, span: number) => sign(h) * (base + ((h >> 3) % span) * 0.1);
@@ -305,6 +312,39 @@ function AgentOfficeView({ agents }: { agents: AgentWorkspaceEntry[] }) {
   );
 }
 
+// Fünf Partikel pro Agent, auf Kreisbahnen um sein Bällchen. Radius bewusst
+// zwischen 3.6 und 4.3rem: über dem 3.5rem-Bällchenradius (Partikel umgeben
+// es sichtbar statt es zu verdecken), unter der 4.5rem-Zellenhälfte (siehe
+// `.orb-cell`-Doku), also garantiert innerhalb der eigenen exklusiven Zelle –
+// derselbe Sicherheitsgedanke wie bei `driftStyle`, nur für den Schwarm statt
+// für das Bällchen selbst. Richtung (im/gegen Uhrzeigersinn) und Tempo pro
+// Partikel aus dem Hash, damit der Schwarm ungleichmäßig wirkt statt als ein
+// starrer, gemeinsam rotierender Ring.
+const PARTICLE_COUNT = 5;
+const PARTICLE_INDEXES = Array.from({ length: PARTICLE_COUNT }, (_, i) => i);
+
+function particleStyle(agentId: string, index: number): CSSProperties {
+  const key = `${agentId}:particle${index}`;
+  const radius = 3.6 + (hash(`${key}:r`) % 8) * 0.1;
+  const size = 0.16 + (hash(`${key}:size`) % 4) * 0.03;
+  const orbitDuration = 9 + (hash(`${key}:dur`) % 14);
+  const orbitDelay = -(hash(`${key}:del`) % orbitDuration);
+  const twinkleDuration = 2.5 + (hash(`${key}:tw`) % 4) * 0.5;
+  const twinkleDelay = -(hash(`${key}:twd`) % 6);
+  const reverse = hash(`${key}:dir`) % 2 === 0;
+
+  return {
+    width: `${size}rem`,
+    height: `${size}rem`,
+    marginTop: `${-size / 2}rem`,
+    marginLeft: `${-size / 2}rem`,
+    animationName: `${reverse ? "orb-particle-orbit-reverse" : "orb-particle-orbit"}, orb-particle-twinkle`,
+    animationDuration: `${orbitDuration}s, ${twinkleDuration}s`,
+    animationDelay: `${orbitDelay}s, ${twinkleDelay}s`,
+    "--orbit-r": `${radius}rem`,
+  } as CSSProperties;
+}
+
 function AgentOrb({ agent }: { agent: AgentWorkspaceEntry }) {
   const state: AgentState =
     agent.status === "BLOCKED"
@@ -320,30 +360,39 @@ function AgentOrb({ agent }: { agent: AgentWorkspaceEntry }) {
   const caption = state === "working" ? agent.running!.headline : state === "blocked" ? "wartet auf Klärung" : null;
 
   return (
-    <div
-      data-state={state}
-      title={
-        state === "blocked"
-          ? "Blockiert – wartet auf eine Klärung"
-          : state === "working"
-            ? agent.running!.headline
-            : state === "idle"
-              ? `zuletzt: ${agent.last!.headline} · ${formatTime(agent.last!.startedAt)}`
-              : "noch nichts getan"
-      }
-      className="orb-bubble"
-      style={driftStyle(agent.id)}
-    >
-      <div className="orb-bubble-face flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-full px-2 text-center">
-        <span className="orb-bubble-name w-full truncate text-[0.8rem] font-semibold leading-tight">
-          {agent.name}
-        </span>
-        <span className="orb-bubble-role w-full truncate text-[0.6rem] leading-tight">
-          {AGENT_ROLE_LABEL[agent.role]}
-        </span>
-        {caption && (
-          <span className="orb-bubble-caption line-clamp-2 w-full text-[0.55rem] leading-tight">{caption}</span>
-        )}
+    <div data-state={state} className="orb-cluster" style={driftStyle(agent.id)}>
+      {PARTICLE_INDEXES.map((index) => (
+        <span
+          key={index}
+          aria-hidden="true"
+          className="orb-particle"
+          style={particleStyle(agent.id, index)}
+        />
+      ))}
+      <div
+        data-state={state}
+        title={
+          state === "blocked"
+            ? "Blockiert – wartet auf eine Klärung"
+            : state === "working"
+              ? agent.running!.headline
+              : state === "idle"
+                ? `zuletzt: ${agent.last!.headline} · ${formatTime(agent.last!.startedAt)}`
+                : "noch nichts getan"
+        }
+        className="orb-bubble"
+      >
+        <div className="orb-bubble-face flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-full px-2 text-center">
+          <span className="orb-bubble-name w-full truncate text-[0.8rem] font-semibold leading-tight">
+            {agent.name}
+          </span>
+          <span className="orb-bubble-role w-full truncate text-[0.6rem] leading-tight">
+            {AGENT_ROLE_LABEL[agent.role]}
+          </span>
+          {caption && (
+            <span className="orb-bubble-caption line-clamp-2 w-full text-[0.55rem] leading-tight">{caption}</span>
+          )}
+        </div>
       </div>
     </div>
   );
