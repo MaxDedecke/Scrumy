@@ -471,6 +471,16 @@ model Ticket {
   runs           AgentRun[]
   clarifications Clarification[]
 
+  /// Tickets, die vor diesem hier fertig sein muessen – vom Product Owner in
+  /// der Sprint-Planung gesetzt (siehe worker/tasks/sprintPlanning.ts,
+  /// "dependsOn"). Ziehende Logik (worker/orchestration.ts#nextOpenTicket,
+  /// src/lib/nextStep.ts) laesst dieses Ticket erst zu, wenn alle hier
+  /// verknuepften Tickets DONE sind – die Reihenfolge ist damit erzwungen,
+  /// nicht nur dokumentiert.
+  blockedBy Ticket[] @relation("TicketBlocks")
+  /// Kehrseite von `blockedBy`: Tickets, die auf dieses hier warten.
+  blocks    Ticket[] @relation("TicketBlocks")
+
   @@map("tickets")
 }
 

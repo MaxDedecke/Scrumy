@@ -25,7 +25,12 @@ export default async function ProjectBoardPage({
     include: {
       tickets: {
         orderBy: { updatedAt: "desc" },
-        include: { reviews: true, assignee: { select: { id: true, name: true } }, sprint: { select: { number: true } } },
+        include: {
+          reviews: true,
+          assignee: { select: { id: true, name: true } },
+          sprint: { select: { number: true } },
+          blockedBy: { select: { id: true, title: true, status: true } },
+        },
       },
       agents: { include: { agent: true, connector: true } },
     },

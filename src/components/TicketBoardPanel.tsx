@@ -30,6 +30,10 @@ export type BoardTicket = {
   updatedAt: Date;
   assignee: { id: string; name: string } | null;
   sprint: { number: number } | null;
+  /// Tickets, die vor diesem hier fertig sein muessen (siehe
+  /// worker/tasks/sprintPlanning.ts, "dependsOn"). Erst wenn alle hier DONE
+  /// sind, zieht das Team dieses Ticket – siehe worker/orchestration.ts.
+  blockedBy: { id: string; title: string; status: TicketStatus }[];
   reviews: {
     id: string;
     reviewerName: string;
@@ -75,6 +79,7 @@ export function TicketBoardPanel({
               {tickets.length === 0 && <p className="px-2 py-3 text-center text-xs text-ink-4">Keine Tickets</p>}
               {tickets.map((ticket) => {
                 const pendingReview = ticket.reviews.find((r) => r.decision === "PENDING");
+                const openBlockers = ticket.blockedBy.filter((b) => b.status !== "DONE");
                 return (
                   <button
                     key={ticket.id}
@@ -98,6 +103,14 @@ export function TicketBoardPanel({
                       <span className="pill pill-neutral">{TICKET_TYPE_LABEL[ticket.type]}</span>
                       <span className={PRIORITY_PILL[ticket.priority]}>{PRIORITY_LABEL[ticket.priority]}</span>
                       {pendingReview && <span className="pill pill-warning pill-dot">Review offen</span>}
+                      {openBlockers.length > 0 && (
+                        <span
+                          className="pill pill-warning pill-dot"
+                          title={`Wartet auf: ${openBlockers.map((b) => b.title).join(", ")}`}
+                        >
+                          Blockiert durch {openBlockers.length}
+                        </span>
+                      )}
                     </div>
                   </button>
                 );
@@ -153,6 +166,21 @@ function TicketDetail({ ticket, onClose }: { ticket: BoardTicket; onClose: () =>
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
         <DetailField label="Beschreibung" value={ticket.description} />
+        {ticket.blockedBy.length > 0 && (
+          <div>
+            <h3 className="section-title mb-1.5">Abhängigkeiten</h3>
+            <ul className="space-y-1">
+              {ticket.blockedBy.map((blocker) => (
+                <li key={blocker.id} className="flex items-center gap-1.5 text-sm text-ink-2">
+                  <span className={`pill ${statusPillClass(blocker.status)}`}>
+                    {TICKET_STATUS_LABEL[blocker.status]}
+                  </span>
+                  {blocker.title}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <DetailField label="Umsetzungsplan" value={ticket.plan} />
         <DetailField label="Ergebnis" value={ticket.result} />
 

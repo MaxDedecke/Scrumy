@@ -10,6 +10,7 @@
 import { prisma } from "@/lib/prisma";
 import { agentForRole } from "@/lib/team";
 import { enqueueAgentJob } from "../../worker/queue";
+import { blockedTicketIds } from "../../worker/clarification";
 
 export async function scheduleNextStep(projectId: string): Promise<string> {
   const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
@@ -43,13 +44,11 @@ export async function scheduleNextStep(projectId: string): Promise<string> {
     return `${productOwner.name} plant Sprint ${sprint.number + 1}.`;
   }
 
-  // Tickets mit offener Klärung bleiben liegen – sonst schickt „weitermachen"
-  // das Team genau in die Frage zurück, die noch niemand beantwortet hat.
-  const blocked = await prisma.clarification.findMany({
-    where: { projectId, status: "OPEN", ticketId: { not: null } },
-    select: { ticketId: true },
-  });
-  const blockedIds = new Set(blocked.map((entry) => entry.ticketId));
+  // Tickets mit offener Klärung oder unerledigter Abhängigkeit (siehe
+  // Ticket.blockedBy) bleiben liegen – sonst schickt „weitermachen" das Team
+  // genau in die Frage zurück, die noch niemand beantwortet hat, oder vor ein
+  // Ticket, dessen Voraussetzung laut Product Owner noch fehlt.
+  const blockedIds = new Set(await blockedTicketIds(sprint.id));
 
   const openTicket = sprint.tickets
     .filter((ticket) => ticket.status === "BACKLOG" || ticket.status === "IN_PROGRESS")

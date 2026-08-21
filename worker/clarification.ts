@@ -142,11 +142,25 @@ export async function sprintBlocker(sprintId: string): Promise<Clarification | n
   });
 }
 
-/// Tickets, die wegen einer offenen Klärung liegen bleiben.
+/// Tickets, die liegen bleiben – entweder wegen einer offenen Klärung oder
+/// weil ein Ticket, von dem sie laut Product Owner abhängen (`Ticket.blockedBy`,
+/// siehe worker/tasks/sprintPlanning.ts), noch nicht DONE ist. Die Abhängigkeit
+/// selbst ist nicht auf den Sprint beschränkt (ein zurückgestelltes Ticket kann
+/// in einem frueheren Sprint haengen), die Suche danach schon – hier interessiert
+/// nur, was in DIESEM Sprint liegen bleibt.
 export async function blockedTicketIds(sprintId: string): Promise<string[]> {
-  const blocked = await prisma.clarification.findMany({
-    where: { status: "OPEN", ticketId: { not: null }, ticket: { sprintId } },
-    select: { ticketId: true },
-  });
-  return blocked.map((entry) => entry.ticketId).filter((id): id is string => Boolean(id));
+  const [byClarification, byDependency] = await Promise.all([
+    prisma.clarification.findMany({
+      where: { status: "OPEN", ticketId: { not: null }, ticket: { sprintId } },
+      select: { ticketId: true },
+    }),
+    prisma.ticket.findMany({
+      where: { sprintId, blockedBy: { some: { status: { not: "DONE" } } } },
+      select: { id: true },
+    }),
+  ]);
+  const ids = new Set<string>();
+  for (const entry of byClarification) if (entry.ticketId) ids.add(entry.ticketId);
+  for (const entry of byDependency) ids.add(entry.id);
+  return [...ids];
 }

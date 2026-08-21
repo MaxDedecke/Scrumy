@@ -459,6 +459,10 @@ Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwort
   }
 
   const createdTickets: Ticket[] = [];
+  // title -> dependsOn-Titel, gesammelt waehrend des Anlegens: Aufgeloest wird
+  // erst NACH der Schleife (siehe unten), weil "dependsOn" auch auf ein
+  // spaeter im selben Batch angelegtes Ticket zeigen kann.
+  const pendingDependencies: { ticketId: string; titles: string[] }[] = [];
   for (const item of planned) {
     const title = String(item.title ?? "").trim();
     if (!title) continue;
@@ -510,6 +514,7 @@ Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwort
       },
     });
     createdTickets.push(ticket);
+    if (dependencies.length > 0) pendingDependencies.push({ ticketId: ticket.id, titles: dependencies });
 
     if (sourceRequestId && matchedRequest) {
       await logActivity({
@@ -522,6 +527,24 @@ Du bist ${agent.name}, Product Owner. Du planst Sprint ${nextNumber}. Du antwort
         supportRequestId: matchedRequest.id,
       });
     }
+  }
+
+  // "dependsOn" strukturell als Ticket.blockedBy verknuepfen – vorher stand
+  // die Abhaengigkeit nur als Freitext in der Beschreibung ("## Abhängigkeiten"),
+  // ohne dass sie irgendwo die Zugreihenfolge beeinflusst hat. Aufgeloest wird
+  // per Titel (case-insensitiv, getrimmt) gegen ALLE Tickets dieses Sprints –
+  // frisch angelegte wie zurueckgestellte -, ein nicht gefundener Titel wird
+  // stillschweigend uebersprungen (bleibt im Freitext sichtbar).
+  const titleLookup = new Map(
+    [...createdTickets, ...carriedOverTickets].map((ticket) => [ticket.title.trim().toLowerCase(), ticket.id]),
+  );
+  for (const { ticketId, titles } of pendingDependencies) {
+    const blockerIds = [...new Set(titles.map((title) => titleLookup.get(title.trim().toLowerCase())).filter((id): id is string => Boolean(id) && id !== ticketId))];
+    if (blockerIds.length === 0) continue;
+    await prisma.ticket.update({
+      where: { id: ticketId },
+      data: { blockedBy: { connect: blockerIds.map((id) => ({ id })) } },
+    });
   }
 
   // Sprint-Plan auch im Repo ablegen: Der Auftraggeber soll den Plan dort
