@@ -45,7 +45,6 @@ export default async function ProjectLayout({
         workMode: true,
         repoUrl: true,
         organizationId: true,
-        organization: { select: { name: true } },
         liveStatus: true,
       },
     }),
@@ -91,7 +90,7 @@ export default async function ProjectLayout({
       <PageHeader
         className="mb-5"
         backHref="/"
-        backLabel={project.organization.name}
+        backLabel="Zurück"
         backInline
         title={project.name}
         status={
