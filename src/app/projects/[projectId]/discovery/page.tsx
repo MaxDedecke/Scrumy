@@ -84,7 +84,7 @@ export default async function ProjectDiscoveryPage({
           rows=14 abzuschneiden. */}
       <Panel
         title="Konzept"
-        className="lg:row-span-2"
+        className="card-ghost lg:row-span-2"
         scroll={false}
         action={
           <>
@@ -205,6 +205,7 @@ export default async function ProjectDiscoveryPage({
 
       <Panel
         title="Anforderungen"
+        className="card-ghost"
         count={project.requirements.length}
         padded={false}
         action={
@@ -342,7 +343,11 @@ export default async function ProjectDiscoveryPage({
         </div>
       </Panel>
 
-      <Panel title={teamStarted ? "Weiterbauen" : "Team starten"} scroll={teamStarted}>
+      <Panel
+        title={teamStarted ? "Weiterbauen" : "Team starten"}
+        className="card-ghost"
+        scroll={teamStarted}
+      >
         {teamStarted ? (
           <>
             <p className="text-sm text-ink-2">
