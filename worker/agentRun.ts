@@ -13,7 +13,7 @@ import { withLlmProfileLimit } from "./llmProfileLimiter";
 /// Grosszuegiger als der Vorgabewert des Clients: Diese Aufrufe laufen im
 /// Hintergrund, niemand wartet vor dem Bildschirm – und lokale oder kostenlose
 /// Modelle antworten oft erst nach Minuten.
-const DEFAULT_TIMEOUT_MS = 300_000;
+const DEFAULT_TIMEOUT_MS = 600_000;
 
 export class AgentRunError extends Error {
   constructor(

@@ -196,7 +196,7 @@ export async function runImplementationLoop({
         loggedPrompt,
         tools: ALL_TOOLS,
         maxTokens: maxTokensPerTurn,
-        timeoutMs: Math.min(300_000, remaining),
+        timeoutMs: Math.min(600_000, remaining),
       });
 
       turnsUsed = turn;
