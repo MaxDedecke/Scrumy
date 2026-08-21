@@ -68,10 +68,11 @@ export function PageHeader({
           {backInline && backHref && (
             <Link
               href={backHref}
-              className="quiet-link inline-flex shrink-0 items-center gap-1.5 text-xs font-medium"
+              title={backLabel}
+              aria-label={backLabel}
+              className="quiet-link inline-flex shrink-0 translate-y-0.5 items-center"
             >
-              <ArrowLeftIcon className="h-3.5 w-3.5" />
-              {backLabel}
+              <ArrowLeftIcon className="h-4 w-4" />
             </Link>
           )}
           <h1 className="truncate text-2xl font-semibold text-ink">{title}</h1>
