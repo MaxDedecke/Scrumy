@@ -6,7 +6,7 @@
 // was ein Agent tut, passiert damit ohne Beleg. Gleichzeitig haengt hier der
 // sichtbare Agentenstatus (IDLE/WORKING) und das Rate-Limit pro LLM-Profil.
 import { prisma } from "@/lib/prisma";
-import { chat, chatTurn, LlmError, type ChatMessage, type ReasoningEffort, type ToolCall, type ToolDef } from "@/lib/llm";
+import { chatTurn, LlmError, type ChatMessage, type ReasoningEffort, type ToolCall, type ToolDef } from "@/lib/llm";
 import type { Agent } from "@/generated/prisma/client";
 import { withLlmProfileLimit } from "./llmProfileLimiter";
 
@@ -98,17 +98,22 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
   const startedAt = Date.now();
 
   try {
-    const text = await withLlmProfileLimit(profile.id, () =>
-      chat({
+    // chatTurn() statt chat(): Nur der Turn-Client liefert die
+    // Verbrauchszahlen (result.usage) zurueck, die der Kontextfenster-Balken
+    // im Nachweis braucht (siehe ContextMeter) – chat() ist nur eine duenne
+    // Huelle darum, die den Text alleine zurueckgibt.
+    const result = await withLlmProfileLimit(profile.id, () =>
+      chatTurn({
         profile,
         system,
-        prompt,
+        messages: [{ role: "user", content: prompt }],
         maxTokens: options.maxTokens ?? 8000,
         timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         reasoningEffort: options.reasoningEffort,
         preferThroughput: options.preferThroughput,
       }),
     );
+    const text = result.text;
 
     await prisma.$transaction([
       prisma.agentRun.update({
@@ -118,6 +123,10 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
           response: text,
           finishedAt: new Date(),
           durationMs: Date.now() - startedAt,
+          inputTokens: result.usage?.inputTokens,
+          outputTokens: result.usage?.outputTokens,
+          cacheReadTokens: result.usage?.cacheReadTokens,
+          cacheWriteTokens: result.usage?.cacheWriteTokens,
         },
       }),
       prisma.agent.update({ where: { id: agent.id }, data: { status: "IDLE" } }),
@@ -232,6 +241,10 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentR
           response: loggedResponse,
           finishedAt: new Date(),
           durationMs: Date.now() - startedAt,
+          inputTokens: result.usage?.inputTokens,
+          outputTokens: result.usage?.outputTokens,
+          cacheReadTokens: result.usage?.cacheReadTokens,
+          cacheWriteTokens: result.usage?.cacheWriteTokens,
         },
       }),
       prisma.agent.update({ where: { id: agent.id }, data: { status: "IDLE" } }),

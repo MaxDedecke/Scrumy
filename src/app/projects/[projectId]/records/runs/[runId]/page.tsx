@@ -5,6 +5,7 @@ import { AGENT_ROLE_LABEL, RUN_KIND_LABEL, RUN_STATUS_LABEL, RUN_STATUS_PILL } f
 import { Panel, PanelGrid, PanelStrip } from "@/components/Panel";
 import { AgentResponse } from "@/components/AgentResponse";
 import { AttemptChat } from "@/components/AttemptChat";
+import { ContextMeter } from "@/components/ContextMeter";
 import { getAttemptRuns } from "@/lib/agentRunAttempts";
 
 // Ein einzelner Agentenlauf, vollständig aufgeklappt: Rolle und Modell, der
@@ -34,6 +35,11 @@ export default async function AgentRunPage({
   // zwei Nachweise nacheinander aufzuklappen.
   const attempt = await getAttemptRuns(run);
   const isAttempt = attempt.length > 1;
+  // Der letzte Turn mit Verbrauchszahlen: waehrend der aktuellste Turn noch
+  // laeuft (RUNNING, noch keine Antwort) hat der selbst noch keine – dann
+  // lieber den zuletzt bekannten Fuellstand zeigen als den Balken kurz
+  // verschwinden zu lassen.
+  const lastMeasuredRun = [...attempt].reverse().find((r) => r.inputTokens != null) ?? null;
 
   return (
     <>
@@ -48,6 +54,7 @@ export default async function AgentRunPage({
           <span className={RUN_STATUS_PILL[attempt[attempt.length - 1].status]}>
             {RUN_STATUS_LABEL[attempt[attempt.length - 1].status]}
           </span>
+          <ContextMeter model={lastMeasuredRun?.model ?? null} usage={lastMeasuredRun} />
           <span className="text-xs text-ink-3">
             {RUN_KIND_LABEL[run.kind] ?? run.kind} ·{" "}
             {run.agent ? `${run.agent.name} (${AGENT_ROLE_LABEL[run.agent.role]})` : "unbekannter Agent"}

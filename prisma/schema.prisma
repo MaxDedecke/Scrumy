@@ -546,6 +546,18 @@ model AgentRun {
   startedAt    DateTime  @default(now())
   finishedAt   DateTime?
   durationMs   Int?
+  /// Verbrauchszahlen des Anbieters zu GENAU diesem Aufruf (siehe TokenUsage
+  /// in src/lib/llm.ts) – NULL, wenn der Anbieter keine mitschickt (z.B.
+  /// Ollama) oder der Aufruf vor dieser Spalte lief. `inputTokens` +
+  /// `cacheReadTokens` + `cacheWriteTokens` ist die Groesse der Konversation,
+  /// die dieser Turn dem Modell vorgelegt hat – im Tool-Loop
+  /// (worker/agentToolLoop.ts) waechst das mit jedem Turn, weil dort die
+  /// GANZE bisherige Konversation erneut mitgeschickt wird. Grundlage fuer
+  /// den Kontextfenster-Balken im Nachweis (ContextMeter).
+  inputTokens      Int?
+  outputTokens     Int?
+  cacheReadTokens  Int?
+  cacheWriteTokens Int?
 
   @@index([projectId, startedAt])
   @@map("agent_runs")
