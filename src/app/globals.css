@@ -233,6 +233,16 @@
      von der Agentenzahl. `--office-desk*` sind bewusst nur hier lokal
      definiert (aus --color-surface-3 abgeleitet) statt im @theme oben – ein
      einmaliger Holzton fürs Bürobild, kein neues App-weites Token.
+
+     Vier Zustände statt drei (Desk() in AgentWorkspacePanel.tsx): "blocked"
+     hat Vorrang vor allem anderen – ein Agent, der auf eine Klärung wartet,
+     sah bis 21.08.2026 aus wie einer in der Kaffeepause (Stuhl abgerückt,
+     Monitor aus), ohne eigenes Signal. Jetzt bekommt er roten, pulsierenden
+     Monitor-Glow + Warndreieck. "working" zeigt zusätzlich eine Sprechblase
+     mit der laufenden Aufgabe (vorher nur im Hover-Tooltip) und ein paar
+     Bildschirmzeilen statt nur der Glow-Farbe; "idle" zeigt ein dezentes
+     "z z" im Bildschirm. Alle drei sind reine CSS-Erweiterungen derselben
+     Tisch-DOM-Struktur, kein neues Layout.
      ------------------------------------------------------------------- */
   .office-room {
     --office-desk: color-mix(in oklab, var(--color-surface-3) 82%, #8a6a3c 18%);
@@ -285,10 +295,16 @@
     right: 8%;
     bottom: 0.75rem;
     height: 0.875rem;
-    background: var(--office-desk);
+    background: linear-gradient(
+      180deg,
+      var(--office-desk-edge),
+      var(--office-desk) 55%,
+      color-mix(in oklab, var(--office-desk) 68%, black) 100%
+    );
     border: 1px solid var(--color-hairline);
     border-top-color: var(--office-desk-edge);
     border-radius: 0.25rem;
+    box-shadow: 0 0.3rem 0.5rem -0.3rem rgba(0, 0, 0, 0.5);
   }
 
   .office-chair {
@@ -303,7 +319,8 @@
     transform: translate(-50%, 0) scale(0.92);
   }
 
-  .office-desk[data-state="idle"] .office-chair {
+  .office-desk[data-state="idle"] .office-chair,
+  .office-desk[data-state="blocked"] .office-chair {
     transform: translate(-115%, 0) rotate(-18deg);
   }
 
@@ -328,11 +345,11 @@
     left: 50%;
     bottom: 1.5rem;
     transform: translateX(-50%);
-    width: 2.25rem;
-    height: 1.625rem;
-    border-radius: 0.25rem;
-    border: 1.5px solid var(--color-ink-4);
-    background: var(--color-surface-2);
+    width: 2.375rem;
+    height: 1.75rem;
+    border-radius: 0.35rem;
+    border: 1.75px solid var(--color-ink-4);
+    background: linear-gradient(160deg, var(--color-surface-3), var(--color-surface-2));
     transition:
       box-shadow 220ms ease,
       border-color 220ms ease,
@@ -342,43 +359,119 @@
   .office-desk[data-state="working"] .office-monitor {
     border-color: var(--color-good);
     background: color-mix(in oklab, var(--color-good) 55%, var(--color-surface-2));
-    box-shadow: 0 0 0.5rem color-mix(in oklab, var(--color-good) 55%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-good) 40%, transparent),
+      0 0 0.65rem 0.05rem color-mix(in oklab, var(--color-good) 55%, transparent);
   }
 
-  .office-dots {
+  /* Bildschirminhalt statt nur Farbe: bei "arbeitet" ein paar Textzeilen,
+     bei "zuletzt aktiv" ein dezentes "z z" – der Bildschirm sagt selbst,
+     ob gerade etwas läuft oder nur pausiert wird. */
+  .office-screen-lines {
     position: absolute;
     left: 50%;
-    bottom: 1.9375rem;
+    bottom: 1.72rem;
     transform: translateX(-50%);
+    width: 1.7rem;
     display: flex;
-    gap: 0.125rem;
+    flex-direction: column;
+    gap: 0.14rem;
+    pointer-events: none;
   }
 
-  .office-dots span {
-    width: 0.1875rem;
-    height: 0.1875rem;
-    border-radius: 9999px;
-    background: color-mix(in oklab, var(--color-canvas) 65%, transparent);
-    animation: office-blink 1.2s ease-in-out infinite;
+  .office-screen-lines span {
+    height: 1.5px;
+    border-radius: 1px;
+    background: color-mix(in oklab, var(--color-canvas) 70%, transparent);
   }
 
-  .office-dots span:nth-child(2) {
-    animation-delay: 0.15s;
+  .office-screen-lines span:nth-child(1) {
+    width: 100%;
   }
 
-  .office-dots span:nth-child(3) {
-    animation-delay: 0.3s;
+  .office-screen-lines span:nth-child(2) {
+    width: 68%;
   }
 
-  @keyframes office-blink {
+  .office-screen-lines span:nth-child(3) {
+    width: 85%;
+  }
+
+  .office-desk[data-state="idle"] .office-monitor::after {
+    content: "z z";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 0.5625rem;
+    letter-spacing: 0.08em;
+    color: var(--color-ink-4);
+  }
+
+  /* Blockiert: eigener dritter Signalzustand statt "sieht aus wie Pause" –
+     roter Rahmen + pulsierender Glow, dazu das Warndreieck darüber
+     (`.office-warning`, siehe Desk() in AgentWorkspacePanel.tsx). */
+  .office-desk[data-state="blocked"] .office-monitor {
+    border-color: var(--color-critical);
+    background: color-mix(in oklab, var(--color-critical) 30%, var(--color-surface-2));
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-critical) 45%, transparent),
+      0 0 0.65rem 0.05rem color-mix(in oklab, var(--color-critical) 55%, transparent);
+    animation: office-alert 1.8s ease-in-out infinite;
+  }
+
+  @keyframes office-alert {
     0%,
-    80%,
     100% {
-      opacity: 0.25;
+      filter: brightness(1);
     }
-    40% {
-      opacity: 1;
+    50% {
+      filter: brightness(1.28);
     }
+  }
+
+  .office-warning {
+    position: absolute;
+    left: 50%;
+    bottom: 3.5rem;
+    transform: translateX(-50%);
+    color: var(--color-critical);
+  }
+
+  /* Sprechblase über arbeitenden Tischen: derselbe Text, der bisher nur im
+     Tooltip stand, jetzt fest sichtbar – einzeilig, kappt selbst per
+     Ellipsis statt den Tisch in der Breite zu sprengen. */
+  .office-bubble {
+    position: absolute;
+    bottom: 3.45rem;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 8.75rem;
+    margin: 0;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-hairline-strong);
+    background: var(--color-surface-3);
+    padding: 0.28rem 0.5rem;
+    font-size: 0.6875rem;
+    line-height: 1.3;
+    color: var(--color-ink-2);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+  }
+
+  .office-bubble::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -0.3rem;
+    transform: translateX(-50%);
+    border: 0.3rem solid transparent;
+    border-top-color: var(--color-surface-3);
   }
 
   .office-person {
@@ -395,10 +488,19 @@
     transform: translateX(-50%) scale(0.85);
   }
 
-  .office-desk[data-state="idle"] .office-person {
+  .office-desk[data-state="idle"] .office-person,
+  .office-desk[data-state="blocked"] .office-person {
     bottom: -0.0625rem;
     transform: translateX(-135%);
+  }
+
+  .office-desk[data-state="idle"] .office-person {
     opacity: 0.85;
+  }
+
+  .office-desk[data-state="blocked"] .office-person {
+    opacity: 0.9;
+    color: var(--color-critical);
   }
 
   .office-desk[data-state="fresh"] .office-person {
@@ -545,7 +647,7 @@
       animation: none;
     }
 
-    .office-dots span,
+    .office-desk[data-state="blocked"] .office-monitor,
     .office-steam path {
       animation: none;
     }

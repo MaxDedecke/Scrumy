@@ -25,6 +25,7 @@ import {
   PlantIcon,
   SendIcon,
   SteamIcon,
+  WarningIcon,
 } from "@/components/icons";
 import { askTeam } from "@/lib/actions/team";
 import { iconButtonClass, inputClass } from "@/lib/ui";
@@ -244,7 +245,7 @@ function AgentListView({ agents }: { agents: AgentWorkspaceEntry[] }) {
   );
 }
 
-type DeskState = "working" | "idle" | "fresh";
+type DeskState = "working" | "idle" | "fresh" | "blocked";
 type Decor = "plant" | "mug" | "books" | "frame";
 
 const DECOR_ICON: Record<Decor, (props: { className?: string }) => ReactNode> = {
@@ -275,10 +276,13 @@ const ROLE_ORDER = Object.keys(AGENT_ROLE_LABEL) as AgentRole[];
 
 // Der Büroplan: alle Tische in einem Raster mit fest zwei Zeilen – so viele
 // Spalten wie nötig, dazu horizontales Scrollen statt einer dritten Zeile.
-// Jeder Tisch trägt drei Zustandssignale, die alleine (auch in Graustufen
-// über Position/Form) den Blick tragen: Monitor leuchtet + Stuhl ist
-// herangerückt = arbeitet; Monitor aus + Stuhl abgerückt = zuletzt aktiv;
-// Monitor aus + Stuhl mittig, kein Deko-Item = noch nie etwas getan. Ein
+// Jeder Tisch trägt vier Zustandssignale, die alleine (auch in Graustufen
+// über Position/Form) den Blick tragen: Monitor leuchtet grün + Stuhl ist
+// herangerückt + Sprechblase mit der laufenden Aufgabe = arbeitet; Monitor
+// zeigt "z z" + Stuhl abgerückt = zuletzt aktiv; Monitor aus + Stuhl mittig,
+// kein Deko-Item = noch nie etwas getan; Monitor pulsiert rot + Warndreieck
+// = blockiert, wartet auf eine Klärung (siehe Desk() unten – hat Vorrang vor
+// den anderen drei, unabhängig davon, ob gerade ein Lauf offen ist). Ein
 // festes Deko-Item pro Person (aus der ID abgeleitet) und Dampf an der Tasse
 // bei einer Pause sind reine Atmosphäre und nie das einzige Signal.
 function AgentOfficeView({ agents }: { agents: AgentWorkspaceEntry[] }) {
@@ -301,34 +305,49 @@ function AgentOfficeView({ agents }: { agents: AgentWorkspaceEntry[] }) {
 }
 
 function Desk({ agent }: { agent: AgentWorkspaceEntry }) {
-  const state: DeskState = agent.running !== null ? "working" : agent.last !== null ? "idle" : "fresh";
+  // "blocked" hat Vorrang vor running/last: ein Agent, der auf eine Klärung
+  // wartet, ist nicht einfach "gerade untätig" – ohne diesen Vorrang sähe er
+  // im Büroplan aus wie einer in der Kaffeepause (siehe globals.css).
+  const state: DeskState =
+    agent.status === "BLOCKED"
+      ? "blocked"
+      : agent.running !== null
+        ? "working"
+        : agent.last !== null
+          ? "idle"
+          : "fresh";
   const decor = agentDecor(agent.id);
   const decorSide = hash(`${agent.id}:side`) % 2 === 0 ? "corner-left" : "corner-right";
   const DecorIcon = DECOR_ICON[decor];
   const showSteam = state === "idle" && decor === "mug";
+  // Blockiert bleibt bewusst ohne Deko: das Warndreieck soll der einzige
+  // Blick sein, den der Tisch verlangt.
+  const showDecor = state !== "fresh" && state !== "blocked";
 
   return (
     <div
       data-state={state}
       title={
-        state === "working"
-          ? agent.running!.headline
-          : state === "idle"
-            ? `zuletzt: ${agent.last!.headline} · ${formatTime(agent.last!.startedAt)}`
-            : "noch nichts getan"
+        state === "blocked"
+          ? "Blockiert – wartet auf eine Klärung"
+          : state === "working"
+            ? agent.running!.headline
+            : state === "idle"
+              ? `zuletzt: ${agent.last!.headline} · ${formatTime(agent.last!.startedAt)}`
+              : "noch nichts getan"
       }
       className="office-desk flex flex-col items-center gap-2 rounded-lg px-1 py-2"
     >
-      <div className="office-desk-scene relative h-[5.75rem] w-full">
+      <div className="office-desk-scene relative h-[6.5rem] w-full">
         <div className="office-desk-surface" />
-        {state !== "fresh" && (
-          <DecorIcon className={`office-decor ${decorSide} h-4 w-4`} />
-        )}
+        {showDecor && <DecorIcon className={`office-decor ${decorSide} h-4 w-4`} />}
         {showSteam && <SteamIcon className={`office-steam ${decorSide === "corner-left" ? "left-[9%]" : "right-[9%]"} h-3.5 w-3`} />}
+        {state === "working" && <p className="office-bubble">{agent.running!.headline}</p>}
+        {state === "blocked" && <WarningIcon className="office-warning h-4 w-4" />}
         <div className="office-monitor-foot" />
         <div className="office-monitor" />
         {state === "working" && (
-          <div className="office-dots">
+          <div className="office-screen-lines">
             <span />
             <span />
             <span />
