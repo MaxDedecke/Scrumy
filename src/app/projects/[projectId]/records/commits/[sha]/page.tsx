@@ -32,6 +32,7 @@ export default async function CommitPage({
       <Panel
         title={`Commit ${sha.slice(0, 8)}`}
         padded={false}
+        className="card-ghost"
         action={
           <Link href={`/projects/${projectId}/records`} className="quiet-link font-medium">
             ← Nachweise

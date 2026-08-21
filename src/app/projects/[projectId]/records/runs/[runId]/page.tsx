@@ -44,7 +44,7 @@ export default async function AgentRunPage({
   return (
     <>
       <PanelStrip>
-        <div className="card flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 text-sm">
+        <div className="card card-ghost flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 text-sm">
           <Link href={`/projects/${projectId}/records`} className="quiet-link text-xs font-medium">
             ← Nachweise
           </Link>
@@ -77,7 +77,7 @@ export default async function AgentRunPage({
         // Rumpf selbst – sonst wuerde die Seite mit jeder Chatnachricht immer
         // laenger, statt an Ort und Stelle zu scrollen.
         <PanelGrid className="lg:grid-cols-1">
-          <Panel title="Verlauf" count={attempt.length} padded={false}>
+          <Panel title="Verlauf" count={attempt.length} padded={false} className="card-ghost">
             <h3 className="section-title px-4 pb-1 pt-3">Systemprompt</h3>
             <details className="px-4 pb-3">
               <summary className="cursor-pointer text-sm text-ink-3 hover:text-ink-2">
@@ -92,7 +92,7 @@ export default async function AgentRunPage({
         </PanelGrid>
       ) : (
         <PanelGrid className="lg:grid-cols-2">
-          <Panel title={run.error ? "Fehler" : "Antwort des Agenten"} padded={false}>
+          <Panel title={run.error ? "Fehler" : "Antwort des Agenten"} padded={false} className="card-ghost">
             {run.error ? (
               <pre className="whitespace-pre-wrap p-4 text-sm leading-relaxed text-critical">{run.error}</pre>
             ) : run.response ? (
@@ -108,7 +108,7 @@ export default async function AgentRunPage({
             )}
           </Panel>
 
-          <Panel title="Auftrag an das Modell" padded={false}>
+          <Panel title="Auftrag an das Modell" padded={false} className="card-ghost">
             <h3 className="section-title px-4 pb-1 pt-3">Systemprompt</h3>
             <pre className="whitespace-pre-wrap px-4 pb-4 text-sm leading-relaxed text-ink-2">
               {run.systemPrompt}
