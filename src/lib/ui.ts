@@ -48,9 +48,11 @@ export const iconButtonClass = `${iconButtonBaseClass} text-ink-3 hover:bg-surfa
 /// Eingeschalteter Zustand (Autopilot an) – Farbe UND gefülltes Icon.
 export const iconButtonOnClass = `${iconButtonBaseClass} bg-accent-soft text-accent hover:bg-accent-soft`;
 
-/// Gefüllte Primärfarbe als Icon-Button (z.B. Speichern-Diskette in dichten
-/// Listenzeilen) – dieselbe Farbe wie buttonPrimaryClass, nur ohne Text.
-export const iconButtonPrimaryClass = `${iconButtonBaseClass} bg-accent-solid text-canvas hover:bg-accent-solid-hover`;
+/// Icon-Button in Akzentfarbe: transparent statt gefüllt, grüner Umriss,
+/// grünes Icon – zu sehen ist nur das Icon, keine Farbfläche. Grundsätzliches
+/// Muster für JEDEN farbigen Icon-Button (nicht nur diesen hier): Hover
+/// hellt die Fläche nur leicht auf (accent-soft), statt sie voll zu füllen.
+export const iconButtonPrimaryClass = `${iconButtonBaseClass} border border-accent text-accent hover:bg-accent-soft`;
 
 /// Löschen/Entfernen in Listenzeilen: bleibt unauffällig, bis die Zeile
 /// überfahren wird (`group-hover` in der Zeile), und wird erst dann rot.
