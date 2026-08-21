@@ -313,6 +313,8 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   team_halted: "Team angehalten",
   autopilot_on: "Autopilot an",
   autopilot_off: "Autopilot aus",
+  work_mode_parallel: "Paralleler Arbeitsmodus an",
+  work_mode_sequential: "Paralleler Arbeitsmodus aus",
   repo_created: "Repository angelegt",
   repo_cloned: "Repository geklont",
   repo_reused: "Repository weiterverwendet",
