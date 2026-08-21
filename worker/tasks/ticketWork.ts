@@ -17,7 +17,12 @@ import { agentForRole, roleForTicket } from "@/lib/team";
 import { PRIORITY_LABEL, TICKET_TYPE_LABEL } from "@/lib/labels";
 import { optionsFromAgent, type ClarificationOption } from "@/lib/clarificationOptions";
 import { checkFailed, detectCheckTargets, formatCheckResults, runChecks, type CheckRunResult } from "@/lib/testRun";
-import { runAgentIntegrationCheck, type AgentIntegrationCheckResult } from "@/lib/liveStack";
+import {
+  findInternalHostnameLeaks,
+  formatInternalHostnameLeaks,
+  runAgentIntegrationCheck,
+  type AgentIntegrationCheckResult,
+} from "@/lib/liveStack";
 import type { Agent } from "@/generated/prisma/client";
 import { AgentRunError, logActivity, runAgent } from "../agentRun";
 import { buildProjectContext, TEAM_GRUNDREGELN } from "../projectContext";
@@ -1148,6 +1153,13 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
   // File) ist ein Infrastrukturgrund, kein Mangel an der Aenderung – nur ein
   // ECHTER Fehlschlag beim Hochfahren zaehlt als Befund.
   const integrationFailed = integrationResult !== null && !integrationResult.reachable && !integrationResult.unavailable;
+
+  // Deterministischer Textmuster-Scan statt Docker-Neubau, deshalb bei JEDEM
+  // Ticket mit Commit – nicht nur BUG/INTEGRATION/Cross-Service (siehe
+  // findInternalHostnameLeaks): genau diese Prüfung haette den echten
+  // Upload-Vorfall schon beim Entstehen gefunden, nicht erst beim
+  // Ausprobieren im Browser.
+  const hostnameLeaks = commit !== null ? await findInternalHostnameLeaks(dir) : [];
   const integrationReport = !integrationResult
     ? null
     : integrationResult.unavailable
@@ -1164,6 +1176,17 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
       agentId: reviewer.id,
       action: "integration_check",
       detail: `„${ticket.title}": ${integrationReport}`,
+    });
+  }
+
+  if (hostnameLeaks.length > 0) {
+    await logActivity({
+      projectId,
+      ticketId,
+      actor: reviewer.name,
+      agentId: reviewer.id,
+      action: "hostname_leak_found",
+      detail: `„${ticket.title}": interner Compose-Servicename im Browser-Code – ${formatInternalHostnameLeaks(hostnameLeaks)}`,
     });
   }
 
@@ -1193,7 +1216,11 @@ ${diff}
 ${checksRanForReal
   ? formatCheckResults(checkResults)
   : "(kein package.json mit test-/lint-/build-Skript gefunden, oder die automatische Prüfung war technisch nicht erreichbar – urteile allein aus dem Diff)"}
-${integrationReport ? `\n## Integrationsprüfung (echter Docker-Compose-Stack, Frontend+Backend+DB)\n${integrationReport}\n` : ""}
+${integrationReport ? `\n## Integrationsprüfung (echter Docker-Compose-Stack, Frontend+Backend+DB)\n${integrationReport}\n` : ""}${
+      hostnameLeaks.length > 0
+        ? `\n## Interner Compose-Servicename im Browser-Code gefunden\nDer Code eines veröffentlichten (im Browser geöffneten) Diensts verweist auf den Servicenamen eines NICHT veröffentlichten Diensts – so eine Adresse existiert nur im internen Docker-Netz, der Browser des Nutzers kann sie nicht auflösen:\n${formatInternalHostnameLeaks(hostnameLeaks)}\n`
+        : ""
+    }
 Prüfe: Erfüllt die Änderung das Ticket? Ist der Code in sich stimmig und passt er zum bestehenden Stand? Fehlt etwas Offensichtliches?
 
 Antworte nur mit diesem JSON-Objekt:
@@ -1237,7 +1264,13 @@ Antworte nur mit diesem JSON-Objekt:
             verdict: "rework" as const,
             comment: `Integrationsprüfung (voller Docker-Compose-Stack) ist fehlgeschlagen: ${integrationResult?.blockedReason} – das sticht die Einschätzung von ${reviewer.name}: ${parsedVerdict.comment}`,
           }
-        : parsedVerdict;
+        : hostnameLeaks.length > 0 && parsedVerdict.verdict !== "rework"
+          ? {
+              ...parsedVerdict,
+              verdict: "rework" as const,
+              comment: `Interner Compose-Servicename im Browser-Code gefunden (siehe Ergebnis oben) – im Browser des Nutzers nicht auflösbar. Das sticht die Einschätzung von ${reviewer.name}: ${parsedVerdict.comment}`,
+            }
+          : parsedVerdict;
 
   await logActivity({
     projectId,

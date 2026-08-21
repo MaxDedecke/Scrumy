@@ -40,6 +40,7 @@ import { prisma } from "@/lib/prisma";
 import { fail, note, ok, type ActionResult } from "@/lib/actions/result";
 import type { LiveTrigger, PreviewStatus } from "@/generated/prisma/client";
 import { testRunnerImage } from "@/lib/testRun";
+import { listTrackedFiles, readRepoFile } from "@/lib/workspace";
 
 const execFileAsync = promisify(execFile);
 
@@ -167,6 +168,121 @@ async function docker(args: string[], timeoutMs = 15_000): Promise<string> {
 
 async function dockerCompose(args: string[], timeoutMs = 20_000): Promise<string> {
   return docker(["compose", ...args], timeoutMs);
+}
+
+// --- Interne Compose-Hostnamen im Browser-Code -------------------------------
+
+export interface InternalHostnameLeak {
+  /// Repo-relativer Pfad der Fundstelle.
+  file: string;
+  /// Der Compose-Servicename, der hier auftaucht (z.B. "backend").
+  service: string;
+  line: number;
+  snippet: string;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/// Deterministische Prüfung gegen genau die Fehlerklasse, die den
+/// Datei-Upload im Knowledge-Hub-Projekt lahmgelegt hat (siehe
+/// [[scrumy-projekt]]): TEAM_GRUNDREGELN erlaubt es ausdrücklich, dass sich
+/// nicht veröffentlichte Dienste (Backend/DB) untereinander über ihren
+/// Compose-Servicenamen ansprechen, z.B. "http://backend:3000" – das ist eine
+/// Adresse, die NUR im internen Docker-Netz existiert. Taucht dieselbe
+/// Zeichenkette im Code eines VERÖFFENTLICHTEN Diensts auf (dem, den ein
+/// Mensch im Browser öffnet), landet sie im Browser des Nutzers – der kann
+/// "backend" nicht auflösen (ERR_NAME_NOT_RESOLVED). Weder das Diff-Review
+/// noch die bisherige Integrationsprüfung (runAgentIntegrationCheck) finden
+/// das zuverlässig, weil beide keinen echten Browser samt Client-JavaScript
+/// ausführen – diese Funktion sucht stattdessen direkt nach der Ursache,
+/// ohne Modellurteil: dem Servicenamen eines internen Diensts im Quelltext
+/// des Browser-Diensts.
+///
+/// Bewusst nur ein Textmuster ("service:port"), kein AST/Bundler-Verständnis
+/// – trifft damit auch minifizierte dist-Bundles (genau dort stand die
+/// Fundstelle im echten Vorfall) und jede Sprache, ohne pro Framework anders
+/// suchen zu müssen. Riskiert dafür vereinzelte falsche Treffer (z.B. ein
+/// Kommentar, der das absichtlich erklärt) – das ist ein akzeptabler Preis,
+/// QA urteilt am Ende ohnehin mit, kein automatischer Blocker ohne Review.
+export async function findInternalHostnameLeaks(repoDir: string): Promise<InternalHostnameLeak[]> {
+  const composeFile = await findComposeFile(repoDir);
+  if (!composeFile) return [];
+
+  let resolved: {
+    services?: Record<
+      string,
+      { ports?: Array<{ published?: unknown }>; build?: { context?: string } | string | null }
+    >;
+  };
+  try {
+    const raw = await dockerCompose(["-f", composeFile, "config", "--format", "json"]);
+    resolved = JSON.parse(raw);
+  } catch (error) {
+    console.error(`Hostnamen-Check: "docker compose config" für ${composeFile} fehlgeschlagen, übersprungen:`, error);
+    return [];
+  }
+
+  const services = resolved.services ?? {};
+  const publishedServices: string[] = [];
+  const internalOnlyServices: string[] = [];
+  for (const [name, service] of Object.entries(services)) {
+    const hasPublishedPort = (service.ports ?? []).some(
+      (port) => port.published !== undefined && port.published !== null && Number(port.published) > 0,
+    );
+    (hasPublishedPort ? publishedServices : internalOnlyServices).push(name);
+  }
+  // Nichts zu pruefen: kein interner Dienst, dessen Name leaken koennte, oder
+  // gar kein veroeffentlichter (Browser-)Dienst, dessen Code das Risiko traegt.
+  if (internalOnlyServices.length === 0 || publishedServices.length === 0) return [];
+
+  // "config" loest Build-Kontexte zu ABSOLUTEN Pfaden auf (siehe Kommentar bei
+  // preparePortSafeComposeFile) – zurueck zu repo-relativen Pfaden, damit sie
+  // sich mit listTrackedFiles decken.
+  const browserFacingDirs = publishedServices
+    .map((name) => {
+      const build = services[name]?.build;
+      const context = typeof build === "string" ? build : build?.context;
+      if (!context) return null;
+      const relative = path.relative(repoDir, context);
+      return relative && !relative.startsWith("..") ? relative : null;
+    })
+    .filter((dir): dir is string => Boolean(dir));
+  if (browserFacingDirs.length === 0) return [];
+
+  const files = await listTrackedFiles(repoDir);
+  const candidateFiles = files.filter(
+    (file) => !file.split("/").includes("node_modules") && browserFacingDirs.some((dir) => file === dir || file.startsWith(`${dir}/`)),
+  );
+
+  const patterns = internalOnlyServices.map((service) => ({
+    service,
+    pattern: new RegExp(`\\b${escapeRegExp(service)}\\s*:\\s*\\d+`, "i"),
+  }));
+
+  const findings: InternalHostnameLeak[] = [];
+  for (const file of candidateFiles) {
+    const content = await readRepoFile(repoDir, file);
+    if (!content) continue;
+    const lines = content.split("\n");
+    for (const { service, pattern } of patterns) {
+      lines.forEach((line, idx) => {
+        if (pattern.test(line)) {
+          findings.push({ file, service, line: idx + 1, snippet: line.trim().slice(0, 200) });
+        }
+      });
+    }
+  }
+  return findings;
+}
+
+/// Menschenlesbare Zusammenfassung fuer QA-Prompts, analog zu
+/// formatCheckResults in testRun.ts.
+export function formatInternalHostnameLeaks(leaks: InternalHostnameLeak[]): string {
+  return leaks
+    .map((leak) => `${leak.file}:${leak.line} – Servicename "${leak.service}" im Browser-Code: \`${leak.snippet}\``)
+    .join("\n");
 }
 
 // --- Aufraeumen -----------------------------------------------------------
