@@ -41,7 +41,7 @@ export default async function ProjectPreviewPage({
   return (
     <Panel
       title="Benutzeroberfläche"
-      className="flex-1"
+      className="card-ghost flex-1"
       padded={false}
       scroll={false}
       action={
