@@ -228,335 +228,135 @@
   }
 
   /* -------------------------------------------------------------------
-     Büroplan (AgentWorkspacePanel, Ansicht "office"): ein Raum statt eines
-     Icon-Rasters. Fensterband + Bodenlinien sind reine Atmosphäre, unabhängig
-     von der Agentenzahl. `--office-desk*` sind bewusst nur hier lokal
-     definiert (aus --color-surface-3 abgeleitet) statt im @theme oben – ein
-     einmaliger Holzton fürs Bürobild, kein neues App-weites Token.
+     Ampel-Ansicht (AgentWorkspacePanel, Ansicht "office"; 22.08.2026, löst
+     zuerst den Büroplan mit Tischen/Monitoren, dann ein festes Raster ab):
+     jeder Agent ist ein großes, glühendes Bällchen, das frei im Feld treibt
+     – Name, Rolle und (bei "arbeitet"/"blockiert") der Grund stehen direkt
+     im Bällchen, kein Text mehr daneben. Drei Farben tragen den Zustand –
+     neutral (nichts zu tun), grün-glühend (arbeitet), rot-glühend-
+     pulsierend (blockiert, wartet auf eine Klärung). Innerhalb von
+     "neutral" bleibt ein Detail erhalten, ohne die Farbe zu verlassen: ein
+     dünn gefüllter Ring heißt "hat noch nie etwas getan", matt gefüllt
+     heißt "zuletzt aktiv".
 
-     Vier Zustände statt drei (Desk() in AgentWorkspacePanel.tsx): "blocked"
-     hat Vorrang vor allem anderen – ein Agent, der auf eine Klärung wartet,
-     sah bis 21.08.2026 aus wie einer in der Kaffeepause (Stuhl abgerückt,
-     Monitor aus), ohne eigenes Signal. Jetzt bekommt er roten, pulsierenden
-     Monitor-Glow + Warndreieck. "working" zeigt zusätzlich eine Sprechblase
-     mit der laufenden Aufgabe (vorher nur im Hover-Tooltip) und ein paar
-     Bildschirmzeilen statt nur der Glow-Farbe; "idle" zeigt ein dezentes
-     "z z" im Bildschirm. Alle drei sind reine CSS-Erweiterungen derselben
-     Tisch-DOM-Struktur, kein neues Layout.
+     Die Wander-Bewegung ist reines CSS, kein JS-Loop: `floatStyle()` in
+     AgentWorkspacePanel.tsx setzt pro Bällchen eine Startposition (`left`/
+     `top`, aus der Agenten-ID gehasht) plus vier Richtungswerte `--dx1/--dy1/
+     --dx2/--dy2`. `@keyframes orb-drift` benutzt diese Variablen an zwei
+     Zwischenpunkten – der Browser interpoliert zwischen den daraus
+     entstehenden, für jedes Bällchen fixen `transform`-Werten ganz normal
+     weiter, ohne dass `--dx*`/`--dy*` selbst animierbar sein müssen (kein
+     `@property` nötig). Dauer/Verzögerung kommen ebenfalls pro Bällchen aus
+     der ID, damit nicht alle synchron treiben.
      ------------------------------------------------------------------- */
-  .office-room {
-    --office-desk: color-mix(in oklab, var(--color-surface-3) 82%, #8a6a3c 18%);
-    --office-desk-edge: color-mix(in oklab, var(--office-desk) 80%, white 8%);
+  .orb-field {
     position: relative;
+    flex: 1 1 auto;
+    min-height: 20rem;
     overflow: hidden;
-    background:
-      linear-gradient(var(--color-accent-soft), transparent 30%),
-      repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 28px),
-      var(--color-surface);
   }
 
-  .office-room::before {
-    content: "";
+  .orb-bubble {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: var(--color-hairline-strong);
+    width: 7rem;
+    height: 7rem;
+    animation-name: orb-drift;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+    cursor: default;
   }
 
-  /* Feste zwei Zeilen statt frei wachsender Reihen: die Spaltenzahl kommt
-     inline vom Panel (Math.ceil(Agentenzahl / 2)), hier steht nur noch die
-     Zeilenhöhe fest. Reicht die Breite nicht, scrollt der Tisch-Bereich
-     horizontal statt eine dritte Zeile anzufangen. */
-  .office-desks {
-    display: grid;
-    grid-template-rows: repeat(2, minmax(0, 1fr));
-    grid-auto-flow: row;
-    gap: 1.125rem 0.875rem;
-    overflow-x: auto;
-    padding-bottom: 0.25rem;
+  @keyframes orb-drift {
+    0%,
+    100% {
+      transform: translate(-50%, -50%) translate(0, 0);
+    }
+    33% {
+      transform: translate(-50%, -50%) translate(var(--dx1), var(--dy1));
+    }
+    66% {
+      transform: translate(-50%, -50%) translate(var(--dx2), var(--dy2));
+    }
   }
 
-  .office-desk {
+  .orb-bubble-face {
+    border-radius: 50%;
+    background: transparent;
+    border: 1.5px solid var(--color-ink-4);
+    opacity: 0.55;
+    color: var(--color-ink-2);
     transition:
-      transform 150ms ease,
-      background-color 150ms ease;
+      background-color 260ms ease,
+      border-color 260ms ease,
+      box-shadow 260ms ease,
+      opacity 260ms ease,
+      color 260ms ease;
   }
 
-  .office-desk:hover {
-    transform: translateY(-2px);
-    background-color: rgba(255, 255, 255, 0.02);
+  /* idle: schon einmal gearbeitet, gerade nichts zu tun – gefüllt statt nur
+     Ring, aber matt. */
+  .orb-bubble[data-state="idle"] .orb-bubble-face {
+    background: color-mix(in oklab, var(--color-ink-4) 45%, var(--color-surface-2));
+    opacity: 1;
+    color: var(--color-ink);
   }
 
-  .office-desk-surface {
-    position: absolute;
-    left: 8%;
-    right: 8%;
-    bottom: 0.75rem;
-    height: 0.875rem;
-    background: linear-gradient(
-      180deg,
-      var(--office-desk-edge),
-      var(--office-desk) 55%,
-      color-mix(in oklab, var(--office-desk) 68%, black) 100%
+  .orb-bubble[data-state="working"] .orb-bubble-face {
+    border-color: color-mix(in oklab, var(--color-good) 70%, transparent);
+    background: radial-gradient(
+      circle at 35% 30%,
+      color-mix(in oklab, var(--color-good) 65%, white 25%),
+      var(--color-good) 68%
     );
-    border: 1px solid var(--color-hairline);
-    border-top-color: var(--office-desk-edge);
-    border-radius: 0.25rem;
-    box-shadow: 0 0.3rem 0.5rem -0.3rem rgba(0, 0, 0, 0.5);
-  }
-
-  .office-chair {
-    position: absolute;
-    left: 50%;
-    bottom: -0.125rem;
-    color: var(--color-ink-4);
-    transition: transform 220ms ease;
-  }
-
-  .office-desk[data-state="working"] .office-chair {
-    transform: translate(-50%, 0) scale(0.92);
-  }
-
-  .office-desk[data-state="idle"] .office-chair,
-  .office-desk[data-state="blocked"] .office-chair {
-    transform: translate(-115%, 0) rotate(-18deg);
-  }
-
-  .office-desk[data-state="fresh"] .office-chair {
-    transform: translate(-50%, 0);
-    opacity: 0.6;
-  }
-
-  .office-monitor-foot {
-    position: absolute;
-    left: 50%;
-    bottom: 1.25rem;
-    transform: translateX(-50%);
-    width: 0.5rem;
-    height: 0.1875rem;
-    background: var(--color-ink-4);
-    border-radius: 1px;
-  }
-
-  .office-monitor {
-    position: absolute;
-    left: 50%;
-    bottom: 1.5rem;
-    transform: translateX(-50%);
-    width: 2.375rem;
-    height: 1.75rem;
-    border-radius: 0.35rem;
-    border: 1.75px solid var(--color-ink-4);
-    background: linear-gradient(160deg, var(--color-surface-3), var(--color-surface-2));
-    transition:
-      box-shadow 220ms ease,
-      border-color 220ms ease,
-      background-color 220ms ease;
-  }
-
-  .office-desk[data-state="working"] .office-monitor {
-    border-color: var(--color-good);
-    background: color-mix(in oklab, var(--color-good) 55%, var(--color-surface-2));
+    opacity: 1;
+    color: var(--color-canvas);
     box-shadow:
-      0 0 0 1px color-mix(in oklab, var(--color-good) 40%, transparent),
-      0 0 0.65rem 0.05rem color-mix(in oklab, var(--color-good) 55%, transparent);
+      0 0 0.2rem 0.05rem color-mix(in oklab, var(--color-good) 70%, transparent),
+      0 0 1.1rem 0.2rem color-mix(in oklab, var(--color-good) 55%, transparent),
+      0 0 2.5rem 0.5rem color-mix(in oklab, var(--color-good) 30%, transparent);
   }
 
-  /* Bildschirminhalt statt nur Farbe: bei "arbeitet" ein paar Textzeilen,
-     bei "zuletzt aktiv" ein dezentes "z z" – der Bildschirm sagt selbst,
-     ob gerade etwas läuft oder nur pausiert wird. */
-  .office-screen-lines {
-    position: absolute;
-    left: 50%;
-    bottom: 1.72rem;
-    transform: translateX(-50%);
-    width: 1.7rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.14rem;
-    pointer-events: none;
-  }
-
-  .office-screen-lines span {
-    height: 1.5px;
-    border-radius: 1px;
-    background: color-mix(in oklab, var(--color-canvas) 70%, transparent);
-  }
-
-  .office-screen-lines span:nth-child(1) {
-    width: 100%;
-  }
-
-  .office-screen-lines span:nth-child(2) {
-    width: 68%;
-  }
-
-  .office-screen-lines span:nth-child(3) {
-    width: 85%;
-  }
-
-  .office-desk[data-state="idle"] .office-monitor::after {
-    content: "z z";
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
-    font-size: 0.5625rem;
-    letter-spacing: 0.08em;
-    color: var(--color-ink-4);
-  }
-
-  /* Blockiert: eigener dritter Signalzustand statt "sieht aus wie Pause" –
-     roter Rahmen + pulsierender Glow, dazu das Warndreieck darüber
-     (`.office-warning`, siehe Desk() in AgentWorkspacePanel.tsx). */
-  .office-desk[data-state="blocked"] .office-monitor {
-    border-color: var(--color-critical);
-    background: color-mix(in oklab, var(--color-critical) 30%, var(--color-surface-2));
+  .orb-bubble[data-state="blocked"] .orb-bubble-face {
+    border-color: color-mix(in oklab, var(--color-critical) 70%, transparent);
+    background: radial-gradient(
+      circle at 35% 30%,
+      color-mix(in oklab, var(--color-critical) 65%, white 25%),
+      var(--color-critical) 68%
+    );
+    opacity: 1;
+    color: var(--color-canvas);
     box-shadow:
-      0 0 0 1px color-mix(in oklab, var(--color-critical) 45%, transparent),
-      0 0 0.65rem 0.05rem color-mix(in oklab, var(--color-critical) 55%, transparent);
-    animation: office-alert 1.8s ease-in-out infinite;
+      0 0 0.2rem 0.05rem color-mix(in oklab, var(--color-critical) 70%, transparent),
+      0 0 1.1rem 0.2rem color-mix(in oklab, var(--color-critical) 55%, transparent),
+      0 0 2.5rem 0.5rem color-mix(in oklab, var(--color-critical) 30%, transparent);
+    animation: orb-alert 1.8s ease-in-out infinite;
   }
 
-  @keyframes office-alert {
+  /* Nur die Helligkeit pulsiert, nicht die Größe – der Text im Bällchen
+     soll dabei ruhig lesbar bleiben, die Wander-Animation sitzt bereits auf
+     `transform` des äußeren `.orb-bubble`. */
+  @keyframes orb-alert {
     0%,
     100% {
       filter: brightness(1);
     }
     50% {
-      filter: brightness(1.28);
+      filter: brightness(1.22);
     }
   }
 
-  .office-warning {
-    position: absolute;
-    left: 50%;
-    bottom: 3.5rem;
-    transform: translateX(-50%);
-    color: var(--color-critical);
+  .orb-bubble-name {
+    color: inherit;
   }
 
-  /* Sprechblase über arbeitenden Tischen: derselbe Text, der bisher nur im
-     Tooltip stand, jetzt fest sichtbar – einzeilig, kappt selbst per
-     Ellipsis statt den Tisch in der Breite zu sprengen. */
-  .office-bubble {
-    position: absolute;
-    bottom: 3.45rem;
-    left: 50%;
-    transform: translateX(-50%);
-    max-width: 8.75rem;
-    margin: 0;
-    border-radius: 0.5rem;
-    border: 1px solid var(--color-hairline-strong);
-    background: var(--color-surface-3);
-    padding: 0.28rem 0.5rem;
-    font-size: 0.6875rem;
-    line-height: 1.3;
-    color: var(--color-ink-2);
-    text-align: center;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    pointer-events: none;
+  .orb-bubble-role {
+    color: inherit;
+    opacity: 0.75;
   }
 
-  .office-bubble::after {
-    content: "";
-    position: absolute;
-    left: 50%;
-    bottom: -0.3rem;
-    transform: translateX(-50%);
-    border: 0.3rem solid transparent;
-    border-top-color: var(--color-surface-3);
-  }
-
-  .office-person {
-    position: absolute;
-    left: 50%;
-    color: var(--color-good);
-    transition:
-      transform 220ms ease,
-      opacity 220ms ease;
-  }
-
-  .office-desk[data-state="working"] .office-person {
-    bottom: 1.75rem;
-    transform: translateX(-50%) scale(0.85);
-  }
-
-  .office-desk[data-state="idle"] .office-person,
-  .office-desk[data-state="blocked"] .office-person {
-    bottom: -0.0625rem;
-    transform: translateX(-135%);
-  }
-
-  .office-desk[data-state="idle"] .office-person {
-    opacity: 0.85;
-  }
-
-  .office-desk[data-state="blocked"] .office-person {
-    opacity: 0.9;
-    color: var(--color-critical);
-  }
-
-  .office-desk[data-state="fresh"] .office-person {
-    bottom: -0.0625rem;
-    transform: translateX(-50%);
-    opacity: 0.55;
-  }
-
-  /* Deko-Item (Pflanze/Tasse/Bücherstapel/Bild) – deterministisch aus der
-     Agenten-ID gewählt, siehe agentDecor() im Panel. Sekundär, tritt nie
-     gegen die Statusfarben des Monitors an. */
-  .office-decor {
-    position: absolute;
-    bottom: 1.4375rem;
-    color: var(--color-ink-4);
-  }
-
-  .office-decor.corner-left {
-    left: 9%;
-  }
-
-  .office-decor.corner-right {
-    right: 9%;
-  }
-
-  .office-steam {
-    position: absolute;
-    bottom: 2.1rem;
-    color: var(--color-ink-4);
-    opacity: 0.55;
-  }
-
-  .office-steam path {
-    animation: office-drift 2.8s ease-in-out infinite;
-    transform-origin: bottom center;
-  }
-
-  @keyframes office-drift {
-    0%,
-    100% {
-      transform: translateY(0) scaleY(1);
-      opacity: 0.5;
-    }
-    50% {
-      transform: translateY(-2px) scaleY(1.08);
-      opacity: 0.85;
-    }
-  }
-
-  .office-nameplate {
-    background: var(--color-surface-3);
-    border: 1px solid var(--color-hairline-strong);
-  }
-
-  .office-desk[data-state="fresh"] .office-nameplate {
-    color: var(--color-ink-2);
+  .orb-bubble-caption {
+    color: inherit;
+    opacity: 0.7;
   }
 
   /* -------------------------------------------------------------------
@@ -647,8 +447,12 @@
       animation: none;
     }
 
-    .office-desk[data-state="blocked"] .office-monitor,
-    .office-steam path {
+    .orb-bubble {
+      animation: none;
+      transform: translate(-50%, -50%);
+    }
+
+    .orb-bubble[data-state="blocked"] .orb-bubble-face {
       animation: none;
     }
 

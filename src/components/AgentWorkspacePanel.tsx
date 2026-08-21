@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AgentRole, AgentStatus, InquiryStatus } from "@/generated/prisma/client";
 import {
   AGENT_ROLE_LABEL,
@@ -13,20 +13,7 @@ import { ActionForm } from "@/components/ActionForm";
 import { AgentResponse } from "@/components/AgentResponse";
 import { IconSubmit } from "@/components/IconSubmit";
 import { Panel, PanelEmpty } from "@/components/Panel";
-import {
-  BooksIcon,
-  ChairIcon,
-  ChatIcon,
-  FrameIcon,
-  GridIcon,
-  ListIcon,
-  MugIcon,
-  PersonIcon,
-  PlantIcon,
-  SendIcon,
-  SteamIcon,
-  WarningIcon,
-} from "@/components/icons";
+import { ChatIcon, GridIcon, ListIcon, SendIcon } from "@/components/icons";
 import { askTeam } from "@/lib/actions/team";
 import { iconButtonClass, inputClass } from "@/lib/ui";
 
@@ -100,7 +87,7 @@ export function AgentWorkspacePanel({
       title={MODE_TITLE[mode]}
       count={mode === "chat" ? inquiries.length : agents.length}
       padded={false}
-      scroll={mode !== "chat"}
+      scroll={mode === "list"}
       className={className}
       collapsible
       collapsedView={
@@ -245,70 +232,71 @@ function AgentListView({ agents }: { agents: AgentWorkspaceEntry[] }) {
   );
 }
 
-type DeskState = "working" | "idle" | "fresh" | "blocked";
-type Decor = "plant" | "mug" | "books" | "frame";
+type AgentState = "working" | "idle" | "fresh" | "blocked";
 
-const DECOR_ICON: Record<Decor, (props: { className?: string }) => ReactNode> = {
-  plant: PlantIcon,
-  mug: MugIcon,
-  books: BooksIcon,
-  frame: FrameIcon,
-};
-
-// Stabiler String-Hash statt Math.random(): dasselbe Deko-Item bei jedem
-// Rerender, damit man Kolleg:innen am Tisch wiedererkennt statt bei jedem
-// Laden neu zu würfeln.
+// Stabiler String-Hash statt Math.random(): dieselbe Startposition/Drift-Bahn
+// bei jedem Rerender, sonst würde jeder Server-Render die Bällchen neu
+// verteilen und der Eindruck von Bewegung ginge in Sprüngen unter statt in
+// echtem Treiben.
 function hash(input: string): number {
   let h = 0;
   for (let i = 0; i < input.length; i++) h = (h * 31 + input.charCodeAt(i)) >>> 0;
   return h;
 }
 
-function agentDecor(id: string): Decor {
-  const decors: Decor[] = ["plant", "mug", "books", "frame"];
-  return decors[hash(id) % decors.length];
+// Position + Wander-Bahn eines Bällchens, komplett aus der Agenten-ID
+// abgeleitet: Startpunkt irgendwo im Feld (mit Rand, damit der 7rem-Kreis nie
+// mittig am Panelrand startet), zwei Drift-Ziele in unterschiedliche
+// Richtungen, plus eine eigene Umlaufdauer/Startverzögerung, damit nicht alle
+// Bällchen synchron "atmen". `--dx*`/`--dy*` sind CSS-Variablen, die
+// `@keyframes orb-drift` (globals.css) an zwei Zwischenpunkten einsetzt – der
+// Browser interpoliert zwischen den daraus entstehenden, für jedes Bällchen
+// fixen `transform`-Werten ganz normal weiter.
+function floatStyle(id: string): CSSProperties {
+  const left = 12 + (hash(`${id}:x`) % 72);
+  const top = 14 + (hash(`${id}:y`) % 64);
+  const sign = (n: number) => (n % 2 === 0 ? 1 : -1);
+  const dx1 = sign(hash(`${id}:dx1`)) * (2.5 + (hash(`${id}:dx1`) % 4));
+  const dy1 = sign(hash(`${id}:dy1`)) * (2 + (hash(`${id}:dy1`) % 3));
+  const dx2 = sign(hash(`${id}:dx2`)) * (2 + (hash(`${id}:dx2`) % 4));
+  const dy2 = sign(hash(`${id}:dy2`)) * (2.5 + (hash(`${id}:dy2`) % 3));
+  const duration = 16 + (hash(`${id}:dur`) % 11);
+  const delay = -(hash(`${id}:delay`) % duration);
+
+  return {
+    left: `${left}%`,
+    top: `${top}%`,
+    animationDuration: `${duration}s`,
+    animationDelay: `${delay}s`,
+    "--dx1": `${dx1}rem`,
+    "--dy1": `${dy1}rem`,
+    "--dx2": `${dx2}rem`,
+    "--dy2": `${dy2}rem`,
+  } as CSSProperties;
 }
 
-// Feste Pipeline-Reihenfolge (siehe AGENT_ROLE_LABEL) statt Auftrittsreihenfolge:
-// Agenten derselben Rolle landen im Raster nebeneinander, ohne dass es dafür
-// eine eigene Gruppen-Zeile braucht.
-const ROLE_ORDER = Object.keys(AGENT_ROLE_LABEL) as AgentRole[];
-
-// Der Büroplan: alle Tische in einem Raster mit fest zwei Zeilen – so viele
-// Spalten wie nötig, dazu horizontales Scrollen statt einer dritten Zeile.
-// Jeder Tisch trägt vier Zustandssignale, die alleine (auch in Graustufen
-// über Position/Form) den Blick tragen: Monitor leuchtet grün + Stuhl ist
-// herangerückt + Sprechblase mit der laufenden Aufgabe = arbeitet; Monitor
-// zeigt "z z" + Stuhl abgerückt = zuletzt aktiv; Monitor aus + Stuhl mittig,
-// kein Deko-Item = noch nie etwas getan; Monitor pulsiert rot + Warndreieck
-// = blockiert, wartet auf eine Klärung (siehe Desk() unten – hat Vorrang vor
-// den anderen drei, unabhängig davon, ob gerade ein Lauf offen ist). Ein
-// festes Deko-Item pro Person (aus der ID abgeleitet) und Dampf an der Tasse
-// bei einer Pause sind reine Atmosphäre und nie das einzige Signal.
+// Die Ampel-Ansicht (22.08.2026, löst zuerst den Büroplan mit
+// Tischen/Monitoren, dann das feste Raster ab): jeder Agent ist ein Bällchen,
+// das frei im verfügbaren Platz der Karte treibt statt in einer Zeile zu
+// stehen – Name, Rolle und (bei "arbeitet"/"blockiert") der Grund stehen
+// direkt im Bällchen. Drei Farben tragen den Zustand – neutral (nichts zu
+// tun), grün-glühend (arbeitet), rot-glühend-pulsierend (blockiert). Innerhalb
+// von "neutral" bleibt ein Detail erhalten, ohne die Farbe zu verlassen: Ring
+// mit dünner Füllung = noch nie etwas getan, matt gefüllt = zuletzt aktiv.
+// "blocked" hat Vorrang vor allem anderen, unabhängig davon, ob gerade ein
+// Lauf offen ist.
 function AgentOfficeView({ agents }: { agents: AgentWorkspaceEntry[] }) {
-  const ordered = [...agents].sort(
-    (a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role),
-  );
-  // So viele Spalten, wie nötig sind, um bei zwei Zeilen alle unterzubringen –
-  // Reihenfolge bleibt links-nach-rechts, oben-nach-unten wie beim Lesen.
-  const columns = Math.max(1, Math.ceil(ordered.length / 2));
-
   return (
-    <div className="office-room p-4">
-      <div className="office-desks" style={{ gridTemplateColumns: `repeat(${columns}, minmax(6.75rem, 1fr))` }}>
-        {ordered.map((agent) => (
-          <Desk key={agent.id} agent={agent} />
-        ))}
-      </div>
+    <div className="orb-field">
+      {agents.map((agent) => (
+        <AgentOrb key={agent.id} agent={agent} />
+      ))}
     </div>
   );
 }
 
-function Desk({ agent }: { agent: AgentWorkspaceEntry }) {
-  // "blocked" hat Vorrang vor running/last: ein Agent, der auf eine Klärung
-  // wartet, ist nicht einfach "gerade untätig" – ohne diesen Vorrang sähe er
-  // im Büroplan aus wie einer in der Kaffeepause (siehe globals.css).
-  const state: DeskState =
+function AgentOrb({ agent }: { agent: AgentWorkspaceEntry }) {
+  const state: AgentState =
     agent.status === "BLOCKED"
       ? "blocked"
       : agent.running !== null
@@ -316,13 +304,10 @@ function Desk({ agent }: { agent: AgentWorkspaceEntry }) {
         : agent.last !== null
           ? "idle"
           : "fresh";
-  const decor = agentDecor(agent.id);
-  const decorSide = hash(`${agent.id}:side`) % 2 === 0 ? "corner-left" : "corner-right";
-  const DecorIcon = DECOR_ICON[decor];
-  const showSteam = state === "idle" && decor === "mug";
-  // Blockiert bleibt bewusst ohne Deko: das Warndreieck soll der einzige
-  // Blick sein, den der Tisch verlangt.
-  const showDecor = state !== "fresh" && state !== "blocked";
+
+  // Bei "arbeitet"/"blockiert" steht der Grund jetzt fest im Bällchen statt
+  // nur im Hover-Tooltip.
+  const caption = state === "working" ? agent.running!.headline : state === "blocked" ? "wartet auf Klärung" : null;
 
   return (
     <div
@@ -336,30 +321,20 @@ function Desk({ agent }: { agent: AgentWorkspaceEntry }) {
               ? `zuletzt: ${agent.last!.headline} · ${formatTime(agent.last!.startedAt)}`
               : "noch nichts getan"
       }
-      className="office-desk flex flex-col items-center gap-2 rounded-lg px-1 py-2"
+      className="orb-bubble"
+      style={floatStyle(agent.id)}
     >
-      <div className="office-desk-scene relative h-[6.5rem] w-full">
-        <div className="office-desk-surface" />
-        {showDecor && <DecorIcon className={`office-decor ${decorSide} h-4 w-4`} />}
-        {showSteam && <SteamIcon className={`office-steam ${decorSide === "corner-left" ? "left-[9%]" : "right-[9%]"} h-3.5 w-3`} />}
-        {state === "working" && <p className="office-bubble">{agent.running!.headline}</p>}
-        {state === "blocked" && <WarningIcon className="office-warning h-4 w-4" />}
-        <div className="office-monitor-foot" />
-        <div className="office-monitor" />
-        {state === "working" && (
-          <div className="office-screen-lines">
-            <span />
-            <span />
-            <span />
-          </div>
+      <div className="orb-bubble-face flex h-full w-full flex-col items-center justify-center gap-0.5 rounded-full px-2 text-center">
+        <span className="orb-bubble-name w-full truncate text-[0.8rem] font-semibold leading-tight">
+          {agent.name}
+        </span>
+        <span className="orb-bubble-role w-full truncate text-[0.6rem] leading-tight">
+          {AGENT_ROLE_LABEL[agent.role]}
+        </span>
+        {caption && (
+          <span className="orb-bubble-caption line-clamp-2 w-full text-[0.55rem] leading-tight">{caption}</span>
         )}
-        <ChairIcon className="office-chair h-[1.375rem] w-[1.375rem]" />
-        <PersonIcon filled={state === "working"} className="office-person h-6 w-6" />
       </div>
-      <span className="office-nameplate w-full truncate rounded-full px-2 py-0.5 text-center text-xs font-medium text-ink">
-        {agent.name}
-      </span>
-      <span className="w-full truncate text-center text-[10.5px] text-ink-3">{AGENT_ROLE_LABEL[agent.role]}</span>
     </div>
   );
 }
