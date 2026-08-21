@@ -10,6 +10,7 @@ import "dotenv/config";
 import { run } from "graphile-worker";
 import { taskList } from "./tasks";
 import { reconcileOrphanWorkspaces, reconcileStaleRuns } from "./reconcile";
+import { reconcileStaleLiveStarts } from "@/lib/liveStack";
 
 /// Wie oft nach verwaisten Laeufen gesucht wird. Beim Start einmal sofort,
 /// danach stuendlich – ein abgestuerzter Nachbar-Worker soll nicht bis zum
@@ -30,6 +31,16 @@ async function reconcile() {
     await reconcileOrphanWorkspaces();
   } catch (error) {
     console.error("[worker] Aufraeumen verwaister Arbeitsverzeichnisse fehlgeschlagen:", error);
+  }
+
+  // Wieder eigener try-Block: siehe reconcileStaleLiveStarts – ein durch
+  // diesen Neustart abgebrochener Live-Stack-Start darf die anderen beiden
+  // Aufraeumschritte nicht mitreissen (und umgekehrt).
+  try {
+    const fixed = await reconcileStaleLiveStarts();
+    if (fixed > 0) console.log(`[worker] ${fixed} durch Neustart unterbrochene Live-Stack-Starts aufgeraeumt.`);
+  } catch (error) {
+    console.error("[worker] Aufraeumen unterbrochener Live-Stack-Starts fehlgeschlagen:", error);
   }
 }
 

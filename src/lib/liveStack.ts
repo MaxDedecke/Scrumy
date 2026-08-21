@@ -394,6 +394,54 @@ export async function reconcileOrphanLiveStacks(): Promise<number> {
   return removed;
 }
 
+/// Sicherheitsnetz wie reconcileStaleRuns in worker/reconcile.ts, nur fuer den
+/// Live-Stack-Start: stirbt der App-/Worker-Container waehrend "docker compose
+/// up --build" noch laeuft (siehe startLiveStack – der Prozess ist ein
+/// Kind-Prozess GENAU dieses Containers, "detached"/"unref" schuetzt ihn nicht
+/// vor einem Container-Neustart, z.B. beim Ausrollen einer neuen Version),
+/// bleibt das Projekt in der Datenbank auf STARTING stehen, obwohl niemand
+/// mehr daran arbeitet. getLiveStackInfo wuerde das von selbst erkennen, aber
+/// erst nach dem grosszuegigen START_TIMEOUT_MS (15 Minuten) – bis dahin
+/// meldet jeder neue Startversuch faelschlich "Die Anwendung läuft bereits.".
+/// Direkt nach einem Neustart DIESES Prozesses wissen wir dagegen sicher, dass
+/// kein "docker compose up" mehr laeuft (er war zwangslaeufig ein Kind-Prozess
+/// des alten Containers) – deshalb hier ohne Wartezeit: existiert noch KEIN
+/// einziger Container fuer diesen Stack, war der Start-Versuch endgueltig
+/// unterbrochen. Existieren schon welche (der Build kam vor dem Neustart noch
+/// bis "up" durch), ueberlaesst diese Funktion die Entscheidung dem naechsten
+/// getLiveStackInfo-Aufruf – der prueft dann Health/ExitCode wie gewohnt.
+export async function reconcileStaleLiveStarts(): Promise<number> {
+  const stuck = await prisma.project.findMany({
+    where: { liveStatus: "STARTING" },
+    select: { id: true, workspacePath: true },
+  });
+
+  let fixed = 0;
+  for (const project of stuck) {
+    if (!project.workspacePath) continue;
+
+    const name = liveProjectName(project.id);
+    const composeFile = await findComposeFile(project.workspacePath);
+    const psRaw = composeFile
+      ? await dockerCompose(["-f", composeFile, "-p", name, "ps", "-a", "--format", "json"]).catch(() => "")
+      : "";
+    if (parseComposePs(psRaw).length > 0) continue;
+
+    await prisma.project.update({
+      where: { id: project.id },
+      data: {
+        liveStatus: "ERROR",
+        liveError: "Start wurde durch einen Neustart von Scrumy unterbrochen, bevor ein Container hochkam.",
+        livePort: null,
+        liveService: null,
+      },
+    });
+    removeLiveLog(project.id);
+    fixed++;
+  }
+  return fixed;
+}
+
 // --- Status lesen ------------------------------------------------------------
 
 interface ComposePublisher {
