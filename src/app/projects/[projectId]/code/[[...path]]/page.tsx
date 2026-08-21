@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { listTrackedFiles, readRepoFileForViewer, REPO_VIEWER_MAX_BYTES } from "@/lib/workspace";
+import { highlightFileContent } from "@/lib/highlight";
 import { FileTreePanel } from "@/components/FileTreePanel";
 import { Panel, PanelEmpty, PanelGrid } from "@/components/Panel";
 
@@ -26,9 +27,13 @@ export default async function ProjectCodePage({
   const selectedPath = pathSegments?.map(decodeURIComponent).join("/");
 
   let fileView: Awaited<ReturnType<typeof readRepoFileForViewer>> = null;
+  let highlightedHtml: string | null = null;
   if (selectedPath) {
     fileView = project.workspacePath ? await readRepoFileForViewer(project.workspacePath, selectedPath) : null;
     if (!fileView) notFound();
+    if (!fileView.binary) {
+      highlightedHtml = await highlightFileContent(selectedPath, fileView.content);
+    }
   }
 
   return (
@@ -48,9 +53,10 @@ export default async function ProjectCodePage({
           <PanelEmpty>Binärdatei ({formatSize(fileView!.size)}) – keine Textvorschau möglich.</PanelEmpty>
         ) : (
           <>
-            <pre className="overflow-x-auto p-4 font-mono text-xs leading-relaxed text-ink-2">
-              {fileView!.content}
-            </pre>
+            <div
+              className="overflow-x-auto p-4 font-mono text-xs leading-relaxed [&_pre]:!bg-transparent [&_pre]:whitespace-pre"
+              dangerouslySetInnerHTML={{ __html: highlightedHtml! }}
+            />
             {fileView!.truncated && (
               <p className="border-t border-hairline px-4 py-2 text-xs text-ink-4">
                 Datei gekürzt – nur die ersten {formatSize(REPO_VIEWER_MAX_BYTES)} von {formatSize(fileView!.size)}{" "}
