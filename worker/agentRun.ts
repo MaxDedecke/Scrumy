@@ -253,6 +253,67 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentR
   }
 }
 
+export interface TrackedToolRunOptions {
+  agent: Agent;
+  projectId: string;
+  ticketId?: string;
+  sprintId?: string;
+  kind: string;
+  headline: string;
+  prompt: string;
+}
+
+/// Begleitet einen einzelnen, potenziell lange laufenden Werkzeugaufruf
+/// (siehe LONG_RUNNING_TOOLS in worker/agentTools.ts) mit einem eigenen
+/// `AgentRun`, der waehrend der Ausfuehrung `RUNNING` ist.
+///
+/// Ohne das existiert fuer die ganze Laufzeit eines `docker compose up`/
+/// Testlaufs kein einziger laufender Run: Der Turn, der den Aufruf angefordert
+/// hat, ist schon `SUCCEEDED` (das Modell hat ja schon geantwortet, bevor das
+/// Werkzeug ueberhaupt startet), der naechste Turn entsteht erst, wenn das
+/// Werkzeug fertig ist. Das Buero (office/page.tsx, sucht nur nach
+/// `status: "RUNNING"`) zeigt den Agenten in dieser Luecke faelschlich als
+/// untaetig, die Nachweisliste zeigt zuletzt "Erledigt" – obwohl der Agent
+/// gerade auf einen Build/Test wartet.
+export async function runTrackedTool<T extends { content: string; isError: boolean }>(
+  options: TrackedToolRunOptions,
+  run: () => Promise<T>,
+): Promise<T> {
+  const { agent, projectId, ticketId, sprintId, kind, headline, prompt } = options;
+
+  const agentRun = await prisma.agentRun.create({
+    data: { projectId, agentId: agent.id, ticketId, sprintId, kind, headline, systemPrompt: "", prompt },
+  });
+  await prisma.agent.update({ where: { id: agent.id }, data: { status: "WORKING" } });
+  const startedAt = Date.now();
+
+  try {
+    const result = await run();
+    await prisma.agentRun.update({
+      where: { id: agentRun.id },
+      data: {
+        status: result.isError ? "FAILED" : "SUCCEEDED",
+        response: result.content.slice(0, 20_000),
+        error: result.isError ? result.content.slice(0, 2000) : null,
+        finishedAt: new Date(),
+        durationMs: Date.now() - startedAt,
+      },
+    });
+    return result;
+  } catch (error) {
+    // Sollte executeTool() selbst je unerwartet werfen (statt isError zurueck-
+    // zugeben): den Platzhalter trotzdem abschliessen, sonst bleibt eine
+    // Run-Leiche mit status RUNNING liegen, die das Buero dauerhaft als
+    // "arbeitet" zeigt.
+    const message = error instanceof Error ? error.message : String(error);
+    await prisma.agentRun.update({
+      where: { id: agentRun.id },
+      data: { status: "FAILED", error: message, finishedAt: new Date(), durationMs: Date.now() - startedAt },
+    });
+    throw error;
+  }
+}
+
 async function failRun(runId: string, agentId: string, message: string, durationMs?: number) {
   await prisma.$transaction([
     prisma.agentRun.update({

@@ -95,6 +95,8 @@ export function AttemptChat({ runs, className }: { runs: AgentRun[]; className?:
               <pre className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-critical">{run.error}</pre>
             ) : run.response ? (
               <AgentResponse text={run.response} className="mt-1" />
+            ) : run.status === "RUNNING" ? (
+              <p className="mt-1 text-sm italic text-ink-3">Läuft …</p>
             ) : (
               <p className="mt-1 text-sm text-ink-3">Keine Antwort protokolliert.</p>
             )}

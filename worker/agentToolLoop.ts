@@ -8,8 +8,8 @@ import type { Agent } from "@/generated/prisma/client";
 import type { ChatMessage, ContentBlock } from "@/lib/llm";
 import { discardUncommittedChanges } from "@/lib/workspace";
 import { optionsFromAgent, type ClarificationOption } from "@/lib/clarificationOptions";
-import { AgentRunError, runAgentTurn } from "./agentRun";
-import { ALL_TOOLS, executeTool, type ToolContext } from "./agentTools";
+import { AgentRunError, runAgentTurn, runTrackedTool } from "./agentRun";
+import { ALL_TOOLS, executeTool, LONG_RUNNING_TOOLS, type ToolContext } from "./agentTools";
 
 /// Jeder Turn ist gezielt (ein Werkzeugaufruf, eine Antwort) – deutlich
 /// grosszuegiger als frueher noetig, wo ein einzelner Aufruf die ganze
@@ -255,6 +255,26 @@ export async function runImplementationLoop({
               `Arbeite damit weiter, statt es noch einmal abzufragen – dieser Schritt ist trotzdem verbraucht.`,
             isError: false,
           };
+        } else if (LONG_RUNNING_TOOLS.has(call.name)) {
+          // run_command/run_integration_check koennen Minuten blockieren
+          // (Docker-Build, Testlauf) – ohne eigenen Beleg waere der Agent fuer
+          // diese ganze Zeit weder im Buero als aktiv noch in den Nachweisen
+          // als "laeuft" sichtbar (siehe runTrackedTool in worker/agentRun.ts).
+          execResult = await runTrackedTool(
+            {
+              agent,
+              projectId,
+              ticketId,
+              sprintId,
+              kind: "implementation",
+              headline:
+                call.name === "run_command"
+                  ? `Führt Befehl aus: ${String(call.input.command ?? "").slice(0, 80)}`
+                  : "Prüft die laufende Anwendung",
+              prompt: `→ ${call.name}(${JSON.stringify(call.input)})`,
+            },
+            () => executeTool(call.name, call.input, ctx),
+          );
         } else {
           execResult = await executeTool(call.name, call.input, ctx);
           if (REPLAYABLE_TOOLS.has(call.name) && !execResult.isError) {

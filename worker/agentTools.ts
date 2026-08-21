@@ -29,6 +29,13 @@ export interface ToolResult {
   isError: boolean;
 }
 
+/// Werkzeuge, die tatsaechlich einen Shell-/Docker-Prozess starten und auf
+/// dessen Ende warten – im Unterschied zu read_file/write_file/etc., die
+/// synchron und schnell sind. Der Tool-Loop (worker/agentToolLoop.ts)
+/// begleitet nur diese mit einem eigenen "laeuft"-Beleg, weil ein einzelner
+/// Aufruf hier Minuten dauern kann (docker compose up --build, Testlauf).
+export const LONG_RUNNING_TOOLS = new Set(["run_command", "run_integration_check"]);
+
 function ok(content: string): ToolResult {
   return { content, isError: false };
 }
