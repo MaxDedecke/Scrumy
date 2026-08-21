@@ -40,12 +40,15 @@
      der Kopfzeile. */
   --color-brand: #c6ff0a;
 
-  /* Feste Status-Palette (nie für Kategorien wiederverwendet). */
-  --color-good: #35c05a;
-  --color-warning: #fab219;
-  --color-serious: #ec835a;
-  --color-critical: #f0555a;
-  --color-info: #5b9bf5;
+  /* Feste Status-Palette (nie für Kategorien wiederverwendet). Gegenüber den
+     ursprünglichen Signalfarben bewusst entsättigt und "good" hue-mäßig in
+     Richtung Akzent-Grün (--color-brand) gerückt, damit die Badges als eine
+     Familie zum Mintgrün-Akzent wirken statt als bunte Ampel daneben zu stehen. */
+  --color-good: #59a33e;
+  --color-warning: #d2a741;
+  --color-serious: #cf8059;
+  --color-critical: #d16168;
+  --color-info: #7093cd;
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
@@ -156,7 +159,7 @@
 
   .pill-good {
     background: color-mix(in oklab, var(--color-good) 16%, transparent);
-    color: #5cd97c;
+    color: #96cf81;
     border-color: color-mix(in oklab, var(--color-good) 40%, transparent);
   }
 
@@ -174,13 +177,13 @@
 
   .pill-critical {
     background: color-mix(in oklab, var(--color-critical) 18%, transparent);
-    color: #ff8085;
+    color: #e1989d;
     border-color: color-mix(in oklab, var(--color-critical) 44%, transparent);
   }
 
   .pill-info {
     background: color-mix(in oklab, var(--color-info) 18%, transparent);
-    color: #8fbcfa;
+    color: #a4bbdf;
     border-color: color-mix(in oklab, var(--color-info) 40%, transparent);
   }
 
