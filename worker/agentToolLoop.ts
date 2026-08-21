@@ -278,7 +278,14 @@ export async function runImplementationLoop({
                   : "Prüft die laufende Anwendung",
               prompt: `→ ${call.name}(${JSON.stringify(call.input)})`,
             },
-            () => executeTool(call.name, call.input, ctx),
+            // Das Signal an ctx haengen statt ein neues ctx-Objekt zu
+            // spreaden: ctx wird von executeTool mutiert (u.a.
+            // bashTimeUsedMs), eine Kopie wuerde diese Mutation fuer den Rest
+            // des Loops verlieren.
+            (signal) => {
+              ctx.cancelSignal = signal;
+              return executeTool(call.name, call.input, ctx);
+            },
           );
         } else {
           execResult = await executeTool(call.name, call.input, ctx);

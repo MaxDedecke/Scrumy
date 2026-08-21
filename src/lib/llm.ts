@@ -23,7 +23,10 @@ export class LlmError extends Error {
     // Code sieht, weiß: der bisherige Arbeitsstand (schon geschriebene
     // Dateien) ist nicht die Ursache und darf nicht verworfen werden (siehe
     // worker/agentToolLoop.ts).
-    readonly code?: "TOKEN_LIMIT" | "TRANSPORT",
+    // "CANCELLED": Ein Mensch hat den Lauf von Hand abgebrochen (siehe
+    // `signal` unten, worker/cancellation.ts) – kein Anbieterfehler und kein
+    // Grund für einen weiteren Versuch in `postJson`.
+    readonly code?: "TOKEN_LIMIT" | "TRANSPORT" | "CANCELLED",
   ) {
     super(message);
     this.name = "LlmError";
@@ -161,7 +164,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function postJson(url: string, headers: HeadersInit, body: unknown, timeoutMs: number) {
+async function postJson(url: string, headers: HeadersInit, body: unknown, timeoutMs: number, cancelSignal?: AbortSignal) {
   for (let attempt = 0; ; attempt++) {
     const isLastAttempt = attempt === RETRY_DELAYS_MS.length;
 
@@ -171,9 +174,16 @@ async function postJson(url: string, headers: HeadersInit, body: unknown, timeou
         method: "POST",
         headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: cancelSignal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), cancelSignal]) : AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
+      // Von Hand abgebrochen (siehe `cancelSignal`, worker/cancellation.ts):
+      // kein Anbieter-/Netzwerkfehler, also auch kein Grund fuer einen
+      // weiteren Versuch – der wuerde den Abbruch nur um RETRY_DELAYS_MS
+      // verzoegern.
+      if (cancelSignal?.aborted) {
+        throw new LlmError("Manuell abgebrochen.", "CANCELLED");
+      }
       const reason = error instanceof Error ? error.message : String(error);
       if (!isLastAttempt) {
         await sleep(RETRY_DELAYS_MS[attempt]);
@@ -308,6 +318,7 @@ async function chatTurnAnthropic(
   tools: ToolDef[] | undefined,
   maxTokens: number,
   timeoutMs: number,
+  cancelSignal?: AbortSignal,
 ): Promise<ChatTurnResult> {
   const base = trimTrailingSlash(profile.baseUrl || "https://api.anthropic.com");
   const data = (await postJson(
@@ -329,6 +340,7 @@ async function chatTurnAnthropic(
         : {}),
     },
     timeoutMs,
+    cancelSignal,
   )) as {
     content?: { type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[];
     stop_reason?: string;
@@ -712,6 +724,7 @@ async function chatTurnOllama(
   messages: ChatMessage[],
   tools: ToolDef[] | undefined,
   timeoutMs: number,
+  cancelSignal?: AbortSignal,
 ): Promise<ChatTurnResult> {
   const base = trimTrailingSlash(profile.baseUrl || "http://ollama:11434");
   const data = (await postJson(
@@ -726,6 +739,7 @@ async function chatTurnOllama(
         : {}),
     },
     timeoutMs,
+    cancelSignal,
   )) as { message?: { content?: string; tool_calls?: OpenAiToolCall[] } };
 
   let text = pickString(data.message?.content) ?? "";
@@ -746,6 +760,7 @@ async function chatTurnOpenAiCompat(
   timeoutMs: number,
   reasoningEffort?: ReasoningEffort,
   preferThroughput?: boolean,
+  cancelSignal?: AbortSignal,
 ): Promise<ChatTurnResult> {
   const fallback = profile.provider === "OPENAI" ? "https://api.openai.com/v1" : null;
   const base = trimTrailingSlash(profile.baseUrl || fallback || "");
@@ -812,6 +827,7 @@ async function chatTurnOpenAiCompat(
         ...openRouterExtras,
       },
       timeoutMs,
+      cancelSignal,
     )) as typeof data;
   } catch (error) {
     // Neuere Modelle (u.a. die o1-/gpt-5-Reihe) lehnen `max_tokens` ab und
@@ -830,6 +846,7 @@ async function chatTurnOpenAiCompat(
           ...openRouterExtras,
         },
         timeoutMs,
+        cancelSignal,
       )) as typeof data;
     } else {
       throw error;
@@ -903,6 +920,7 @@ export async function chatTurn({
   timeoutMs = 180_000,
   reasoningEffort,
   preferThroughput,
+  signal,
 }: {
   profile: ChatProfile;
   system: string;
@@ -920,16 +938,19 @@ export async function chatTurn({
    *  höchsten gemessenen Durchsatz statt OpenRouters Standardrouting, das
    *  auch spürbar langsamere/instabile Anbieter treffen kann. */
   preferThroughput?: boolean;
+  /** Von Hand ausgelöster Abbruch (siehe worker/cancellation.ts) – bricht den
+   *  laufenden HTTP-Aufruf sofort ab, statt auf `timeoutMs` zu warten. */
+  signal?: AbortSignal;
 }): Promise<ChatTurnResult> {
   const result = await (() => {
     switch (profile.provider) {
       case "ANTHROPIC":
-        return chatTurnAnthropic(profile, system, messages, tools, maxTokens, timeoutMs);
+        return chatTurnAnthropic(profile, system, messages, tools, maxTokens, timeoutMs, signal);
       case "OLLAMA":
-        return chatTurnOllama(profile, system, messages, tools, timeoutMs);
+        return chatTurnOllama(profile, system, messages, tools, timeoutMs, signal);
       case "OPENAI":
       case "GENERIC_OPENAI_COMPAT":
-        return chatTurnOpenAiCompat(profile, system, messages, tools, maxTokens, timeoutMs, reasoningEffort, preferThroughput);
+        return chatTurnOpenAiCompat(profile, system, messages, tools, maxTokens, timeoutMs, reasoningEffort, preferThroughput, signal);
     }
   })();
 
@@ -963,6 +984,7 @@ export async function chat({
   timeoutMs = 180_000,
   reasoningEffort,
   preferThroughput,
+  signal,
 }: {
   profile: ChatProfile;
   system: string;
@@ -971,6 +993,7 @@ export async function chat({
   timeoutMs?: number;
   reasoningEffort?: ReasoningEffort;
   preferThroughput?: boolean;
+  signal?: AbortSignal;
 }): Promise<string> {
   const result = await chatTurn({
     profile,
@@ -980,6 +1003,7 @@ export async function chat({
     timeoutMs,
     reasoningEffort,
     preferThroughput,
+    signal,
   });
   return result.text;
 }

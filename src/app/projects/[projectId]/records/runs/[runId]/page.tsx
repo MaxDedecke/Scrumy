@@ -7,6 +7,11 @@ import { AgentResponse } from "@/components/AgentResponse";
 import { AttemptChat } from "@/components/AttemptChat";
 import { ContextMeter } from "@/components/ContextMeter";
 import { getAttemptRuns } from "@/lib/agentRunAttempts";
+import { ActionForm } from "@/components/ActionForm";
+import { IconSubmit } from "@/components/IconSubmit";
+import { StopIcon } from "@/components/icons";
+import { iconButtonDangerClass } from "@/lib/ui";
+import { stopAgentRun } from "@/lib/actions/records";
 
 // Ein einzelner Agentenlauf, vollständig aufgeklappt: Rolle und Modell, der
 // Auftrag an das Modell (Systemprompt + Prompt) und die Antwort im Wortlaut.
@@ -54,6 +59,14 @@ export default async function AgentRunPage({
           <span className={RUN_STATUS_PILL[attempt[attempt.length - 1].status]}>
             {RUN_STATUS_LABEL[attempt[attempt.length - 1].status]}
           </span>
+          {attempt[attempt.length - 1].status === "RUNNING" && (
+            <ActionForm action={stopAgentRun}>
+              <input type="hidden" name="runId" value={attempt[attempt.length - 1].id} />
+              <IconSubmit title="Lauf stoppen" className={iconButtonDangerClass}>
+                <StopIcon className="h-3.5 w-3.5" />
+              </IconSubmit>
+            </ActionForm>
+          )}
           <ContextMeter model={lastMeasuredRun?.model ?? null} usage={lastMeasuredRun} />
           <span className="text-xs text-ink-3">
             {RUN_KIND_LABEL[run.kind] ?? run.kind} ·{" "}

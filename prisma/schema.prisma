@@ -581,6 +581,12 @@ model AgentRun {
   outputTokens     Int?
   cacheReadTokens  Int?
   cacheWriteTokens Int?
+  /// Von Hand ueber den Stopp-Knopf im Nachweis gesetzt, waehrend der Lauf
+  /// noch RUNNING ist (siehe stopAgentRun-Action). Der laufende Modell-/
+  /// Werkzeugaufruf prueft das periodisch (worker/cancellation.ts) und bricht
+  /// ab, statt bis zum Ende zu laufen – der Worker ist ein anderer Prozess
+  /// als die Next.js-App, deshalb geht der Wunsch nur ueber die Datenbank.
+  cancelRequested  Boolean   @default(false)
 
   @@index([projectId, startedAt])
   @@map("agent_runs")

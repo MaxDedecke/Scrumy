@@ -285,6 +285,7 @@ export const CLARIFICATION_STATUS_LABEL: Record<ClarificationStatus, string> = {
 export const CLARIFICATION_TRIGGER_LABEL: Record<string, string> = {
   step_failed: "Arbeitsschritt abgebrochen",
   step_abandoned: "Schritt durch Neustart verloren",
+  manual_stop: "Von Hand abgebrochen",
   no_changes: "Keine Änderung geliefert",
   qa_needs_decision: "QA braucht eine Entscheidung",
   agent_blocker: "Rückfrage aus der Umsetzung",
@@ -357,6 +358,7 @@ export const ACTIVITY_ACTION_LABEL: Record<string, string> = {
   ticket_closed_by_decision: "Ticket durch Beschluss geschlossen",
   ticket_split: "Ticket automatisch zerlegt",
   step_failed: "Schritt fehlgeschlagen",
+  step_cancelled: "Schritt von Hand abgebrochen",
   files_rejected: "Dateien abgelehnt",
   step_abandoned: "Abgebrochener Schritt aufgeräumt",
   concept_released: "Konzept freigegeben",

@@ -737,6 +737,24 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
     }
     const message = error instanceof Error ? error.message : String(error);
 
+    // Von Hand abgebrochen (Stopp-Knopf im Nachweis, siehe
+    // worker/agentRun.ts#failRun): kein fachlicher oder technischer
+    // Fehlschlag, also auch keine Freigabe-Anfrage wie im Absturz-Zweig unten
+    // – `failRun` hat die Klärung, die den Product Owner zur Entscheidung
+    // ruft ("nochmal versuchen"?), schon eröffnet. Hier nur noch der
+    // Anlauf-Nachweis.
+    if (error instanceof AgentRunError && error.code === "CANCELLED") {
+      helpers.logger.info(`Ticket ${ticket.title}: Anlauf von Hand abgebrochen.`);
+      await recordAttempt({
+        ticketId,
+        attempt: totalAttempt,
+        agentName: implementer.name,
+        outcome: "von Hand abgebrochen",
+        trace: (error as { attemptTrace?: AttemptTrace }).attemptTrace,
+      });
+      return;
+    }
+
     // Anbieter/Netzwerk-Fehler (siehe LlmError-Code "TRANSPORT" in
     // src/lib/llm.ts – u.a. 429/502/503/504/524, `postJson` versucht es davor
     // schon zweimal selbst erneut) sind kein Programmfehler und keine

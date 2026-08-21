@@ -28,6 +28,11 @@ export interface ToolContext {
   bashTimeUsedMs: number;
   /** Obergrenze für die gesamte Bash-Zeit eines Anlaufs. */
   bashTimeBudgetMs: number;
+  /** Nur waehrend eines LONG_RUNNING_TOOLS-Aufrufs gesetzt (siehe
+   *  worker/agentToolLoop.ts) – von Hand ausgeloester Abbruch (siehe
+   *  worker/cancellation.ts), den run_command an seine Docker-Sandbox
+   *  durchreicht (src/lib/testRun.ts), um den Container sofort zu killen. */
+  cancelSignal?: AbortSignal;
 }
 
 export interface ToolResult {
@@ -285,6 +290,7 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       const result = await runInSandbox(ctx.workspaceSubpath, `cd "${workdir}" && ${command}`, {
         containerNamePrefix: "scrumy-agent-bash",
         timeoutMs,
+        signal: ctx.cancelSignal,
       });
       ctx.bashTimeUsedMs += Date.now() - startedAt;
       if (result.unavailable) {

@@ -11,6 +11,11 @@ import {
 } from "@/lib/labels";
 import { Panel, PanelEmpty, PanelGrid } from "@/components/Panel";
 import { splitIntoAttempts } from "@/lib/agentRunAttempts";
+import { ActionForm } from "@/components/ActionForm";
+import { IconSubmit } from "@/components/IconSubmit";
+import { StopIcon } from "@/components/icons";
+import { iconButtonDangerClass } from "@/lib/ui";
+import { stopAgentRun } from "@/lib/actions/records";
 
 // Die Belegablage des Projekts: jeder Agentenlauf mit Auftrag und Antwort,
 // jeder Commit mit Diff, jede Sprint-Zusammenfassung. Was im Team-Büro als
@@ -67,10 +72,10 @@ export default async function ProjectRecordsPage({
               // Verlauf als Chat.
               const run = row.kind === "attempt" ? row.runs[row.runs.length - 1] : row.run;
               return (
-                <li key={run.id}>
+                <li key={run.id} className="flex items-stretch">
                   <Link
                     href={`/projects/${project.id}/records/runs/${run.id}`}
-                    className="flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-surface-2"
+                    className="flex min-w-0 flex-1 items-start gap-3 px-4 py-2.5 transition-colors hover:bg-surface-2"
                   >
                     <span className="w-24 shrink-0 text-xs text-ink-4">{formatTime(run.startedAt)}</span>
                     <span className="min-w-0 flex-1">
@@ -92,6 +97,20 @@ export default async function ProjectRecordsPage({
                       {RUN_STATUS_LABEL[run.status]}
                     </span>
                   </Link>
+                  {/* Ausserhalb des Links: ein Absende-Knopf darin waere
+                      verschachteltes interaktives Markup. Nur bei RUNNING
+                      sichtbar – ein fertiger Lauf laesst sich nicht mehr
+                      stoppen. */}
+                  {run.status === "RUNNING" && (
+                    <div className="flex items-center pr-3">
+                      <ActionForm action={stopAgentRun}>
+                        <input type="hidden" name="runId" value={run.id} />
+                        <IconSubmit title="Lauf stoppen" className={iconButtonDangerClass}>
+                          <StopIcon className="h-3.5 w-3.5" />
+                        </IconSubmit>
+                      </ActionForm>
+                    </div>
+                  )}
                 </li>
               );
             })}

@@ -9,6 +9,8 @@ import { prisma } from "@/lib/prisma";
 import { chatTurn, LlmError, type ChatMessage, type ReasoningEffort, type ToolCall, type ToolDef } from "@/lib/llm";
 import type { Agent } from "@/generated/prisma/client";
 import { withLlmProfileLimit } from "./llmProfileLimiter";
+import { watchForCancellation } from "./cancellation";
+import { openClarification } from "./clarification";
 
 /// Grosszuegiger als der Vorgabewert des Clients: Diese Aufrufe laufen im
 /// Hintergrund, niemand wartet vor dem Bildschirm – und lokale oder kostenlose
@@ -23,7 +25,7 @@ export class AgentRunError extends Error {
     // (worker/agentToolLoop.ts) muss wissen, ob der Anbieter selbst
     // gescheitert ist ("TRANSPORT"), um bisherige Dateiänderungen nicht
     // grundlos zu verwerfen.
-    readonly code?: "TOKEN_LIMIT" | "TRANSPORT",
+    readonly code?: "TOKEN_LIMIT" | "TRANSPORT" | "CANCELLED",
   ) {
     super(message);
     this.name = "AgentRunError";
@@ -96,6 +98,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
 
   await prisma.agent.update({ where: { id: agent.id }, data: { status: "WORKING" } });
   const startedAt = Date.now();
+  const { signal, stop: stopWatching } = watchForCancellation(run.id);
 
   try {
     // chatTurn() statt chat(): Nur der Turn-Client liefert die
@@ -111,6 +114,7 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
         timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         reasoningEffort: options.reasoningEffort,
         preferThroughput: options.preferThroughput,
+        signal,
       }),
     );
     const text = result.text;
@@ -134,8 +138,9 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
 
     return { runId: run.id, text };
   } catch (error) {
+    const cancelled = error instanceof LlmError && error.code === "CANCELLED";
     const message = error instanceof LlmError || error instanceof Error ? error.message : String(error);
-    await failRun(run.id, agent.id, message, Date.now() - startedAt);
+    await failRun(run.id, agent.id, message, Date.now() - startedAt, cancelled);
     // Auch der Fehlschlag gehoert ins Protokoll im Buero, nicht nur in die
     // Nachweise: Der Mensch soll sehen, dass der Kollege haengt, ohne dafuer
     // erst die Belegliste durchzugehen.
@@ -144,10 +149,12 @@ export async function runAgent(options: RunAgentOptions): Promise<AgentRunResult
       agentId: agent.id,
       ticketId,
       actor: agent.name,
-      action: "step_failed",
-      detail: `${headline} – abgebrochen: ${message.slice(0, 300)}`,
+      action: cancelled ? "step_cancelled" : "step_failed",
+      detail: cancelled ? `${headline} – von Hand abgebrochen.` : `${headline} – abgebrochen: ${message.slice(0, 300)}`,
     });
     throw new AgentRunError(message, run.id, error instanceof LlmError ? error.code : undefined);
+  } finally {
+    stopWatching();
   }
 }
 
@@ -213,6 +220,7 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentR
 
   await prisma.agent.update({ where: { id: agent.id }, data: { status: "WORKING" } });
   const startedAt = Date.now();
+  const { signal, stop: stopWatching } = watchForCancellation(run.id);
 
   try {
     const result = await withLlmProfileLimit(profile.id, () =>
@@ -223,6 +231,7 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentR
         tools,
         maxTokens: options.maxTokens ?? 8000,
         timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        signal,
       }),
     );
 
@@ -252,17 +261,20 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentR
 
     return { runId: run.id, text: result.text, toolCalls: result.toolCalls };
   } catch (error) {
+    const cancelled = error instanceof LlmError && error.code === "CANCELLED";
     const message = error instanceof LlmError || error instanceof Error ? error.message : String(error);
-    await failRun(run.id, agent.id, message, Date.now() - startedAt);
+    await failRun(run.id, agent.id, message, Date.now() - startedAt, cancelled);
     await logActivity({
       projectId,
       agentId: agent.id,
       ticketId,
       actor: agent.name,
-      action: "step_failed",
-      detail: `${headline} – abgebrochen: ${message.slice(0, 300)}`,
+      action: cancelled ? "step_cancelled" : "step_failed",
+      detail: cancelled ? `${headline} – von Hand abgebrochen.` : `${headline} – abgebrochen: ${message.slice(0, 300)}`,
     });
     throw new AgentRunError(message, run.id, error instanceof LlmError ? error.code : undefined);
+  } finally {
+    stopWatching();
   }
 }
 
@@ -288,9 +300,13 @@ export interface TrackedToolRunOptions {
 /// `status: "RUNNING"`) zeigt den Agenten in dieser Luecke faelschlich als
 /// untaetig, die Nachweisliste zeigt zuletzt "Erledigt" – obwohl der Agent
 /// gerade auf einen Build/Test wartet.
+/// `run` bekommt das Abbruchsignal dieses Belegs durchgereicht (siehe
+/// `ctx.cancelSignal` in worker/agentTools.ts) – nur so kann z.B.
+/// `run_command` den Docker-Container tatsaechlich toeten, statt nur bis zum
+/// eigenen Zeitlimit weiterzulaufen.
 export async function runTrackedTool<T extends { content: string; isError: boolean }>(
   options: TrackedToolRunOptions,
-  run: () => Promise<T>,
+  run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const { agent, projectId, ticketId, sprintId, kind, headline, prompt } = options;
 
@@ -299,9 +315,18 @@ export async function runTrackedTool<T extends { content: string; isError: boole
   });
   await prisma.agent.update({ where: { id: agent.id }, data: { status: "WORKING" } });
   const startedAt = Date.now();
+  const { signal, stop: stopWatching } = watchForCancellation(agentRun.id);
 
   try {
-    const result = await run();
+    const result = await run(signal);
+    // Von Hand abgebrochen, waehrend der Werkzeugaufruf schon zurueckkam
+    // (z.B. weil `docker kill` den Container beendet hat und `runInSandbox`
+    // das als ganz normales Fehlschlagen des Skripts zurueckgibt): Das Ergebnis
+    // ist Muell, nicht Beleg fuer einen echten Fehlschlag des Agenten.
+    if (signal.aborted) {
+      await failRun(agentRun.id, agent.id, "Von Hand abgebrochen.", Date.now() - startedAt, true);
+      throw new AgentRunError("Von Hand abgebrochen.", agentRun.id, "CANCELLED");
+    }
     await prisma.agentRun.update({
       where: { id: agentRun.id },
       data: {
@@ -314,6 +339,11 @@ export async function runTrackedTool<T extends { content: string; isError: boole
     });
     return result;
   } catch (error) {
+    if (error instanceof AgentRunError && error.code === "CANCELLED") throw error;
+    if (signal.aborted) {
+      await failRun(agentRun.id, agent.id, "Von Hand abgebrochen.", Date.now() - startedAt, true);
+      throw new AgentRunError("Von Hand abgebrochen.", agentRun.id, "CANCELLED");
+    }
     // Sollte executeTool() selbst je unerwartet werfen (statt isError zurueck-
     // zugeben): den Platzhalter trotzdem abschliessen, sonst bleibt eine
     // Run-Leiche mit status RUNNING liegen, die das Buero dauerhaft als
@@ -324,19 +354,48 @@ export async function runTrackedTool<T extends { content: string; isError: boole
       data: { status: "FAILED", error: message, finishedAt: new Date(), durationMs: Date.now() - startedAt },
     });
     throw error;
+  } finally {
+    stopWatching();
   }
 }
 
-async function failRun(runId: string, agentId: string, message: string, durationMs?: number) {
-  await prisma.$transaction([
-    prisma.agentRun.update({
-      where: { id: runId },
-      data: { status: "FAILED", error: message, finishedAt: new Date(), durationMs },
-    }),
-    // BLOCKED statt IDLE: In der Live-Ansicht soll sofort sichtbar sein, dass
-    // ein Kollege haengt – genau wie jemand, der im Buero die Hand hebt.
-    prisma.agent.update({ where: { id: agentId }, data: { status: "BLOCKED" } }),
-  ]);
+async function failRun(runId: string, agentId: string, message: string, durationMs?: number, cancelled = false) {
+  const run = await prisma.agentRun.update({
+    where: { id: runId },
+    data: { status: "FAILED", error: message, finishedAt: new Date(), durationMs },
+  });
+  await prisma.agent.update({
+    where: { id: agentId },
+    // Von Hand abgebrochen ist kein Haengenbleiben, das einen Menschen
+    // braucht (BLOCKED, wie bei jedem anderen Fehlschlag) – der Kollege ist
+    // sofort wieder frei, und der Product Owner bekommt unten die Chance, den
+    // Auftrag selbst neu anzustossen.
+    data: { status: cancelled ? "IDLE" : "BLOCKED" },
+  });
+
+  if (!cancelled) return;
+
+  try {
+    // Die Klaerung, die den Product Owner zur Entscheidung ruft (siehe
+    // clarificationTriage – "technisch, reversibel" faellt fast immer auf
+    // "nochmal versuchen"): Ein von Hand gestoppter Lauf soll nicht liegen
+    // bleiben, bis jemand "PO anstupsen" klickt.
+    await openClarification({
+      projectId: run.projectId,
+      scope: run.ticketId ? "TICKET" : "PROJECT",
+      trigger: "manual_stop",
+      ticketId: run.ticketId,
+      sprintId: run.sprintId,
+      raisedById: agentId,
+      question: `Der Schritt „${run.headline}" wurde von Hand abgebrochen. Soll das Team ihn erneut versuchen?`,
+      context:
+        "Ein Mensch hat diesen Agentenlauf über die Nachweise-Ansicht gestoppt – kein fachlicher oder technischer Fehlschlag.",
+    });
+  } catch {
+    // Wie bei clarificationTriage: Scheitert schon das Einberufen, bleibt der
+    // Agent wenigstens sichtbar IDLE statt zusaetzlich noch den eigentlichen
+    // Abbruch zu verschlucken – "PO anstupsen" holt das von Hand nach.
+  }
 }
 
 /// Ein Eintrag im Projekt-Protokoll. Bewusst getrennt vom `AgentRun`: Der Run

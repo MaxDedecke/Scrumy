@@ -58,6 +58,7 @@ export async function runInSandbox(
     cpus = "2",
     pidsLimit = "512",
     maxOutputChars = 8000,
+    signal,
   }: {
     containerNamePrefix?: string;
     timeoutMs?: number;
@@ -65,6 +66,9 @@ export async function runInSandbox(
     cpus?: string;
     pidsLimit?: string;
     maxOutputChars?: number;
+    /** Von Hand ausgeloester Abbruch (siehe worker/cancellation.ts) – toetet
+     *  den Container sofort, statt auf `timeoutMs` zu warten. */
+    signal?: AbortSignal;
   } = {},
 ): Promise<{ exitCode: number | null; timedOut: boolean; unavailable: boolean; output: string }> {
   const containerName = `${containerNamePrefix}-${workspaceSubpath}-${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 128);
@@ -116,6 +120,15 @@ export async function runInSandbox(
     });
   }, timeoutMs + 2_000);
 
+  // Von Hand abgebrochen (siehe `signal`, worker/cancellation.ts): denselben
+  // Direkt-beim-Daemon-Kill wie oben sofort auslösen, statt bis zum ohnehin
+  // gesetzten Zeitlimit zu warten – ein Mensch, der auf "Stopp" klickt,
+  // erwartet kein Warten auf `timeoutMs`.
+  const onCancel = () => {
+    execFile("docker", ["kill", containerName], () => {});
+  };
+  signal?.addEventListener("abort", onCancel, { once: true });
+
   try {
     const { stdout, stderr } = await execFileAsync("docker", args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 });
     return { exitCode: 0, timedOut: false, unavailable: false, output: clipOutput(`${stdout}\n${stderr}`.trim(), maxOutputChars) };
@@ -133,6 +146,7 @@ export async function runInSandbox(
     };
   } finally {
     clearTimeout(hardKillTimer);
+    signal?.removeEventListener("abort", onCancel);
   }
 }
 
