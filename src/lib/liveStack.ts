@@ -39,6 +39,7 @@ import { promisify } from "node:util";
 import { prisma } from "@/lib/prisma";
 import { fail, note, ok, type ActionResult } from "@/lib/actions/result";
 import type { LiveTrigger, PreviewStatus } from "@/generated/prisma/client";
+import { testRunnerImage } from "@/lib/testRun";
 
 const execFileAsync = promisify(execFile);
 
@@ -573,6 +574,264 @@ export async function getLiveStackInfo(projectId: string): Promise<LiveStackInfo
   }
 
   return { ...base, status, port: entryPoint?.port ?? null, service: entryPoint?.service ?? null, error: null, log };
+}
+
+// --- HTTP-Probe gegen die laufende Live-Anwendung ----------------------------
+//
+// Fuer runAgentIntegrationCheck unten: ein echter HTTP-Request von AUSSEN
+// gegen den Compose-Stack, nicht bloss "ist er erreichbar". Laeuft als
+// eigener, kurzlebiger Sibling-Container (wie runInSandbox in testRun.ts),
+// aber mit "--network host" statt eines Volume-Mounts: Der Stack veroeffent-
+// licht seinen Port auf dem Host (siehe pickEntryPoint/getLiveStackInfo), und
+// genau darueber erreicht auch der Mensch (LiveBootPage) und Scrumy selbst
+// ihn – ein eigenes Compose-Netz zu suchen waere ein zweiter Weg zum selben
+// Ziel, nur mit mehr Fehlerquellen (Netzname, interner Zielport).
+//
+// Alle dynamischen Werte (URL, Header, Body, Datei-Inhalt) wandern als
+// Umgebungsvariablen in den Container statt in den Skripttext – das Skript
+// selbst ist eine feste Konstante ohne jede Interpolation, also strukturell
+// injektionssicher unabhaengig davon, was ein Modell als Pfad/Header/Body
+// erzeugt.
+const PROBE_SCRIPT = `
+const method = process.env.PROBE_METHOD || "GET";
+const url = process.env.PROBE_URL;
+const headers = JSON.parse(Buffer.from(process.env.PROBE_HEADERS_B64 || "e30=", "base64").toString("utf8"));
+const timeoutMs = Number(process.env.PROBE_TIMEOUT_MS || "15000");
+
+async function main() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const init = { method, headers: { ...headers }, signal: controller.signal };
+
+  const uploadField = process.env.PROBE_UPLOAD_FIELD;
+  if (uploadField) {
+    const fileName = process.env.PROBE_UPLOAD_FILENAME || "upload.bin";
+    const contentType = process.env.PROBE_UPLOAD_CONTENT_TYPE || "application/octet-stream";
+    const buf = Buffer.from(process.env.PROBE_UPLOAD_CONTENT_B64 || "", "base64");
+    const form = new FormData();
+    form.append(uploadField, new Blob([buf], { type: contentType }), fileName);
+    const extraB64 = process.env.PROBE_UPLOAD_EXTRA_FIELDS_B64;
+    if (extraB64) {
+      const extra = JSON.parse(Buffer.from(extraB64, "base64").toString("utf8"));
+      for (const [key, value] of Object.entries(extra)) form.append(key, String(value));
+    }
+    init.body = form;
+  } else if (process.env.PROBE_BODY_B64) {
+    init.body = Buffer.from(process.env.PROBE_BODY_B64, "base64");
+  }
+
+  try {
+    const res = await fetch(url, init);
+    const text = await res.text();
+    console.log(JSON.stringify({
+      ok: true,
+      status: res.status,
+      statusText: res.statusText,
+      body: text.slice(0, 6000),
+    }));
+  } catch (error) {
+    console.log(JSON.stringify({ ok: false, error: String((error && error.message) || error) }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+main();
+`;
+
+export interface HttpProbeRequest {
+  method?: string;
+  /// Pfad + Query, z.B. "/api/upload" – wird an "http://127.0.0.1:<port>" angehaengt.
+  path: string;
+  headers?: Record<string, string>;
+  /// Rohtext fuer JSON/Formularkoerper (kein Datei-Upload). Wird als UTF-8 gesendet.
+  bodyText?: string;
+  uploadFile?: {
+    fieldName: string;
+    fileName?: string;
+    contentType?: string;
+    /// Textinhalt der Testdatei (UTF-8) – reicht fuer die meisten Upload-Fehler,
+    /// da die meisten Bugs an der Multipart-Verarbeitung selbst haengen, nicht
+    /// am Dateiformat.
+    content?: string;
+    /// Alternative zu "content" fuer binaere Testdateien.
+    contentBase64?: string;
+    extraFields?: Record<string, string>;
+  };
+}
+
+export interface HttpProbeResult {
+  ok: boolean;
+  status?: number;
+  statusText?: string;
+  body?: string;
+  error?: string;
+}
+
+async function runHttpProbe(port: number, request: HttpProbeRequest, timeoutMs = 15_000): Promise<HttpProbeResult> {
+  const url = `http://127.0.0.1:${port}${request.path.startsWith("/") ? request.path : `/${request.path}`}`;
+  const containerName = `scrumy-probe-${port}-${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 128);
+
+  const env: string[] = [
+    "-e",
+    `PROBE_METHOD=${(request.method ?? "GET").toUpperCase()}`,
+    "-e",
+    `PROBE_URL=${url}`,
+    "-e",
+    `PROBE_HEADERS_B64=${Buffer.from(JSON.stringify(request.headers ?? {}), "utf8").toString("base64")}`,
+    "-e",
+    `PROBE_TIMEOUT_MS=${timeoutMs}`,
+  ];
+
+  if (request.uploadFile) {
+    const contentBase64 =
+      request.uploadFile.contentBase64 ?? Buffer.from(request.uploadFile.content ?? "", "utf8").toString("base64");
+    env.push(
+      "-e",
+      `PROBE_UPLOAD_FIELD=${request.uploadFile.fieldName}`,
+      "-e",
+      `PROBE_UPLOAD_FILENAME=${request.uploadFile.fileName ?? "upload.bin"}`,
+      "-e",
+      `PROBE_UPLOAD_CONTENT_TYPE=${request.uploadFile.contentType ?? "application/octet-stream"}`,
+      "-e",
+      `PROBE_UPLOAD_CONTENT_B64=${contentBase64}`,
+    );
+    if (request.uploadFile.extraFields) {
+      env.push(
+        "-e",
+        `PROBE_UPLOAD_EXTRA_FIELDS_B64=${Buffer.from(JSON.stringify(request.uploadFile.extraFields), "utf8").toString("base64")}`,
+      );
+    }
+  } else if (request.bodyText) {
+    env.push("-e", `PROBE_BODY_B64=${Buffer.from(request.bodyText, "utf8").toString("base64")}`);
+  }
+
+  const args = [
+    "run",
+    "--rm",
+    "--name",
+    containerName,
+    "--network",
+    "host",
+    "--memory",
+    "256m",
+    "--cpus",
+    "1",
+    "--pids-limit",
+    "128",
+    ...env,
+    "--entrypoint",
+    "node",
+    testRunnerImage(),
+    "-e",
+    PROBE_SCRIPT,
+  ];
+
+  try {
+    const { stdout } = await execFileAsync("docker", args, { timeout: timeoutMs + 5_000, maxBuffer: 2 * 1024 * 1024 });
+    const line = stdout.trim().split("\n").pop() ?? "";
+    return JSON.parse(line) as HttpProbeResult;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException & { stdout?: string };
+    // Bestmoeglicher Versuch, trotzdem noch ein vom Skript geloggtes Ergebnis
+    // zu finden (z.B. wenn "docker run" selbst mit Exit-Code != 0 endet, aber
+    // stdout schon geschrieben wurde) – sonst der rohe Fehler als Diagnose.
+    const line = (err.stdout ?? "").trim().split("\n").pop();
+    if (line) {
+      try {
+        return JSON.parse(line) as HttpProbeResult;
+      } catch {
+        // faellt durch zum generischen Fehler unten
+      }
+    }
+    return { ok: false, error: err.message ?? String(error) };
+  } finally {
+    execFile("docker", ["kill", containerName], () => {});
+  }
+}
+
+// --- Ticket-Integrationspruefung (Agent) --------------------------------------
+
+export interface AgentIntegrationCheckResult {
+  /// War der Stack am Ende erreichbar? false = kein Befund ueber den Bug,
+  /// sondern ein Grund, warum ueberhaupt nicht geprueft werden konnte
+  /// (anderes Projekt live, kein Compose-File, Zeitlimit, Startfehler).
+  reachable: boolean;
+  blockedReason: string | null;
+  port: number | null;
+  probe: HttpProbeResult | null;
+  /// Letzte Log-Zeilen aller Dienste – auch ohne "request" nuetzlich, um zu
+  /// sehen, ob beim Hochfahren selbst schon etwas auffaellt.
+  logs: string;
+}
+
+/// Fuer worker/agentTools.ts ("run_integration_check"): laesst den Umsetzer-
+/// Agenten einen im laufenden System gemeldeten Fehler (typischerweise ein
+/// BUG-Ticket aus src/lib/actions/bugReport.ts) selbst nachstellen, statt aus
+/// dem Diff zu raten – die eigentliche Antwort auf "Docker ist in der Sandbox
+/// nicht verfuegbar" (siehe runInSandbox in testRun.ts, das NUR einen
+/// einzelnen Node-Container ohne Compose/Netz/DB kennt).
+///
+/// Nutzt dieselbe "nur ein Projekt gleichzeitig live"-Sperre und dasselbe
+/// Start/Stop-Muster wie runSprintIntegrationCheck: laeuft der Stack bereits
+/// (z.B. weil ein Mensch gerade selbst testet), wird er wiederverwendet und
+/// NICHT am Ende beendet.
+export async function runAgentIntegrationCheck(
+  projectId: string,
+  request: HttpProbeRequest | null,
+  { pollIntervalMs = 4000, timeoutMs = 5 * 60 * 1000, probeTimeoutMs = 15_000 } = {},
+): Promise<AgentIntegrationCheckResult> {
+  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { workspacePath: true } });
+  if (!project?.workspacePath) {
+    return { reachable: false, blockedReason: "Kein Arbeitsverzeichnis.", port: null, probe: null, logs: "" };
+  }
+
+  const composeFile = await findComposeFile(project.workspacePath);
+  if (!composeFile) {
+    return { reachable: false, blockedReason: "Kein docker-compose.yml im Repository gefunden.", port: null, probe: null, logs: "" };
+  }
+
+  const blocker = await getOtherLiveProject(projectId);
+  if (blocker) {
+    return {
+      reachable: false,
+      blockedReason: `„${blocker.name}" ist gerade live – aktuell kann nur ein Projekt gleichzeitig live sein, jetzt nicht prüfbar. Später erneut versuchen.`,
+      port: null,
+      probe: null,
+      logs: "",
+    };
+  }
+
+  const started = await startLiveStack(projectId, "AGENT_CHECK");
+  if (started.status === "error") {
+    return { reachable: false, blockedReason: started.message, port: null, probe: null, logs: "" };
+  }
+  const ownsLifecycle = started.status === "success";
+
+  try {
+    const deadline = Date.now() + timeoutMs;
+    let info = await getLiveStackInfo(projectId);
+    while (info.status === "STARTING" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      info = await getLiveStackInfo(projectId);
+    }
+
+    if (info.status !== "RUNNING" || !info.port) {
+      const reason =
+        info.status === "STARTING"
+          ? "Zeitlimit erreicht, bevor der Stack erreichbar war."
+          : (info.error ?? "Unbekannter Fehler beim Start.");
+      return { reachable: false, blockedReason: reason, port: null, probe: null, logs: info.log };
+    }
+
+    const probe = request ? await runHttpProbe(info.port, request, probeTimeoutMs) : null;
+
+    const name = liveProjectName(projectId);
+    const logs = await dockerCompose(["-p", name, "logs", "--tail", String(LOG_LINES)]).catch(() => "");
+
+    return { reachable: true, blockedReason: null, port: info.port, probe, logs };
+  } finally {
+    if (ownsLifecycle) await stopLiveStack(projectId);
+  }
 }
 
 // --- Sprint-Review-Integrationspruefung --------------------------------------

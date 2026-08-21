@@ -579,9 +579,20 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
     }
   }
 
+  // Nudge nur fuer BUG-Tickets: Ein Fehler, der beim Testen der Live-
+  // Anwendung/Vorschau auftrat (siehe src/lib/actions/bugReport.ts), laesst
+  // sich per `run_command` allein oft nicht nachstellen – die dortige Sandbox
+  // kennt kein Compose-Netz und keine DB. Ohne diesen Hinweis endete das
+  // real in "scheint ein Docker-Problem zu sein", ohne dass das je geprueft
+  // wurde.
+  const bugRepro =
+    ticket.type === "BUG"
+      ? '\n\nFalls der Fehler nur im laufenden System auftritt (z.B. aus einer Bug-Meldung zur Vorschau/Live-Anwendung): Vermute nicht bloß eine Ursache – nutze `run_integration_check`, um den echten Docker-Compose-Stack zu starten und den Fehler (z.B. per HTTP-Request/Datei-Upload) selbst nachzustellen, bevor du einen Fix schreibst oder das Ticket als „vermutlich Docker-Problem" abschließt.'
+      : "";
+
   const ticketHead =
     `## Ticket\n${ticket.title}\nTyp: ${TICKET_TYPE_LABEL[ticket.type]} · Priorität: ${PRIORITY_LABEL[ticket.priority]}` +
-    `${ticket.isCritical ? " · kritisch (braucht menschliche Freigabe)" : ""}\n\n${clipForPrompt(ticket.description ?? "", 6000)}`;
+    `${ticket.isCritical ? " · kritisch (braucht menschliche Freigabe)" : ""}\n\n${clipForPrompt(ticket.description ?? "", 6000)}${bugRepro}`;
 
   // Der Zaehler steigt hier, nicht erst am Ende: Auch ein Anlauf, der gleich
   // abstuerzt, hat einen Versuch verbraucht – sonst zaehlt ausgerechnet die

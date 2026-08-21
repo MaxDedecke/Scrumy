@@ -9,6 +9,7 @@ import path from "node:path";
 import type { ToolDef } from "@/lib/llm";
 import { isFrozenDocPath, listTrackedFiles, readRepoFile, safeRepoPath, searchRepo, writeFiles, WorkspaceError } from "@/lib/workspace";
 import { runInSandbox } from "@/lib/testRun";
+import { runAgentIntegrationCheck, type HttpProbeRequest } from "@/lib/liveStack";
 
 export interface ToolContext {
   dir: string;
@@ -101,6 +102,39 @@ export const IMPLEMENTATION_TOOLS: ToolDef[] = [
         cwd: { type: "string", description: "Optional: Unterverzeichnis relativ zur Repo-Wurzel" },
       },
       required: ["command"],
+    },
+  },
+  {
+    name: "run_integration_check",
+    description:
+      `Startet den ECHTEN Docker-Compose-Stack dieses Projekts (Frontend+Backend+DB, wie „Anwendung starten") und kann optional einen HTTP-Request dagegen fahren – inklusive Datei-Upload. ` +
+      `Nutze das gezielt bei Fehlern, die NUR im laufenden System auftreten (z.B. aus einem Bug-Ticket „funktioniert nicht beim Testen der Live-Anwendung"), nicht bei jedem Ticket: run_command/Tests laufen in einer einzelnen isolierten Sandbox OHNE Compose-Netz und OHNE Datenbank – ein Fehler, der nur beim Zusammenspiel mehrerer Dienste auftritt, ist damit nicht nachstellbar, und ein Ticket sollte deshalb nicht auf bloßer Vermutung („scheint ein Docker-Problem zu sein") abgeschlossen werden, ohne diesen Check versucht zu haben. ` +
+      `Baut den Stack neu (dauert bis zu einigen Minuten), prüft danach Erreichbarkeit, führt bei Angabe von „path" den Request aus und liefert Antwort + die letzten Service-Logs zurück. ` +
+      `Kann fehlschlagen, weil gerade ein anderes Projekt live ist – das ist kein Befund über diesen Bug, sondern ein Grund, es später erneut zu versuchen.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Pfad (+Query) für den Test-Request, z.B. \"/api/upload\". Weglassen, um nur zu prüfen, ob der Stack überhaupt hochkommt.",
+        },
+        method: { type: "string", description: "HTTP-Methode, Standard GET" },
+        headers: { type: "object", description: "Zusätzliche Header, z.B. Authorization" },
+        bodyText: { type: "string", description: "Rohtext-Körper (z.B. JSON) – nicht zusammen mit uploadFile" },
+        uploadFile: {
+          type: "object",
+          description: "Zum Nachstellen eines Datei-Uploads (multipart/form-data)",
+          properties: {
+            fieldName: { type: "string", description: "Name des Formularfelds, z.B. \"file\"" },
+            fileName: { type: "string" },
+            contentType: { type: "string", description: "z.B. \"text/plain\" oder \"image/png\"" },
+            content: { type: "string", description: "Textinhalt der Testdatei – reicht für die meisten Upload-Fehler" },
+            contentBase64: { type: "string", description: "Alternativ: Base64 für binäre Testdateien" },
+            extraFields: { type: "object", description: "Weitere Formularfelder neben der Datei" },
+          },
+          required: ["fieldName"],
+        },
+      },
     },
   },
 ];
@@ -246,6 +280,59 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       const status = result.timedOut ? "\n⚠ Zeitlimit erreicht, Befehl abgebrochen." : `\nExit-Code: ${result.exitCode}`;
       const body = `${result.output}${status}`;
       return result.exitCode === 0 && !result.timedOut ? ok(body) : err(body);
+    }
+
+    case "run_integration_check": {
+      if (ctx.bashTimeUsedMs >= ctx.bashTimeBudgetMs) {
+        return err("Bash-/Sandbox-Zeitbudget für dieses Ticket ist aufgebraucht – keine weiteren Prüfungen in diesem Anlauf.");
+      }
+      const relPath = str(input, "path");
+      const headersInput = input.headers;
+      const headers =
+        headersInput && typeof headersInput === "object" && !Array.isArray(headersInput)
+          ? (headersInput as Record<string, string>)
+          : undefined;
+      const uploadInput = input.uploadFile;
+      let uploadFile: HttpProbeRequest["uploadFile"];
+      if (uploadInput && typeof uploadInput === "object") {
+        const upload = uploadInput as Record<string, unknown>;
+        const fieldName = str(upload, "fieldName");
+        if (!fieldName) return err(`„uploadFile.fieldName" fehlt.`);
+        uploadFile = {
+          fieldName,
+          fileName: str(upload, "fileName") || undefined,
+          contentType: str(upload, "contentType") || undefined,
+          content: str(upload, "content") || undefined,
+          contentBase64: str(upload, "contentBase64") || undefined,
+          extraFields:
+            upload.extraFields && typeof upload.extraFields === "object"
+              ? (upload.extraFields as Record<string, string>)
+              : undefined,
+        };
+      }
+      const request: HttpProbeRequest | null = relPath
+        ? { path: relPath, method: str(input, "method") || undefined, headers, bodyText: str(input, "bodyText") || undefined, uploadFile }
+        : null;
+
+      // Grosszuegigeres, aber vom selben Zeitbudget gedecktes Zeitlimit als
+      // run_command: ein "docker compose up --build" braucht spuerbar laenger
+      // als ein einzelner Testlauf. Nie mehr als das verbleibende Restbudget.
+      const remainingBudget = ctx.bashTimeBudgetMs - ctx.bashTimeUsedMs;
+      const timeoutMs = Math.max(30_000, Math.min(5 * 60_000, remainingBudget));
+      const startedAt = Date.now();
+      const result = await runAgentIntegrationCheck(ctx.projectId, request, { timeoutMs });
+      ctx.bashTimeUsedMs += Date.now() - startedAt;
+
+      if (!result.reachable) {
+        return err(`Stack nicht erreichbar/geprüft: ${result.blockedReason ?? "unbekannter Grund"}${result.logs ? `\n\nLog:\n${result.logs}` : ""}`);
+      }
+      const probeText = result.probe
+        ? result.probe.ok
+          ? `\n\nRequest-Ergebnis: HTTP ${result.probe.status} ${result.probe.statusText ?? ""}\nAntwort:\n${result.probe.body ?? ""}`
+          : `\n\nRequest fehlgeschlagen: ${result.probe.error ?? "unbekannter Fehler"}`
+        : "";
+      const body = `Stack erreichbar (Port ${result.port}).${probeText}\n\nService-Logs (letzte Zeilen):\n${result.logs}`;
+      return result.probe && !result.probe.ok ? err(body) : ok(body);
     }
 
     default:

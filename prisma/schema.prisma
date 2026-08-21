@@ -154,6 +154,11 @@ enum LiveTrigger {
   /// Automatisch durch die Integrationspruefung am Sprint-Ende (siehe
   /// worker/tasks/sprintReview.ts).
   SPRINT_REVIEW
+  /// Vom Umsetzer-Agenten waehrend der Ticket-Arbeit, um einen nur im
+  /// laufenden System auftretenden Fehler nachzustellen (siehe
+  /// runAgentIntegrationCheck in src/lib/liveStack.ts, Werkzeug
+  /// "run_integration_check" in worker/agentTools.ts).
+  AGENT_CHECK
 }
 
 /// Eine einzelne Anforderung fuer ein Projekt in der Discovery-Phase – entweder

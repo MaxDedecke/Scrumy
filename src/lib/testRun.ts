@@ -21,7 +21,9 @@ import { listTrackedFiles, readRepoFile } from "@/lib/workspace";
 
 const execFileAsync = promisify(execFile);
 
-function testRunnerImage(): string {
+/// Auch fuer runHttpProbe in liveStack.ts: derselbe generische Node-Runner,
+/// nur mit "--network host" statt Volume-Mount (siehe dort).
+export function testRunnerImage(): string {
   return process.env.TEST_RUNNER_IMAGE || process.env.PREVIEW_RUNNER_IMAGE || "scrumy-preview-runner";
 }
 function testRunnerVolume(): string {
