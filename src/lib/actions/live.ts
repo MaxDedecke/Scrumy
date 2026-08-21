@@ -20,7 +20,7 @@ export async function startLiveAction(formData: FormData): Promise<ActionResult>
   // "layout" revalidiert den ganzen Projektrahmen (Kopf mit LiveAppControls
   // und dem "Live"-Pill steht dort, siehe src/app/projects/[projectId]/layout.tsx).
   revalidatePath(`/projects/${projectId}`, "layout");
-  revalidatePath(`/projects/${projectId}/live`);
+  revalidatePath(`/live/${projectId}`);
   return result;
 }
 
@@ -30,6 +30,6 @@ export async function stopLiveAction(formData: FormData): Promise<ActionResult> 
 
   const result = await stopLiveStack(projectId);
   revalidatePath(`/projects/${projectId}`, "layout");
-  revalidatePath(`/projects/${projectId}/live`);
+  revalidatePath(`/live/${projectId}`);
   return result;
 }

@@ -2,7 +2,7 @@
 
 // „Bug melden" – der Auftraggeber sieht eine fehlgeschlagene Vorschau oder
 // Live-Anwendung (siehe src/app/projects/[projectId]/preview/page.tsx bzw.
-// .../live/page.tsx, jeweils im ERROR-Zweig) und meldet sie direkt als
+// src/app/live/[projectId]/page.tsx, jeweils im ERROR-Zweig) und meldet sie direkt als
 // Ticket, statt dass jemand von außen (oder wir selbst) am Kunden-Repo
 // vorbeischraubt. Der Fehler landet damit dort, wo das Team ihn auch sonst
 // abarbeitet – mit Nachweis, Sprint-Zuordnung und (falls nötig) menschlichem
@@ -88,7 +88,7 @@ export async function reportBug(formData: FormData): Promise<ActionResult> {
   });
 
   revalidateProject(projectId);
-  revalidatePath(`/projects/${projectId}/live`);
+  revalidatePath(`/live/${projectId}`);
 
   if (project.status !== "ACTIVE") {
     return ok(`Als Ticket „${title}" gemeldet. Das Team ist pausiert/beendet – wird aufgegriffen, sobald es weiterarbeitet.`);

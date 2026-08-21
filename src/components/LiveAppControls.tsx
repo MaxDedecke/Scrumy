@@ -16,7 +16,7 @@ import type { PreviewStatus } from "@/generated/prisma/client";
 // braucht.
 //
 // Der Play-Klick öffnet IMMER einen neuen Tab (siehe Kopfkommentar von
-// src/app/projects/[projectId]/live/page.tsx) – synchron im Click-Handler,
+// src/app/live/[projectId]/page.tsx) – synchron im Click-Handler,
 // VOR jedem await, sonst blockt der Popup-Blocker den erst nach der
 // Server-Antwort geöffneten Tab. Deshalb hier kein <ActionForm> für den
 // Play-Knopf (das reagiert erst NACH der Server-Antwort) – nur für Terminate,
@@ -38,7 +38,7 @@ export function LiveAppControls({
   const disabled = pending || (!isLiveHere && blockedBy !== null);
 
   function handlePlay() {
-    window.open(`/projects/${projectId}/live`, "_blank", "noopener");
+    window.open(`/live/${projectId}`, "_blank", "noopener");
     startTransition(async () => {
       const formData = new FormData();
       formData.set("projectId", projectId);

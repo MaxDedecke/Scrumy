@@ -451,6 +451,89 @@
     color: var(--color-ink-2);
   }
 
+  /* -------------------------------------------------------------------
+     Live-Boot (LiveBoot, /live/[projectId]): der Start-Moment der eigenen
+     Anwendung bekommt einen fensterfuellenden Terminal-Screen statt einer
+     Karte in der gewohnten App-Chrome (siehe AppShell fuer die
+     Chrome-Ausblendung, LiveBoot.tsx fuer den Ablauf). Scanlines und Glow
+     sind reine Atmosphaere – sehr dezent, damit das echte Log lesbar bleibt.
+     ------------------------------------------------------------------- */
+  .live-boot {
+    position: relative;
+    isolation: isolate;
+    background:
+      radial-gradient(
+        60rem 40rem at 50% 15%,
+        color-mix(in oklab, var(--color-accent) 10%, transparent),
+        transparent 60%
+      ),
+      #000;
+    transition:
+      opacity 700ms ease-in,
+      filter 700ms ease-in,
+      transform 700ms ease-in;
+  }
+
+  .live-boot::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.025) 0,
+      rgba(255, 255, 255, 0.025) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+  }
+
+  .live-boot > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Der eigentliche Reveal-Moment: das Terminal blurt/skaliert weg, bevor
+     LiveBoot.tsx auf die echte Anwendung weiterleitet. */
+  .live-boot-fade-out {
+    opacity: 0;
+    filter: blur(10px);
+    transform: scale(1.015);
+  }
+
+  .live-terminal {
+    border-radius: var(--radius-card);
+    border: 1px solid var(--color-hairline-strong);
+    background: color-mix(in oklab, var(--color-surface) 88%, transparent);
+    box-shadow:
+      0 0 0 1px rgba(122, 165, 247, 0.08),
+      0 2rem 5rem -1.5rem rgba(122, 165, 247, 0.35);
+    backdrop-filter: blur(6px);
+  }
+
+  .live-terminal-log {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .live-cursor {
+    display: inline-block;
+    color: var(--color-accent);
+    animation: live-cursor-blink 1s step-end infinite;
+  }
+
+  @keyframes live-cursor-blink {
+    0%,
+    49% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .toast-enter {
       animation: none;
@@ -459,6 +542,19 @@
     .office-dots span,
     .office-steam path {
       animation: none;
+    }
+
+    .live-cursor {
+      animation: none;
+    }
+
+    .live-boot {
+      transition: opacity 200ms linear;
+    }
+
+    .live-boot-fade-out {
+      filter: none;
+      transform: none;
     }
   }
 }
