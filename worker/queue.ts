@@ -98,10 +98,10 @@ export async function enqueueDelayedAgentJob<TIdentifier extends keyof GraphileW
 export async function activeTicketJobIds(ticketIds: string[]): Promise<Set<string>> {
   if (ticketIds.length === 0) return new Set();
   const jobKeys = ticketIds.map((ticketId) => `ticketWork:${ticketId}`);
-  const rows = await prisma.$queryRaw<{ job_key: string }[]>`
-    select job_key from graphile_worker.jobs where job_key = any(${jobKeys}::text[])
+  const rows = await prisma.$queryRaw<{ key: string }[]>`
+    select key from graphile_worker.jobs where key = any(${jobKeys}::text[])
   `;
-  return new Set(rows.map((row) => row.job_key.slice("ticketWork:".length)));
+  return new Set(rows.map((row) => row.key.slice("ticketWork:".length)));
 }
 
 /// Nimmt alle noch wartenden Jobs der genannten Agenten aus der Queue. Wird
