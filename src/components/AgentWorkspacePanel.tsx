@@ -64,7 +64,7 @@ export function AgentWorkspacePanel({
   /** z.B. `lg:col-span-2`, wenn das Panel nicht die ganze Rasterzeile einnimmt. */
   className?: string;
 }) {
-  const [mode, setMode] = useState<ViewMode>("list");
+  const [mode, setMode] = useState<ViewMode>("office");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const orderedInquiries = [...inquiries].reverse();
