@@ -5,6 +5,26 @@ sind, und in welcher Reihenfolge sie sich zu schließen lohnen. Grundlage ist
 der Code, nicht die Absicht: `worker/agentTools.ts`, `worker/agentToolLoop.ts`,
 `worker/tasks/*`, `src/lib/testRun.ts`, `src/lib/liveStack.ts`, `src/lib/team.ts`.
 
+## Stand
+
+| # | Punkt | Stand |
+|---|-------|-------|
+| 1 | Browser-Prüfung (`check_in_browser`) | erledigt – `f7432ea` |
+| 2a | Eigener Arbeitsstand + Historie (`show_diff`, `show_history`) | erledigt – `b7db8fd` |
+| 2b | Sandbox kennt nur JavaScript | offen |
+| 3 | Zugriff auf die laufende Datenbank | offen |
+| 4 | Web-/Doku-Zugriff | offen |
+| 5 | Frage an einen Kollegen im laufenden Anlauf | offen |
+| 6 | Gedächtnis über Tickets hinweg | offen |
+| 7 | Token-/Kostentracking | offen |
+| 8 | Release-Schritt | offen |
+| 9 | Regressions-Absicherung über den Sprint hinweg | offen |
+| 10 | Tote Rollen REVIEWER/DEVOPS | offen |
+| 11 | Fehlende Rolle SECURITY | offen |
+
+Offene Folgearbeit zu bereits Erledigtem steht jeweils beim Punkt selbst
+(Screenshots und Nutzung durch QA/Design in Punkt 1).
+
 ## Ist-Stand
 
 Werkzeuge des Umsetzer-Agenten (`IMPLEMENTATION_TOOLS`): `read_file`,
@@ -15,7 +35,7 @@ Agent selbst.
 
 ## Werkzeuge
 
-### 1. Browser-Prüfung – IN ARBEIT
+### 1. Browser-Prüfung – ERLEDIGT (`f7432ea`)
 
 `run_integration_check` fährt nur einen HTTP-Request gegen den Stack. Kein
 gerendertes DOM, keine Browser-Konsolenfehler, keine fehlgeschlagenen
@@ -26,7 +46,7 @@ abgefangen werden: Ein Fehler, der sich im Browser als
 Kein Agent hat je die Oberfläche gesehen – auch der DESIGN-Agent reviewt nur
 Diffs, obwohl Sidebar-Pflicht und shadcn-Standard in den Grundregeln stehen.
 
-Phase 1 (umgesetzt): Werkzeug `check_in_browser` – echter Chromium im
+Phase 1 (umgesetzt, ausgerollt am 22.08.2026): Werkzeug `check_in_browser` – echter Chromium im
 Sibling-Container gegen den laufenden Compose-Stack, liefert Konsolenfehler,
 fehlgeschlagene Netzwerk-Requests, unbehandelte Seitenfehler, sichtbaren
 Seitentext und einfache Interaktionsschritte (click/fill/wait).
@@ -39,7 +59,7 @@ Phase 2 (offen):
 - `findInternalHostnameLeaks` zurückbauen, sobald der Browser-Check die
   Fehlerklasse zuverlässig fängt.
 
-### 2a. Eigener Arbeitsstand und Historie – ERLEDIGT
+### 2a. Eigener Arbeitsstand und Historie – ERLEDIGT (`b7db8fd`)
 
 Der Agent konnte seinen eigenen kumulierten Diff nicht ansehen, bevor er
 `finish` ruft: `gitLog`/`gitShow` in `src/lib/workspace.ts` gab es nur für die
