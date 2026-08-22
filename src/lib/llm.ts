@@ -321,74 +321,94 @@ async function chatTurnAnthropic(
   cancelSignal?: AbortSignal,
 ): Promise<ChatTurnResult> {
   const base = trimTrailingSlash(profile.baseUrl || "https://api.anthropic.com");
-  const data = (await postJson(
-    `${base}/v1/messages`,
-    { "x-api-key": requireApiKey(profile), "anthropic-version": "2023-06-01" },
-    {
-      model: profile.model,
-      // Bei aktuellen Modellen denkt das Modell standardmäßig mit, und
-      // max_tokens deckelt Denken UND Antwort – deshalb großzügig.
-      max_tokens: Math.max(maxTokens, 16000),
-      // Der Systemprompt als Block statt als String, damit der Cache-Markierer
-      // daran haengen kann (siehe Kommentar bei `toAnthropicMessages`). Er
-      // deckt die davor gerenderten Werkzeugschemata gleich mit ab. Ein leerer
-      // Textblock waere ein 400er, deshalb bei leerem Systemprompt gar keiner.
-      ...(system.trim() ? { system: [{ type: "text", text: system, cache_control: CACHE_CONTROL }] } : {}),
-      messages: toAnthropicMessages(messages, cacheableMessageIndices(messages.length)),
-      ...(tools && tools.length > 0
-        ? { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) }
-        : {}),
-    },
-    timeoutMs,
-    cancelSignal,
-  )) as {
-    content?: { type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[];
-    stop_reason?: string;
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_read_input_tokens?: number;
-      cache_creation_input_tokens?: number;
+
+  // Schleife nur wegen der leeren Antwort unten (siehe dortiger Kommentar) –
+  // ein echter Transport-Fehler (Netzwerk, 4xx/5xx, kaputtes JSON) hat seine
+  // eigene Wiederholung schon in `postJson` und wirft hier durch.
+  for (let attempt = 0; ; attempt++) {
+    const isLastAttempt = attempt === RETRY_DELAYS_MS.length;
+    const data = (await postJson(
+      `${base}/v1/messages`,
+      { "x-api-key": requireApiKey(profile), "anthropic-version": "2023-06-01" },
+      {
+        model: profile.model,
+        // Bei aktuellen Modellen denkt das Modell standardmäßig mit, und
+        // max_tokens deckelt Denken UND Antwort – deshalb großzügig.
+        max_tokens: Math.max(maxTokens, 16000),
+        // Der Systemprompt als Block statt als String, damit der Cache-Markierer
+        // daran haengen kann (siehe Kommentar bei `toAnthropicMessages`). Er
+        // deckt die davor gerenderten Werkzeugschemata gleich mit ab. Ein leerer
+        // Textblock waere ein 400er, deshalb bei leerem Systemprompt gar keiner.
+        ...(system.trim() ? { system: [{ type: "text", text: system, cache_control: CACHE_CONTROL }] } : {}),
+        messages: toAnthropicMessages(messages, cacheableMessageIndices(messages.length)),
+        ...(tools && tools.length > 0
+          ? { tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) }
+          : {}),
+      },
+      timeoutMs,
+      cancelSignal,
+    )) as {
+      content?: { type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[];
+      stop_reason?: string;
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      };
     };
-  };
 
-  if (data.stop_reason === "refusal") {
-    throw new LlmError("Das Modell hat die Anfrage abgelehnt.");
-  }
+    if (data.stop_reason === "refusal") {
+      throw new LlmError("Das Modell hat die Anfrage abgelehnt.");
+    }
 
-  const blocks = data.content ?? [];
-  const text = blocks
-    .filter((block) => block.type === "text")
-    .map((block) => block.text ?? "")
-    .join("");
-  const toolCalls: ToolCall[] = blocks
-    .filter((block) => block.type === "tool_use")
-    .map((block) => ({ id: block.id ?? nextToolCallId(), name: block.name ?? "", input: block.input ?? {} }));
+    const blocks = data.content ?? [];
+    const text = blocks
+      .filter((block) => block.type === "text")
+      .map((block) => block.text ?? "")
+      .join("");
+    const toolCalls: ToolCall[] = blocks
+      .filter((block) => block.type === "tool_use")
+      .map((block) => ({ id: block.id ?? nextToolCallId(), name: block.name ?? "", input: block.input ?? {} }));
 
-  if (data.stop_reason === "max_tokens") {
-    throw new LlmError(
-      "Die Modellantwort wurde am Token-Limit abgeschnitten. Das Ergebnis wird aus Sicherheitsgründen nicht angewendet.",
-      "TOKEN_LIMIT",
-    );
+    if (data.stop_reason === "max_tokens") {
+      throw new LlmError(
+        "Die Modellantwort wurde am Token-Limit abgeschnitten. Das Ergebnis wird aus Sicherheitsgründen nicht angewendet.",
+        "TOKEN_LIMIT",
+      );
+    }
+    // Nur ohne Werkzeuge muss Text da sein – ein reiner Tool-Aufruf ohne
+    // Begleittext ist eine ganz normale, gültige Antwort.
+    if (!text.trim() && toolCalls.length === 0) {
+      // Kein Denkfehler des Modells, sondern ein Ausrutscher des Anbieters
+      // selbst (Anthropic meldet "fertig", liefert aber nichts) – erst wie
+      // bei einem echten Transport-Fehler ein paar Mal an Ort und Stelle
+      // erneut versuchen. Klappt das nie, den Aufrufer per "TRANSPORT" wie
+      // einen Anbieter-Ausrutscher weiterarbeiten lassen (Anlauf verbuchen,
+      // automatisch weiter, kein verworfener Arbeitsstand, keine
+      // Eskalations-Klärung an den Menschen – siehe worker/tasks/ticketWork.ts),
+      // statt ihn als Programmabsturz zu behandeln.
+      if (!isLastAttempt) {
+        await sleep(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      throw new LlmError(
+        `Das Modell hat keinen Text zurückgegeben${data.stop_reason ? ` (Abbruchgrund: ${data.stop_reason})` : ""}.`,
+        "TRANSPORT",
+      );
+    }
+    return {
+      text,
+      toolCalls,
+      stopReason: data.stop_reason ?? "",
+      usage: {
+        inputTokens: data.usage?.input_tokens ?? 0,
+        outputTokens: data.usage?.output_tokens ?? 0,
+        cacheReadTokens: data.usage?.cache_read_input_tokens ?? 0,
+        cacheWriteTokens: data.usage?.cache_creation_input_tokens ?? 0,
+      },
+    };
   }
-  // Nur ohne Werkzeuge muss Text da sein – ein reiner Tool-Aufruf ohne
-  // Begleittext ist eine ganz normale, gültige Antwort.
-  if (!text.trim() && toolCalls.length === 0) {
-    throw new LlmError(
-      `Das Modell hat keinen Text zurückgegeben${data.stop_reason ? ` (Abbruchgrund: ${data.stop_reason})` : ""}.`,
-    );
-  }
-  return {
-    text,
-    toolCalls,
-    stopReason: data.stop_reason ?? "",
-    usage: {
-      inputTokens: data.usage?.input_tokens ?? 0,
-      outputTokens: data.usage?.output_tokens ?? 0,
-      cacheReadTokens: data.usage?.cache_read_input_tokens ?? 0,
-      cacheWriteTokens: data.usage?.cache_creation_input_tokens ?? 0,
-    },
-  };
 }
 
 // --- OpenAI und OpenAI-kompatibel (OpenAI, GENERIC_OPENAI_COMPAT, Ollama) --
@@ -792,7 +812,7 @@ async function chatTurnOpenAiCompat(
     ...(isOpenRouter && preferThroughput ? { provider: { sort: "throughput" } } : {}),
   };
 
-  let data: {
+  type OpenAiCompatData = {
     choices?: { message?: { content?: string; tool_calls?: OpenAiToolCall[] }; finish_reason?: string }[];
     error?: { message?: string };
     // Anders als bei Anthropic gibt es hier nichts zu markieren: OpenAI und
@@ -815,95 +835,116 @@ async function chatTurnOpenAiCompat(
   // liegen blieb und das ganze Team stillstand.
   const effectiveMaxTokens = Math.max(maxTokens, 16000);
 
-  try {
-    data = (await postJson(
-      url,
-      headers,
-      {
-        model: profile.model,
-        max_tokens: effectiveMaxTokens,
-        messages: openAiMessages,
-        ...(openAiTools ? { tools: openAiTools } : {}),
-        ...openRouterExtras,
-      },
-      timeoutMs,
-      cancelSignal,
-    )) as typeof data;
-  } catch (error) {
-    // Neuere Modelle (u.a. die o1-/gpt-5-Reihe) lehnen `max_tokens` ab und
-    // verlangen `max_completion_tokens` – einmalig mit dem anderen
-    // Feldnamen erneut versuchen, statt den Nutzer mit dem Rohfehler
-    // allein zu lassen.
-    if (error instanceof LlmError && error.message.includes("max_completion_tokens")) {
+  // Schleife nur wegen der leeren Antwort unten (siehe dortiger Kommentar) –
+  // ein echter Transport-Fehler (Netzwerk, 4xx/5xx, kaputtes JSON) hat seine
+  // eigene Wiederholung schon in `postJson` und wirft hier durch.
+  for (let attempt = 0; ; attempt++) {
+    const isLastAttempt = attempt === RETRY_DELAYS_MS.length;
+    let data: OpenAiCompatData;
+    try {
       data = (await postJson(
         url,
         headers,
         {
           model: profile.model,
-          max_completion_tokens: effectiveMaxTokens,
+          max_tokens: effectiveMaxTokens,
           messages: openAiMessages,
           ...(openAiTools ? { tools: openAiTools } : {}),
           ...openRouterExtras,
         },
         timeoutMs,
         cancelSignal,
-      )) as typeof data;
-    } else {
-      throw error;
-    }
-  }
-
-  if (data.error?.message) throw new LlmError(data.error.message);
-
-  const choice = data.choices?.[0];
-  let text = pickString(choice?.message?.content) ?? "";
-  let toolCalls = parseOpenAiToolCalls(choice?.message?.tool_calls);
-  // Server hinter dem OpenAI-kompatiblen Endpunkt liefert Tool-Aufrufe
-  // manchmal nicht (vollständig) strukturiert (siehe Kommentar bei
-  // `mergeWithPseudoToolCalls`) – häufig bei lokalen/selbstgehosteten
-  // Modellen wie Qwen ohne passenden Tool-Call-Parser auf dem Server. Läuft
-  // bewusst auch dann noch, wenn schon strukturierte Aufrufe da sind: Ein
-  // Server kann einen echten Aufruf strukturiert und einen zweiten nur als
-  // Text im selben content liefern.
-  ({ text, toolCalls } = mergeWithPseudoToolCalls(text, toolCalls));
-
-  if (choice?.finish_reason === "length") {
-    throw new LlmError(
-      "Die Modellantwort wurde am Token-Limit abgeschnitten. Das Ergebnis wird aus Sicherheitsgründen nicht angewendet.",
-      "TOKEN_LIMIT",
-    );
-  }
-  if (!text && toolCalls.length === 0) {
-    // Leere Antwort ohne Grund ist für den Nutzer nicht zu deuten. Der
-    // häufigste Fall bei Reasoning-Modellen: Das Token-Budget ging beim
-    // Nachdenken drauf, für die Antwort blieb nichts übrig
-    // (`finish_reason: "length"`).
-    const reason = choice?.finish_reason;
-    throw new LlmError(
-      `Der Anbieter hat keinen Text zurückgegeben${reason ? ` (Abbruchgrund: ${reason})` : ""}.`,
-    );
-  }
-  // `prompt_tokens` enthaelt hier – anders als Anthropics `input_tokens` – die
-  // aus dem Cache bedienten Tokens bereits mit. Fuer eine ueber alle Anbieter
-  // gleich lesbare Zahl wird der Cache-Anteil deshalb herausgerechnet.
-  const cachedTokens = data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
-  return {
-    text,
-    toolCalls,
-    stopReason: choice?.finish_reason ?? "",
-    ...(data.usage
-      ? {
-          usage: {
-            inputTokens: Math.max((data.usage.prompt_tokens ?? 0) - cachedTokens, 0),
-            outputTokens: data.usage.completion_tokens ?? 0,
-            cacheReadTokens: cachedTokens,
-            // Diese Anbieter weisen keinen Schreibposten aus – sie berechnen
-            // fuer das Anlegen eines Eintrags keinen Aufschlag.
-            cacheWriteTokens: 0,
+      )) as OpenAiCompatData;
+    } catch (error) {
+      // Neuere Modelle (u.a. die o1-/gpt-5-Reihe) lehnen `max_tokens` ab und
+      // verlangen `max_completion_tokens` – einmalig mit dem anderen
+      // Feldnamen erneut versuchen, statt den Nutzer mit dem Rohfehler
+      // allein zu lassen.
+      if (error instanceof LlmError && error.message.includes("max_completion_tokens")) {
+        data = (await postJson(
+          url,
+          headers,
+          {
+            model: profile.model,
+            max_completion_tokens: effectiveMaxTokens,
+            messages: openAiMessages,
+            ...(openAiTools ? { tools: openAiTools } : {}),
+            ...openRouterExtras,
           },
-        }
-      : {}),
-  };
+          timeoutMs,
+          cancelSignal,
+        )) as OpenAiCompatData;
+      } else {
+        throw error;
+      }
+    }
+
+    if (data.error?.message) throw new LlmError(data.error.message);
+
+    const choice = data.choices?.[0];
+    let text = pickString(choice?.message?.content) ?? "";
+    let toolCalls = parseOpenAiToolCalls(choice?.message?.tool_calls);
+    // Server hinter dem OpenAI-kompatiblen Endpunkt liefert Tool-Aufrufe
+    // manchmal nicht (vollständig) strukturiert (siehe Kommentar bei
+    // `mergeWithPseudoToolCalls`) – häufig bei lokalen/selbstgehosteten
+    // Modellen wie Qwen ohne passenden Tool-Call-Parser auf dem Server. Läuft
+    // bewusst auch dann noch, wenn schon strukturierte Aufrufe da sind: Ein
+    // Server kann einen echten Aufruf strukturiert und einen zweiten nur als
+    // Text im selben content liefern.
+    ({ text, toolCalls } = mergeWithPseudoToolCalls(text, toolCalls));
+
+    if (choice?.finish_reason === "length") {
+      throw new LlmError(
+        "Die Modellantwort wurde am Token-Limit abgeschnitten. Das Ergebnis wird aus Sicherheitsgründen nicht angewendet.",
+        "TOKEN_LIMIT",
+      );
+    }
+    if (!text && toolCalls.length === 0) {
+      // Leere Antwort ohne Grund ist für den Nutzer nicht zu deuten. Der
+      // häufigste Fall bei Reasoning-Modellen: Das Token-Budget ging beim
+      // Nachdenken drauf, für die Antwort blieb nichts übrig
+      // (`finish_reason: "length"`). Kein Denkfehler des Modells, sondern ein
+      // Ausrutscher des Anbieters selbst (beobachtet u.a. bei OpenRouter,
+      // dessen Multi-Upstream-Routing auch sonst schon fuer schwankende
+      // Antwortqualitaet sorgt) – erst wie bei einem echten Transport-Fehler
+      // ein paar Mal an Ort und Stelle erneut versuchen. Klappt das nie, den
+      // Aufrufer per "TRANSPORT" wie einen Anbieter-Ausrutscher weiterarbeiten
+      // lassen (Anlauf verbuchen, automatisch weiter, kein verworfener
+      // Arbeitsstand, keine Eskalations-Klärung an den Menschen – siehe
+      // worker/tasks/ticketWork.ts), statt ihn als Programmabsturz zu
+      // behandeln.
+      const reason = choice?.finish_reason;
+      if (!isLastAttempt) {
+        await sleep(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      throw new LlmError(
+        `Der Anbieter hat keinen Text zurückgegeben${reason ? ` (Abbruchgrund: ${reason})` : ""}.`,
+        "TRANSPORT",
+      );
+    }
+    // `prompt_tokens` enthaelt hier – anders als Anthropics `input_tokens` – die
+    // aus dem Cache bedienten Tokens bereits mit. Fuer eine ueber alle Anbieter
+    // gleich lesbare Zahl wird der Cache-Anteil deshalb herausgerechnet.
+    const cachedTokens = data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
+    return {
+      text,
+      toolCalls,
+      stopReason: choice?.finish_reason ?? "",
+      ...(data.usage
+        ? {
+            usage: {
+              inputTokens: Math.max((data.usage.prompt_tokens ?? 0) - cachedTokens, 0),
+              outputTokens: data.usage.completion_tokens ?? 0,
+              cacheReadTokens: cachedTokens,
+              // Diese Anbieter weisen keinen Schreibposten aus – sie berechnen
+              // fuer das Anlegen eines Eintrags keinen Aufschlag.
+              cacheWriteTokens: 0,
+            },
+          }
+        : {}),
+    };
+  }
 }
 
 /// Ein Frage-Antwort-Aufruf gegen das Profil, mit optionalen Werkzeugen und
