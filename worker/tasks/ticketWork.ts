@@ -191,6 +191,10 @@ async function splitTicketAfterTokenLimit({
     kind: "ticket_split",
     headline: `Zerlegt Ticket „${ticket.title}" nach Token-Limit`,
     maxTokens: 5000,
+    // Wie bei sprint_planning (dieselbe Begründung: OpenRouter routet dieses
+    // Profil ueber viele Anbieter mit stark schwankendem Durchsatz) auf den
+    // schnelleren Anbieter sortieren lassen, statt es dem Zufall zu ueberlassen.
+    preferThroughput: true,
     // Wie bei sprint_refinement (worker/tasks/sprintPlanning.ts, dieselbe
     // Begründung dort): Mehrere in sich stimmige Teiltickets aus einem zu
     // großen Arbeitsschritt herauszuarbeiten braucht dem Modell erkennbar
@@ -388,6 +392,7 @@ async function checkAlreadySatisfied({
     kind: "acceptance_precheck",
     headline: `Prüft, ob „${ticket.title}" schon erfüllt ist`,
     maxTokens: 300,
+    preferThroughput: true,
     system: `${TEAM_GRUNDREGELN}
 
 Du bist ${agent.name}. Du prüfst NUR, ob ein Ticket anhand des bereits vorhandenen Codes schon vollständig erfüllt ist – du änderst nichts und schlägst nichts vor. Du antwortest ausschließlich mit einem JSON-Objekt.`,
@@ -454,6 +459,7 @@ async function auditNoChangeClaim({
     kind: "no_change_audit",
     headline: `Prüft nach: „${ticket.title}" ohne Änderung zurückgegeben`,
     maxTokens: 900,
+    preferThroughput: true,
     system: `${TEAM_GRUNDREGELN}
 
 Du bist ${agent.name} und prüfst eine Behauptung nach: Ein Kollege gibt ein Ticket zurück, ohne eine Zeile geändert zu haben, weil angeblich schon alles da ist. Du gehst die Akzeptanzkriterien einzeln durch und urteilst allein am vorliegenden Code. Du änderst nichts. Du antwortest ausschließlich mit einem JSON-Objekt.`,
@@ -661,6 +667,7 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
       kind: "ticket_plan",
       headline: `Plant Ticket „${ticket.title}"`,
       maxTokens: 3000,
+      preferThroughput: true,
       system: `${TEAM_GRUNDREGELN}
 
 Du bist ${planner.name} und planst die Umsetzung eines Tickets für ${implementer.name}.`,
@@ -1259,6 +1266,7 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
     kind: "review",
     headline: `Prüft Ticket „${ticket.title}"`,
     maxTokens: 4000,
+    preferThroughput: true,
     system: `${TEAM_GRUNDREGELN}
 
 Du bist ${reviewer.name} (QA) und prüfst die Arbeit von ${implementer.name}. Du antwortest ausschließlich mit einem JSON-Objekt.`,
@@ -1585,6 +1593,7 @@ async function runDesignReview(input: {
     kind: "design_review",
     headline: `Prüft „${input.ticketTitle}" gegen das Design-Konzept`,
     maxTokens: 3000,
+    preferThroughput: true,
     system: `${TEAM_GRUNDREGELN}
 
 Du bist ${designer.name} und verantwortest das Design-Konzept dieses Projekts. Du prüfst eine Frontend-Änderung von ${input.implementer.name} dagegen. Du antwortest ausschließlich mit einem JSON-Objekt.`,

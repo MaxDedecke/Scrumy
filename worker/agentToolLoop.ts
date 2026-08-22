@@ -42,6 +42,15 @@ const LAST_CALL_TURNS = 3;
 /// Anteil des Zeitbudgets, ab dem dieselbe Schlussaufforderung greift – ein
 /// Anlauf kann auch an der Zeit sterben, lange bevor die Schritte alle sind.
 const LAST_CALL_TIME_FRACTION = 0.85;
+/// Mindest-Restzeit, um einen weiteren Turn ueberhaupt erst zu versuchen. Bei
+/// 5s (der alte Wert) wurde im Timeless-Projekt wiederholt ein Turn mit einem
+/// auf wenige Sekunden zusammengeschrumpften `timeoutMs` gestartet (siehe
+/// `Math.min(600_000, remaining)` unten) – ein Modellaufruf, der so gut wie
+/// garantiert per Timeout scheitert, noch bevor der Anbieter ueberhaupt
+/// antworten koennte. Besser: den Anlauf sauber ueber die Restzeit-Erinnerung
+/// (`budgetNote`, LAST_CALL_TIME_FRACTION) auslaufen lassen, statt einen
+/// letzten, zum Scheitern verurteilten Aufruf zu verbrennen.
+const MIN_TURN_TIMEOUT_MS = 45_000;
 
 /// Werkzeuge, deren Ergebnis sich innerhalb eines Anlaufs nur aendert, wenn
 /// jemand schreibt. Nur die kommen aus dem Zwischenspeicher: `run_command`
@@ -187,7 +196,7 @@ export async function runImplementationLoop({
   try {
     for (let turn = 1; turn <= MAX_TOOL_TURNS; turn++) {
       const remaining = deadline - Date.now();
-      if (remaining <= 5000) break;
+      if (remaining <= MIN_TURN_TIMEOUT_MS) break;
 
       const turnResult = await runAgentTurn({
         agent,
@@ -202,6 +211,12 @@ export async function runImplementationLoop({
         tools: ALL_TOOLS,
         maxTokens: maxTokensPerTurn,
         timeoutMs: Math.min(600_000, remaining),
+        // Wie bei sprint_planning: OpenRouter routet dieses Profil ueber
+        // viele Anbieter mit stark schwankendem Durchsatz (siehe Kommentar in
+        // src/lib/llm.ts) – ohne das sortiert es zufaellig, auch auf einen
+        // gerade langsamen Anbieter, was hier wiederholt einzelne Turns
+        // 60-360s statt weniger Sekunden kosten liess.
+        preferThroughput: true,
       });
 
       turnsUsed = turn;

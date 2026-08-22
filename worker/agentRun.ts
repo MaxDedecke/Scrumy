@@ -176,6 +176,10 @@ export interface RunAgentTurnOptions {
   sprintId?: string;
   maxTokens?: number;
   timeoutMs?: number;
+  /** Nur bei OpenRouter-Profilen wirksam, siehe `src/lib/llm.ts`. Reicht bis
+   *  zum Anbieter durch, sonst folgenlos (z.B. bei Anthropic/Ollama). */
+  reasoningEffort?: ReasoningEffort;
+  preferThroughput?: boolean;
 }
 
 export interface AgentRunTurnResult {
@@ -231,6 +235,8 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<AgentR
         tools,
         maxTokens: options.maxTokens ?? 8000,
         timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        reasoningEffort: options.reasoningEffort,
+        preferThroughput: options.preferThroughput,
         signal,
       }),
     );
