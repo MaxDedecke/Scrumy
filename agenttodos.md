@@ -7,6 +7,18 @@ der Code, nicht die Absicht: `worker/agentTools.ts`, `worker/agentToolLoop.ts`,
 
 ## Stand
 
+Fünf Punkte erledigt und ausgerollt (1, 2a, 3, 12, 13), neun offen. Was die
+Agenten seit dieser Bestandsaufnahme dazubekommen haben, ist durchweg
+**Wahrnehmung**: Sie sehen die Anwendung jetzt im echten Browser (1), ihren
+eigenen Arbeitsstand vor dem Abschließen (2a) und die Datenbank des laufenden
+Stacks (3). Der Betrieb räumt zwei Zustände auf, die vorher liegen blieben
+(12, 13).
+
+Was durchweg noch fehlt, ist **Gedächtnis und Zusammenarbeit**: Jeder Anlauf
+fängt beim Repo bei null an (6), niemand kann einen Kollegen kurz fragen (5),
+niemand schlägt etwas nach (4). Das ist die nächste sinnvolle Richtung – die
+Werkzeuge sind inzwischen gut, das Wissen zwischen den Anläufen nicht.
+
 | # | Punkt | Stand |
 |---|-------|-------|
 | 1 | Browser-Prüfung (`check_in_browser`) | erledigt – `f7432ea` |
@@ -23,6 +35,7 @@ der Code, nicht die Absicht: `worker/agentTools.ts`, `worker/agentToolLoop.ts`,
 | 11 | Fehlende Rolle SECURITY | offen |
 | 12 | Gestoppter Lauf bleibt bis zu 2,5 h „arbeitet gerade" | erledigt – `6410a49` |
 | 13 | Endgültig gescheiterte Jobs bleiben unsichtbar liegen | erledigt – `6410a49` |
+| 14 | Jede Stack-Prüfung startet den Stack neu; kein Schutz vor zwei Agenten auf einem Stack | offen (Befund 22.08.) |
 
 Offene Folgearbeit zu bereits Erledigtem steht jeweils beim Punkt selbst
 (Screenshots und Nutzung durch QA/Design in Punkt 1).
@@ -137,13 +150,10 @@ und Datenbankname kommen aus `POSTGRES_USER`/`POSTGRES_DB`, mit den Vorgaben des
 offiziellen Images als Rückfall. Ausgabe wird bei 12 000 Zeichen gekürzt, jede
 Anweisung läuft mit `statement_timeout = 30s`.
 
-Dabei aufgefallen, noch offen: Jede der drei Stack-Prüfungen
-(`run_integration_check`, `check_in_browser`, `query_database`) fährt den Stack
-über `withRunningStack` selbst hoch und danach wieder herunter, wenn sie ihn
-gestartet hat. Eine Kette „Request → in die DB schauen → Request" zahlt den
-Compose-Start damit dreimal, aus einem Ticket-Budget von 35 Minuten. Den Stack
-für die Dauer eines Anlaufs stehen zu lassen, wäre der offensichtliche Hebel –
-gehört aber sauber durchdacht (wer räumt auf, wenn der Anlauf abstürzt?).
+Dabei aufgefallen: Jede Stack-Prüfung fährt den Stack selbst hoch und wieder
+herunter, und mit dem Schreibrecht können sich zwei parallel arbeitende Agenten
+auf einem stehenden Stack gegenseitig die Daten unter den Füßen wegziehen.
+Beides zusammen ist Punkt 14.
 
 ### 4. Kein Web-/Doku-Zugriff
 
@@ -269,6 +279,53 @@ endgültig zu töten, und drei der vier Leichen hatten deshalb gar kein
 `last_error`. Und: Beim endgültigen Scheitern setzt graphile-worker `key` auf
 NULL, der Weg vom Job zum Ticket führt bei genau diesen Zeilen also nur noch
 über den Payload.
+
+### 14. Stack-Prüfungen: dreimal starten, und niemand hält die Tür auf
+
+Zwei Befunde, die dieselbe Antwort haben – beide aus der Arbeit an Punkt 3.
+
+**Der Stack wird für jede Prüfung neu hochgefahren.** Alle drei Prüfungen
+(`run_integration_check`, `check_in_browser`, `query_database`) gehen durch
+`withRunningStack` (src/lib/liveStack.ts): Stack starten, prüfen, und wieder
+herunterfahren, sofern diese Prüfung ihn selbst gestartet hat. Für eine
+einzelne Prüfung ist das genau richtig. Für die Kette, die jetzt naheliegt –
+Request absetzen, in der Datenbank nachsehen, Request wiederholen –, zahlt der
+Agent den Compose-Start dreimal, aus einem Ticket-Budget von 35 Minuten. Ein
+Stack, der für die Dauer eines Anlaufs stehen bleibt, wäre der offensichtliche
+Hebel.
+
+**Genau dann fehlt aber ein Schutz, den das Herunterfahren bisher nebenbei
+mitlieferte.** Heute kann es nicht passieren, dass zwei Agenten gleichzeitig
+gegen denselben Stack prüfen: Wer ihn braucht, startet ihn, und wer ihn nicht
+braucht, fährt ihn weg. Bleibt der Stack stehen, ist das weg – und im parallelen
+Arbeitsmodus (`Project.workMode = PARALLEL`, zwei Tickets gleichzeitig)
+arbeiten zwei Agenten am selben Projekt. Mit dem neuen Schreibrecht aus Punkt 3
+ist das kein theoretisches Problem mehr: Agent A legt Testdaten an, während
+Agent B eine leere Liste erwartet – beide bekommen ein Ergebnis, und beide
+Ergebnisse sind wertlos. Die vorhandene Sperre hilft dagegen nicht, die
+verhindert nur, dass ZWEI PROJEKTE gleichzeitig live sind
+(`getOtherLiveProject`), nicht zwei Agenten desselben Projekts.
+
+**Lösungsrichtung (Auftraggeber, 22.08.2026): eine Wartemarke.** Wer gegen den
+laufenden Stack prüfen will, zieht eine Marke; es gibt genau eine je Projekt.
+Wer sie hat, prüft; wer sie nicht bekommt, wartet oder macht erst etwas anderes.
+Der Stack darf dann dauerhaft stehen bleiben, ohne dass sich zwei Agenten
+darauf begegnen.
+
+Zu klären beim Bauen:
+- **Wo die Marke lebt.** Naheliegend wie der Workspace-Lock
+  (worker/workspaceLock.ts), der genau dieses Muster für das Arbeitsverzeichnis
+  schon löst – inklusive der Frage, wer sie freigibt, wenn ein Anlauf abstürzt
+  (dort: Ablaufzeit + `reconcileStaleLocksNow`).
+- **Wie lange sie gilt.** Eine Prüfung mit Browser-Schritten dauert Minuten;
+  eine Marke ohne Ablaufzeit legt bei einem abgestürzten Anlauf das ganze
+  Projekt lahm.
+- **Wer den Stack am Ende herunterfährt**, wenn ihn keine einzelne Prüfung mehr
+  „besitzt" – vermutlich das Ende des Ticket-Anlaufs plus ein Aufräumschritt für
+  den Absturzfall (`reconcileOrphanLiveStacks` gibt es schon).
+- **Ob die Marke auch den Menschen bindet.** Ein Mensch, der über „Anwendung
+  starten" gerade selbst testet, hält den Stack ebenfalls – heute weichen die
+  Prüfungen ihm aus (sie fahren ihn nicht herunter), das sollte so bleiben.
 
 ## Rollen
 
