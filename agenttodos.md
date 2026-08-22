@@ -16,11 +16,13 @@ der Code, nicht die Absicht: `worker/agentTools.ts`, `worker/agentToolLoop.ts`,
 | 4 | Web-/Doku-Zugriff | offen |
 | 5 | Frage an einen Kollegen im laufenden Anlauf | offen |
 | 6 | Gedächtnis über Tickets hinweg | offen |
-| 7 | Token-/Kostentracking | offen |
+| 7 | Kostenbild (Verbrauchsdaten liegen vor) | offen – Punkt korrigiert |
 | 8 | Release-Schritt | offen |
 | 9 | Regressions-Absicherung über den Sprint hinweg | offen |
 | 10 | Tote Rollen REVIEWER/DEVOPS | offen |
 | 11 | Fehlende Rolle SECURITY | offen |
+| 12 | Gestoppter Lauf bleibt bis zu 2,5 h „arbeitet gerade" | offen (Befund 22.08.) |
+| 13 | Endgültig gescheiterte Jobs bleiben unsichtbar liegen | offen (Befund 22.08.) |
 
 Offene Folgearbeit zu bereits Erledigtem steht jeweils beim Punkt selbst
 (Screenshots und Nutzung durch QA/Design in Punkt 1).
@@ -119,11 +121,25 @@ gelernt hat (`--legacy-peer-deps` nötig, dieser Test ist flaky), ist weg. Eine
 Projekt-Wissensdatei, die Agenten selbst fortschreiben und die in jeden Prompt
 geht, ist der billigste Qualitätshebel.
 
-### 7. Kein Token-/Kostentracking
+### 7. Kein Kostenbild (Verbrauchsdaten sind aber da)
 
-Im Schema gibt es kein Verbrauchsfeld – nur `sprintBudget` (Anzahl Tickets) und
-`attemptBudget` (Anzahl Anläufe). „Was hat dieses Projekt gekostet" ist für eine
-abrechnende Beratungsplattform eine Kernfrage und aktuell nicht beantwortbar.
+Korrektur der ersten Fassung dieser Liste: `AgentRun` erfasst den Verbrauch
+sehr wohl – `inputTokens`, `outputTokens`, `cacheReadTokens`,
+`cacheWriteTokens`, befüllt aus `src/lib/llm.ts` über `worker/agentRun.ts`.
+Stand 22.08.2026 im Timeless-Projekt: 799 von 1312 Läufen mit Messwerten,
+zusammen ca. 3,17 Mio. Input-, 1,04 Mio. Output- und 14,0 Mio.
+Cache-Read-Tokens.
+
+Was fehlt, ist alles darüber: Genutzt werden die Zahlen bisher nur von
+`ContextMeter.tsx`, um die Füllung des Kontextfensters eines einzelnen Laufs
+anzuzeigen. Es gibt keinen Preis je LLM-Profil und keine Summe je
+Ticket/Sprint/Projekt – „was hat dieses Projekt gekostet" bleibt für eine
+abrechnende Beratungsplattform unbeantwortet, obwohl die Rohdaten dafür
+vorliegen.
+
+Zu beachten beim Aufsummieren: 513 der 1312 Läufe haben gar keine Messwerte
+(Werkzeug-Begleitläufe und Anbieter, die keine `usage` liefern). Eine Summe
+darf nicht so tun, als sei sie vollständig.
 
 ### 8. Kein Release-Schritt
 
@@ -134,6 +150,47 @@ eine Zusammenfassung.
 
 Die Prüfung ist ticketlokal. Nichts stellt fest, dass Sprint 4 kaputtgemacht
 hat, was Sprint 2 gebaut hat, außer die Testsuite ist zufällig gut.
+
+## Betriebsbefunde vom 22.08.2026
+
+Aus der Durchsicht der Job-Queue des Timeless-Projekts. Kein Code geändert.
+
+### 12. Von Hand gestoppter Lauf bleibt bis zu 2,5 Stunden „arbeitet gerade"
+
+`reconcileStaleRuns` (worker/reconcile.ts) räumt `AgentRun`-Leichen auf, aber
+erst ab 90 Minuten Alter und nur im Stundentakt (`RECONCILE_INTERVAL_MS` in
+worker/index.ts). Zusammen heißt das: Ein Lauf, dessen Worker ihn nie
+abgeschlossen hat, steht im Büro bis zu ~2,5 Stunden als laufend, obwohl
+niemand daran arbeitet.
+
+Beobachtet an `cmt4lf0xu002g10qtcjvbedcu` (Quinn Adler, „Setzt das Ticket um"):
+seit 16:28:55 `RUNNING`, ohne `finishedAt`, dabei `cancelRequested = true`.
+Genau dieselbe Symptomatik wurde beim letzten Mal von Hand per SQL korrigiert.
+
+Der Punkt ist nicht die Schwelle an sich – für einen abgestürzten Worker sind
+90 Minuten vernünftig, weil ein echter Lauf lange dauern darf. Der Punkt ist,
+dass bei `cancelRequested = true` gar nicht geraten werden muss: Es ist bekannt,
+dass jemand diesen Lauf absichtlich gestoppt hat. Solche Läufe könnten nach
+Sekunden statt nach 90 Minuten abgeschlossen werden, ohne die allgemeine
+Schwelle anzufassen.
+
+### 13. Endgültig gescheiterte Jobs bleiben unsichtbar liegen
+
+Vier `ticketWork`-Jobs stehen mit `attempts = max_attempts = 2` in
+`graphile_worker._private_jobs`, der älteste vom 21.08. Die generierte Spalte
+`is_available` (`locked_at IS NULL AND attempts < max_attempts`) ist damit
+`false`: Sie laufen nie wieder an, sie sind tot, nicht wartend.
+
+Zwei davon gehören zu Tickets, die inzwischen `DONE` sind – reine Karteileichen.
+Wichtig für die Bewertung: Es ist NICHT die gesperrte Queue aus
+[Punkt „offene Agenten-Schwachstellen"], und es geht nichts verloren – bei den
+beiden nicht fertigen Tickets hat das Anlauf-Budget sauber eskaliert (Ticket
+„rooms.test.ts…", 6/6 Anläufe, Klärung um 17:46 eröffnet).
+
+Offen bleibt nur die Sichtbarkeit: Weder die Oberfläche noch ein Aufräumlauf
+kennt diese Zeilen. Wer in die Queue schaut, hält sie leicht für ausstehende
+Arbeit – so ist es hier passiert. Ein „endgültig gescheitert"-Zustand am Ticket
+oder ein Aufräumschritt wäre die Antwort.
 
 ## Rollen
 
