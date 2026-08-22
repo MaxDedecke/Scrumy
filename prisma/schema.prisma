@@ -587,6 +587,14 @@ model AgentRun {
   /// ab, statt bis zum Ende zu laufen – der Worker ist ein anderer Prozess
   /// als die Next.js-App, deshalb geht der Wunsch nur ueber die Datenbank.
   cancelRequested  Boolean   @default(false)
+  /// true nur fuer die Begleit-Laeufe von `runTrackedTool` (worker/agentRun.ts)
+  /// – ein `run_command`/`run_integration_check` bekommt einen eigenen
+  /// `AgentRun`, rein damit das Buero waehrend der Laufzeit "arbeitet" statt
+  /// "untaetig" zeigt (siehe Kommentar dort). `response` ist bei solchen
+  /// Laeufen die rohe Werkzeugausgabe, keine Modellantwort – ohne dieses Feld
+  /// war das im Nachweise-Verlauf (AttemptChat) nicht von einer echten
+  /// Antwort des Modells zu unterscheiden.
+  isToolRun        Boolean   @default(false)
 
   @@index([projectId, startedAt])
   @@map("agent_runs")

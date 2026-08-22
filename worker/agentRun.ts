@@ -317,7 +317,7 @@ export async function runTrackedTool<T extends { content: string; isError: boole
   const { agent, projectId, ticketId, sprintId, kind, headline, prompt } = options;
 
   const agentRun = await prisma.agentRun.create({
-    data: { projectId, agentId: agent.id, ticketId, sprintId, kind, headline, systemPrompt: "", prompt },
+    data: { projectId, agentId: agent.id, ticketId, sprintId, kind, headline, systemPrompt: "", prompt, isToolRun: true },
   });
   await prisma.agent.update({ where: { id: agent.id }, data: { status: "WORKING" } });
   const startedAt = Date.now();

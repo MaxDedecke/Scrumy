@@ -76,33 +76,37 @@ export function AttemptChat({ runs, className }: { runs: AgentRun[]; className?:
     // die Mindesthöhe sorgt fuer eine ordentliche Lesehöhe, auch wenn wenig
     // Inhalt da ist.
     <div className={`flex min-h-[50vh] flex-col gap-3 ${className ?? ""}`}>
-      {runs.map((run, i) => (
-        <div key={run.id} className="flex flex-col gap-1.5">
-          <div className="max-w-[92%] self-end rounded-2xl rounded-br-sm bg-accent-soft/60 px-3 py-2">
-            <p className="text-[11px] font-medium text-ink-3">
-              {i === 0 ? "Ursprünglicher Auftrag" : `Werkzeugergebnis · Schritt ${i + 1}`} ·{" "}
-              {formatTime(run.startedAt)}
-            </p>
-            <PromptBody text={run.prompt} collapseByDefault={i === 0} />
-          </div>
+      {runs.map((run, i) =>
+        run.isToolRun ? (
+          <ToolRunCard key={run.id} run={run} />
+        ) : (
+          <div key={run.id} className="flex flex-col gap-1.5">
+            <div className="max-w-[92%] self-end rounded-2xl rounded-br-sm bg-accent-soft/60 px-3 py-2">
+              <p className="text-[11px] font-medium text-ink-3">
+                {i === 0 ? "Ursprünglicher Auftrag" : `Werkzeugergebnis · Schritt ${i + 1}`} ·{" "}
+                {formatTime(run.startedAt)}
+              </p>
+              <PromptBody text={run.prompt} collapseByDefault={i === 0} />
+            </div>
 
-          <div className="max-w-[92%] self-start rounded-2xl rounded-bl-sm bg-surface-2/70 px-3 py-2">
-            <p className="text-[11px] font-medium text-ink-3">
-              Schritt {i + 1}
-              {run.durationMs ? ` · ${(run.durationMs / 1000).toFixed(1)} s` : ""}
-            </p>
-            {run.error ? (
-              <pre className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-critical">{run.error}</pre>
-            ) : run.response ? (
-              <AgentResponse text={run.response} className="mt-1" />
-            ) : run.status === "RUNNING" ? (
-              <p className="mt-1 text-sm italic text-ink-3">Läuft …</p>
-            ) : (
-              <p className="mt-1 text-sm text-ink-3">Keine Antwort protokolliert.</p>
-            )}
+            <div className="max-w-[92%] self-start rounded-2xl rounded-bl-sm bg-surface-2/70 px-3 py-2">
+              <p className="text-[11px] font-medium text-ink-3">
+                Schritt {i + 1}
+                {run.durationMs ? ` · ${(run.durationMs / 1000).toFixed(1)} s` : ""}
+              </p>
+              {run.error ? (
+                <pre className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-critical">{run.error}</pre>
+              ) : run.response ? (
+                <AgentResponse text={run.response} className="mt-1" />
+              ) : run.status === "RUNNING" ? (
+                <p className="mt-1 text-sm italic text-ink-3">Läuft …</p>
+              ) : (
+                <p className="mt-1 text-sm text-ink-3">Keine Antwort protokolliert.</p>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        ),
+      )}
       {/* Schlussmarke: einen Pixel hoch statt hoehenlos, damit der Observer
           eine Flaeche zum Schneiden hat. */}
       <div ref={endRef} className="h-px shrink-0" />
@@ -143,6 +147,49 @@ function PromptBody({ text, collapseByDefault }: { text: string; collapseByDefau
   if (!collapseByDefault && text.length <= COLLAPSE_THRESHOLD) {
     return <div className="mt-1">{body}</div>;
   }
+  const preview = text.trim().split("\n")[0].slice(0, 100);
+  return (
+    <details className="mt-1">
+      <summary className="cursor-pointer text-sm text-ink-3 hover:text-ink-2">
+        {preview || "…"} (aufklappen)
+      </summary>
+      <div className="mt-1.5">{body}</div>
+    </details>
+  );
+}
+
+/// `runTrackedTool` (worker/agentRun.ts) legt fuer `run_command`/
+/// `run_integration_check` einen eigenen `AgentRun` an, nur damit das Buero
+/// waehrend der Laufzeit "arbeitet" statt "untaetig" zeigt – `response` ist
+/// dort die rohe Werkzeugausgabe, keine Antwort des Modells. Bekommt deshalb
+/// bewusst keine Chat-Bubble (die suggeriert "das Modell sagt"), sondern eine
+/// schmale, mittig stehende Karte, und `<pre>` statt `<AgentResponse>`: Die
+/// Ausgabe ist oft selbst schon "geschwaetzig" formatiert (Fehlermeldungen
+/// mit Icons/Aufzaehlungen wie im pg-mem-Beispiel) – als Markdown gerendert
+/// verstaerkt das genau die Verwechslung, die diese Karte auflösen soll.
+function ToolRunCard({ run }: { run: AgentRun }) {
+  const content = run.error || run.response;
+  return (
+    <div className="mx-auto w-full max-w-[92%] rounded-xl border border-hairline bg-surface-2/40 px-3 py-2">
+      <p className="text-[11px] font-medium text-ink-3">
+        🔧 {run.headline}
+        {run.durationMs ? ` · ${(run.durationMs / 1000).toFixed(1)} s` : ""} · {formatTime(run.startedAt)}
+      </p>
+      {content ? (
+        <ToolOutputBody text={content} isError={!!run.error} />
+      ) : run.status === "RUNNING" ? (
+        <p className="mt-1 text-sm italic text-ink-3">Läuft …</p>
+      ) : (
+        <p className="mt-1 text-sm text-ink-3">Keine Ausgabe protokolliert.</p>
+      )}
+    </div>
+  );
+}
+
+function ToolOutputBody({ text, isError }: { text: string; isError: boolean }) {
+  const cls = `whitespace-pre-wrap font-mono text-xs leading-relaxed ${isError ? "text-critical" : "text-ink-2"}`;
+  const body = <pre className={cls}>{text}</pre>;
+  if (text.length <= COLLAPSE_THRESHOLD) return <div className="mt-1">{body}</div>;
   const preview = text.trim().split("\n")[0].slice(0, 100);
   return (
     <details className="mt-1">
