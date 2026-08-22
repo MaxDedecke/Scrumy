@@ -288,6 +288,12 @@ export async function reconcileCancelledRuns(): Promise<number> {
 /// siehe worker/tasks/ticketWork.ts) – es fehlt nur die Sichtbarkeit. Also:
 /// Was zu einem noch offenen Ticket eines aktiven Projekts gehoert, wird zur
 /// Klaerung; alles andere ist eine Karteileiche und wird still entfernt.
+///
+/// Ausnahme: ein pausiertes (oder noch nicht gestartetes) Projekt wird gar
+/// nicht angefasst. Dort waere beides falsch – niemanden rufen, den man gerade
+/// nicht rufen will, aber auch nicht stillschweigend wegraeumen, was beim
+/// Fortsetzen noch von Interesse sein koennte. Die Zeile bleibt liegen, bis das
+/// Projekt wieder laeuft; dann entscheidet dieselbe Regel richtig.
 export async function reconcileDeadJobs(): Promise<number> {
   const jobs = await deadJobs();
   if (jobs.length === 0) return 0;
@@ -311,10 +317,14 @@ export async function reconcileDeadJobs(): Promise<number> {
         })
       : null;
 
-    // Karteileiche (kein Ticket mehr, Ticket fertig, Projekt nicht aktiv,
+    // Pausiert/noch nicht gestartet: liegen lassen, siehe oben.
+    const projectStatus = ticket?.project.status;
+    if (projectStatus === "PAUSED" || projectStatus === "DISCOVERY" || projectStatus === "CONCEPT") continue;
+
+    // Karteileiche (kein Ticket mehr, Ticket fertig, Projekt archiviert,
     // Arbeit laeuft schon wieder) wird still entfernt; alles andere muss
     // vorher jemand zu sehen bekommen.
-    if (ticket && ticket.status !== "DONE" && ticket.project.status === "ACTIVE" && !stillQueued.has(ticket.id)) {
+    if (ticket && ticket.status !== "DONE" && projectStatus === "ACTIVE" && !stillQueued.has(ticket.id)) {
       await logActivity({
         projectId: ticket.projectId,
         agentId: agentId ?? undefined,

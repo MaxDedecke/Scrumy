@@ -209,7 +209,13 @@ wird still entfernt. Als „alles andere" zählt ausdrücklich auch ein Ticket, 
 das inzwischen wieder ein lebender Job in der Queue steht: Nach einem Rebuild
 reiht der Sprint dasselbe Ticket einfach neu ein, die tote Zeile ist dann kein
 Grund, jemanden zu rufen (an den echten Daten geprüft: von den vier Leichen
-wurde genau eine zur Klärung, drei waren Müll).
+wurde genau eine zur Klärung, drei waren Müll). Ein pausiertes oder noch nicht
+gestartetes Projekt wird gar nicht angefasst – dort wäre beides falsch: rufen
+will man dort niemanden, aber stillschweigend wegräumen, was beim Fortsetzen
+noch interessant sein könnte, ebenso wenig. (Diese Regel kam erst nach dem
+Ausrollen dazu: Timeless war beim ersten Durchlauf pausiert, alle vier Zeilen
+wurden deshalb still entfernt – auch die eine, die sonst eine Klärung geworden
+wäre.)
 
 Zwei Beobachtungen aus den Daten, die vorher nicht in dieser Liste standen:
 `attempts` zählt graphile-worker schon beim Abholen hoch, nicht erst beim
