@@ -97,8 +97,40 @@ bleibt.
 ### 3. Kein Zugriff auf die laufende Datenbank
 
 Bei „Upload gespeichert, aber Liste leer" kann der Agent nicht nachsehen, ob die
-Zeile in Postgres steht. `run_integration_check` sollte ein `sql`-Feld bekommen
-(nur lesend, gegen den DB-Container des Compose-Stacks).
+Zeile in Postgres steht. Er sieht seit Punkt 1 die gerenderte Oberfläche und
+seit jeher die HTTP-Antwort – aber nicht die Stufe dazwischen, an der sich
+entscheidet, ob der Schreibweg oder der Leseweg kaputt ist. Ohne diesen Blick
+rät er: ändert den Lesecode, obwohl der Schreibcode falsch ist, dreht zurück,
+und landet in einer „keine Änderung"-Klärung.
+
+Zu bauen: ein SQL-Kanal in den DB-Container des Live-Stacks, entweder als
+`sql`-Feld an `run_integration_check` (der fährt den Stack ohnehin hoch) oder
+als eigenes Werkzeug.
+
+**Schreibend, nicht nur lesend** (Entscheidung des Auftraggebers vom
+22.08.2026). Die erste Fassung dieser Notiz forderte „nur lesend"; das ist hier
+die falsche Vorsicht. Der Live-Stack ist eine Wegwerf-Umgebung – Terminate
+löscht Container, Netz und DB-Volumes vollständig, und eine produktive
+Kundeninstanz anzufassen ist ausdrücklich nie vorgesehen. Ein Agent, der
+Testdaten anlegen kann, kann Randfälle prüfen, die sich über die Oberfläche gar
+nicht herstellen lassen (leere Liste, 500 Einträge, kaputter Datensatz).
+
+Das echte Risiko ist damit nicht Datenverlust, sondern **Beweisfälschung**: Ein
+Agent, dessen Prüfung scheitert, weil die Zeile fehlt, kann die Zeile von Hand
+einfügen und die Prüfung für bestanden erklären, ohne eine Zeile Code repariert
+zu haben. Dagegen hilft kein Rechteentzug, sondern eine Regel plus ein Gate:
+Ein Nachweis zählt nur, wenn er nach einem Neustart des Stacks mit leerer
+Datenbank reproduzierbar ist (siehe QA-Gate, Punkt 9).
+
+Weiter zu klären:
+- Ergebnisgröße begrenzen – ein `select *` über einer großen Tabelle kippt sonst
+  das Kontextfenster.
+- Schema mitliefern (`\d`-Äquivalent), sonst rät das Modell Tabellen- und
+  Spaltennamen.
+- Läuft kein Stack, sauber melden statt einen nur zum Nachsehen hochzufahren.
+- Welcher Dienst die Datenbank ist, steht nicht fest – der Kunden-Compose-Stack
+  bringt seine eigenen Servicenamen mit (siehe `resolveServices` in
+  src/lib/liveStack.ts).
 
 ### 4. Kein Web-/Doku-Zugriff
 
