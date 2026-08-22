@@ -21,8 +21,8 @@ der Code, nicht die Absicht: `worker/agentTools.ts`, `worker/agentToolLoop.ts`,
 | 9 | Regressions-Absicherung über den Sprint hinweg | offen |
 | 10 | Tote Rollen REVIEWER/DEVOPS | offen |
 | 11 | Fehlende Rolle SECURITY | offen |
-| 12 | Gestoppter Lauf bleibt bis zu 2,5 h „arbeitet gerade" | erledigt – `HEAD` |
-| 13 | Endgültig gescheiterte Jobs bleiben unsichtbar liegen | erledigt – `HEAD` |
+| 12 | Gestoppter Lauf bleibt bis zu 2,5 h „arbeitet gerade" | erledigt – `6410a49` |
+| 13 | Endgültig gescheiterte Jobs bleiben unsichtbar liegen | erledigt – `6410a49` |
 
 Offene Folgearbeit zu bereits Erledigtem steht jeweils beim Punkt selbst
 (Screenshots und Nutzung durch QA/Design in Punkt 1).
