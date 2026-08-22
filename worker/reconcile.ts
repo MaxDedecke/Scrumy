@@ -18,23 +18,27 @@ import { cancelJobsOfDeletedAgents, unlockStaleJobs } from "./queue";
 import { openClarification } from "./clarification";
 import { rm } from "node:fs/promises";
 
-/// Deutlich über dem längsten Zeitlimit eines Modellaufrufs (15 Minuten für
-/// Umsetzungsschritte, siehe worker/tasks/ticketWork.ts).
-const STALE_AFTER_MS = 60 * 60 * 1000;
+/// Deutlich über dem längsten Zeitlimit eines Modellaufrufs (35 Minuten für
+/// Umsetzungsschritte, siehe LOOP_BUDGET_MS in worker/agentToolLoop.ts).
+const STALE_AFTER_MS = 90 * 60 * 1000;
 
 /// Schwelle für die interaktive Variante unten (`reconcileStaleLocksNow`) –
 /// deutlich enger als `STALE_AFTER_MS`, bewusst mit einem kleinen Risiko
-/// falscher Treffer: Ein Ticket, das legitim laenger als 20 Minuten braucht
-/// (Umsetzung + QA-Review + automatische Pruefung mehrerer Check-Ziele),
-/// existiert, ist aber selten. Trifft die Schwelle trotzdem daneben und ein
-/// zweiter Job startet neben einem noch laufenden, ist das seit dem
-/// Workspace-Lock (worker/workspaceLock.ts) nur noch verschwendete statt
-/// zerstoerender Arbeit – die beiden teilen sich das Arbeitsverzeichnis nicht
-/// mehr gleichzeitig. Nur fuer den Menschen gedacht, der aktiv nachschaut
-/// (siehe nudgeTeam/nudgeProductOwner in src/lib/actions/team.ts); der
+/// falscher Treffer: Ein Ticket, das legitim laenger als 45 Minuten braucht
+/// (Umsetzung bis zu 35 Min. + QA-Review + automatische Pruefung mehrerer
+/// Check-Ziele), existiert, ist aber selten. (22.08.2026: von 20 auf 45 Min.
+/// angehoben, zusammen mit LOOP_BUDGET_MS – bei 20 Min. waere sonst JEDER
+/// Anlauf, der die neue 35-Minuten-Zeiterinnerung tatsaechlich ausnutzt,
+/// faelschlich als haengengeblieben markiert worden, statt nur der seltene
+/// Ausreisser.) Trifft die Schwelle trotzdem daneben und ein zweiter Job
+/// startet neben einem noch laufenden, ist das seit dem Workspace-Lock
+/// (worker/workspaceLock.ts) nur noch verschwendete statt zerstoerender
+/// Arbeit – die beiden teilen sich das Arbeitsverzeichnis nicht mehr
+/// gleichzeitig. Nur fuer den Menschen gedacht, der aktiv nachschaut (siehe
+/// nudgeTeam/nudgeProductOwner in src/lib/actions/team.ts); der
 /// unbeaufsichtigte stuendliche Lauf bleibt bei der vorsichtigeren
 /// `STALE_AFTER_MS`.
-const INTERACTIVE_STALE_AFTER_MS = 20 * 60 * 1000;
+const INTERACTIVE_STALE_AFTER_MS = 45 * 60 * 1000;
 
 /// Zweite Sicherung fuer geloeschte Projekte: Arbeitsverzeichnisse ohne
 /// Projektzeile wegwerfen.

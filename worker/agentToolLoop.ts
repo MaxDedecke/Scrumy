@@ -18,12 +18,19 @@ import { ALL_TOOLS, executeTool, LONG_RUNNING_TOOLS, type ToolContext } from "./
 /// 20 war bei kleineren/lokalen Modellen (u.a. qwen3-coder über RunPod) zu
 /// knapp: 12-13 Turns gehen dort oft fürs reine Erkunden drauf (list/read/
 /// search), bevor überhaupt geschrieben wird – bei ~3-5s je Turn bleibt im
-/// 15-Minuten-Budget (siehe LOOP_BUDGET_MS) reichlich Luft nach oben, ohne
+/// 35-Minuten-Budget (siehe LOOP_BUDGET_MS) reichlich Luft nach oben, ohne
 /// die Zielsetzung ("gezielt, ein Aufruf pro Turn") aufzugeben.
 const MAX_TOOL_TURNS = 50;
-/// Gesamtbudget ueber alle Turns UND Bash-Aufrufe zusammen, entspricht dem
-/// bisherigen Zeitlimit des einzelnen Umsetzungs-Aufrufs.
-const LOOP_BUDGET_MS = 900_000;
+/// Gesamtbudget ueber alle Turns UND Bash-Aufrufe zusammen. Urspruenglich 15
+/// Minuten (entsprach dem alten Ein-Antwort-Aufruf), auf 35 Minuten angehoben
+/// (22.08.2026): bei langsamen Multi-Upstream-Anbietern (OpenRouter/RunPod,
+/// ~30s+ je Turn statt der oben angenommenen 3-5s) zwang das knappe Budget
+/// die Restzeit-Erinnerung (LAST_CALL_TIME_FRACTION) schon bei Schritt ~25
+/// zum vorzeitigen "finish" mit unfertigem Stand, lange bevor MAX_TOOL_TURNS
+/// erreicht war – die Schrittzahl war also gar nicht der begrenzende Faktor.
+/// Siehe dazu auch INTERACTIVE_STALE_AFTER_MS in worker/reconcile.ts, das an
+/// dieses Budget gekoppelt ist.
+const LOOP_BUDGET_MS = 2_100_000;
 /// Anteil des Gesamtbudgets, der maximal in run_command verbraucht werden
 /// darf – ein Agent, der nur noch Tests laufen laesst, soll nicht das ganze
 /// Budget einer einzigen Bash-Kette opfern.

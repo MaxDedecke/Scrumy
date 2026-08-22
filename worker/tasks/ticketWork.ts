@@ -835,7 +835,7 @@ Wenn Auftrag und Anforderungen sich an einer Stelle widersprechen oder etwas Wes
     trace: loopResult.trace,
   });
 
-  // Der Umsetzungs-Loop eben kann (Budget 900s) minutenlang gedauert haben.
+  // Der Umsetzungs-Loop eben kann (Budget 2100s) minutenlang gedauert haben.
   // In der Zwischenzeit kann ein Klärungsbeschluss dieses Ticket längst
   // geschlossen haben (effect "close" in clarificationDecision.ts – bewusst
   // OHNE erneutes Einreihen, siehe Kommentar dort). Ohne diesen Re-Check
