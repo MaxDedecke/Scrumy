@@ -14,8 +14,9 @@ import { listWorkspaceProjectIds, removeWorkspace, runGitCommand } from "@/lib/w
 import { deleteUnassignedAgents } from "@/lib/purge";
 import { reconcileOrphanPreviewContainers } from "@/lib/preview";
 import { reconcileOrphanLiveStacks } from "@/lib/liveStack";
-import { cancelJobsOfDeletedAgents, unlockStaleJobs } from "./queue";
+import { activeTicketJobIds, cancelJobsOfDeletedAgents, deadJobs, removeJobs, unlockStaleJobs } from "./queue";
 import { openClarification } from "./clarification";
+import { failRun, logActivity } from "./agentRun";
 import { rm } from "node:fs/promises";
 
 /// Deutlich über dem längsten Zeitlimit eines Modellaufrufs (35 Minuten für
@@ -39,6 +40,17 @@ const STALE_AFTER_MS = 90 * 60 * 1000;
 /// unbeaufsichtigte stuendliche Lauf bleibt bei der vorsichtigeren
 /// `STALE_AFTER_MS`.
 const INTERACTIVE_STALE_AFTER_MS = 45 * 60 * 1000;
+
+/// Schonfrist fuer einen von Hand gestoppten Lauf (siehe
+/// `reconcileCancelledRuns`). Hier muss nichts geraten werden: Dass niemand
+/// mehr an diesem Lauf arbeitet, ist bekannt – jemand hat ihn absichtlich
+/// beendet. Zwei Minuten sind reichlich Vorsprung fuer den Weg, der eigentlich
+/// greifen soll (worker/cancellation.ts fragt alle 1,5 Sekunden ab, der
+/// abgebrochene Aufruf schliesst sich danach selbst ab); erst wenn auch das
+/// ausbleibt – weil der Worker zwischendurch gestorben ist – raeumt der
+/// Sweep hinterher, statt den Lauf bis zu 2,5 Stunden als "arbeitet gerade"
+/// im Buero stehen zu lassen.
+const CANCELLED_GRACE_MS = 2 * 60 * 1000;
 
 /// Zweite Sicherung fuer geloeschte Projekte: Arbeitsverzeichnisse ohne
 /// Projektzeile wegwerfen.
@@ -199,6 +211,153 @@ export async function reconcileStaleRuns(staleAfterMs: number = STALE_AFTER_MS):
   return stale.length;
 }
 
+/// Von Hand gestoppte Laeufe, die sich nicht selbst abgeschlossen haben.
+///
+/// Der normale Weg braucht diesen Sweep nicht: Der Stopp-Knopf setzt
+/// `cancelRequested`, der laufende Aufruf sieht das binnen Sekunden
+/// (worker/cancellation.ts) und schliesst seinen Beleg selbst ab. Faellt der
+/// Worker aber genau dazwischen aus – Neustart, Rebuild, OOM –, bleibt eine
+/// Zeile auf RUNNING liegen, und bis hierher fing die erst
+/// `reconcileStaleRuns` auf: 90 Minuten Schwelle, stuendlich geprueft, also
+/// bis zu 2,5 Stunden "arbeitet gerade" im Buero, obwohl niemand daran sitzt.
+///
+/// Die grosszuegige Schwelle dort ist richtig – bei einem abgestuerzten Worker
+/// laesst sich nicht unterscheiden, ob der Lauf noch lebt. Hier muss aber gar
+/// nicht geraten werden: Ein Mensch hat diesen Lauf absichtlich gestoppt.
+/// Deshalb eine eigene, kurze Schonfrist (`CANCELLED_GRACE_MS`), ohne die
+/// allgemeine Schwelle anzufassen.
+export async function reconcileCancelledRuns(): Promise<number> {
+  const cutoff = new Date(Date.now() - CANCELLED_GRACE_MS);
+
+  const stale = await prisma.agentRun.findMany({
+    where: {
+      status: "RUNNING",
+      cancelRequested: true,
+      // `cancelRequestedAt` ist der richtige Zeitpunkt; fuer Laeufe von vor
+      // dieser Spalte bleibt nur `startedAt` – die sind ohnehin laengst alt.
+      OR: [{ cancelRequestedAt: { lt: cutoff } }, { cancelRequestedAt: null, startedAt: { lt: cutoff } }],
+    },
+    select: { id: true, agentId: true, projectId: true, ticketId: true, headline: true, startedAt: true },
+  });
+
+  let cleaned = 0;
+  for (const run of stale) {
+    if (!run.agentId) {
+      // Agent geloescht: Es gibt keinen Status mehr umzuschalten und keinen,
+      // der eine Klaerung einberufen koennte – nur den Beleg abschliessen.
+      await prisma.agentRun.update({
+        where: { id: run.id },
+        data: { status: "FAILED", error: "Von Hand abgebrochen.", finishedAt: new Date() },
+      });
+      cleaned += 1;
+      continue;
+    }
+
+    // Dieselbe Logik wie im laufenden Worker (worker/agentRun.ts): Beleg
+    // abschliessen, Kollegen freigeben, Klaerung fuer den Product Owner.
+    await failRun(
+      run.id,
+      run.agentId,
+      "Von Hand abgebrochen – der Lauf hat nicht mehr selbst reagiert (Worker vermutlich zwischendurch beendet).",
+      Date.now() - run.startedAt.getTime(),
+      true,
+    );
+    await logActivity({
+      projectId: run.projectId,
+      agentId: run.agentId,
+      ticketId: run.ticketId ?? undefined,
+      actor: "Scrumy",
+      action: "step_cancelled",
+      detail: `${run.headline} – von Hand abgebrochen, nachträglich abgeschlossen.`,
+    });
+    cleaned += 1;
+  }
+
+  return cleaned;
+}
+
+/// Endgueltig gescheiterte Jobs sichtbar machen und aus der Queue nehmen.
+///
+/// Ein Job, dessen Anlauf-Budget verbraucht ist (`attempts >= max_attempts`,
+/// siehe `deadJobs` in worker/queue.ts), laeuft nie wieder an. Er verschwindet
+/// aber auch nicht: Er steht weiter in der Queue-Tabelle und sieht dort aus wie
+/// ausstehende Arbeit – am 22.08.2026 lagen so vier `ticketWork`-Jobs seit dem
+/// Vortag herum, zwei davon zu Tickets, die laengst DONE waren.
+///
+/// Verloren geht dabei nichts (das Anlauf-Budget am Ticket eskaliert eigenstaendig,
+/// siehe worker/tasks/ticketWork.ts) – es fehlt nur die Sichtbarkeit. Also:
+/// Was zu einem noch offenen Ticket eines aktiven Projekts gehoert, wird zur
+/// Klaerung; alles andere ist eine Karteileiche und wird still entfernt.
+export async function reconcileDeadJobs(): Promise<number> {
+  const jobs = await deadJobs();
+  if (jobs.length === 0) return 0;
+
+  // Tickets, fuer die inzwischen wieder ein lebender Job in der Queue steht:
+  // Da ist die Arbeit laengst weitergegangen (typisch nach einem Rebuild –
+  // der Sprint hat das Ticket einfach neu eingereiht). Die tote Zeile ist dann
+  // nur noch Muell, kein Grund, jemanden zu rufen.
+  const ticketIds = jobs.map((job) => job.payload.ticketId).filter((id): id is string => Boolean(id));
+  const stillQueued = await activeTicketJobIds(ticketIds);
+
+  const removable: string[] = [];
+  for (const job of jobs) {
+    const ticketId = job.payload.ticketId ?? null;
+    const agentId = job.payload.agentId ?? null;
+
+    const ticket = ticketId
+      ? await prisma.ticket.findUnique({
+          where: { id: ticketId },
+          select: { id: true, title: true, status: true, projectId: true, project: { select: { status: true } } },
+        })
+      : null;
+
+    // Karteileiche (kein Ticket mehr, Ticket fertig, Projekt nicht aktiv,
+    // Arbeit laeuft schon wieder) wird still entfernt; alles andere muss
+    // vorher jemand zu sehen bekommen.
+    if (ticket && ticket.status !== "DONE" && ticket.project.status === "ACTIVE" && !stillQueued.has(ticket.id)) {
+      await logActivity({
+        projectId: ticket.projectId,
+        agentId: agentId ?? undefined,
+        ticketId: ticket.id,
+        actor: "Scrumy",
+        action: "job_dead",
+        detail: `Arbeitsschritt „${job.taskIdentifier}" zu „${ticket.title}" ist endgültig gescheitert und wurde aus der Warteschlange genommen.`,
+      });
+
+      // Nur einberufen, wenn zu diesem Ticket nicht ohnehin schon etwas offen
+      // ist: In der Regel hat das Anlauf-Budget vorher selbst eskaliert (siehe
+      // worker/tasks/ticketWork.ts), und der Mensch soll eine Frage
+      // beantworten, nicht zwei zur selben Sache.
+      const alreadyOpen = await prisma.clarification.findFirst({
+        where: { ticketId: ticket.id, status: "OPEN" },
+        select: { id: true },
+      });
+      if (!alreadyOpen) {
+        await openClarification({
+          projectId: ticket.projectId,
+          scope: "TICKET",
+          trigger: "job_dead",
+          ticketId: ticket.id,
+          raisedById: agentId,
+          question: `Die Arbeit an „${ticket.title}" ist endgültig gescheitert – alle Anläufe dieses Arbeitsschritts sind verbraucht. Soll das Team es erneut versuchen?`,
+          context:
+            `Letzter Fehler: ${(job.lastError ?? "keiner protokolliert – der Job wurde zweimal mitten in der Arbeit unterbrochen").slice(0, 1500)}\n\n` +
+            `Der Job stand seit ${job.createdAt.toISOString().slice(0, 16).replace("T", " ")} in der Warteschlange, ohne noch anlaufen zu können.`,
+          prepare: false,
+        });
+      }
+    }
+
+    // Erst jetzt zum Loeschen vormerken: Scheitert das Sichtbarmachen oben,
+    // bleibt der Job liegen und der naechste Durchlauf nimmt ihn erneut vor –
+    // besser als eine still verschwundene Zeile.
+    removable.push(job.id);
+  }
+
+  await removeJobs(removable);
+  return removable.length;
+}
+
 /// Interaktives Gegenstück zum stündlichen Aufräumen oben – aufgerufen genau
 /// in dem Moment, in dem ein Mensch von Hand nachschaut ("Macht weiter"/"PO
 /// anstupsen", siehe src/lib/actions/team.ts), statt erst bis zu einer Stunde
@@ -209,8 +368,17 @@ export async function reconcileStaleRuns(staleAfterMs: number = STALE_AFTER_MS):
 /// dieses Agenten blockierte, und weder „Macht weiter" noch „PO anstupsen"
 /// konnten das vorher beheben – beide reihen nur Jobs ein, keiner löst
 /// Sperren.
-export async function reconcileStaleLocksNow(): Promise<{ unlockedPools: number; abandonedRuns: number }> {
+export async function reconcileStaleLocksNow(): Promise<{
+  unlockedPools: number;
+  abandonedRuns: number;
+  cancelledRuns: number;
+  deadJobs: number;
+}> {
   const unlockedPools = await unlockStaleJobs(INTERACTIVE_STALE_AFTER_MS);
   const abandonedRuns = await reconcileStaleRuns(INTERACTIVE_STALE_AFTER_MS);
-  return { unlockedPools, abandonedRuns };
+  // Beides braucht keine Schaetzung ueber "laeuft da noch was?" und gehoert
+  // deshalb genauso in den Moment, in dem ein Mensch nachschaut.
+  const cancelledRuns = await reconcileCancelledRuns();
+  const deadJobsRemoved = await reconcileDeadJobs();
+  return { unlockedPools, abandonedRuns, cancelledRuns, deadJobs: deadJobsRemoved };
 }

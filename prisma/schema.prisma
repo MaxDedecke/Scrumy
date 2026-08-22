@@ -587,6 +587,13 @@ model AgentRun {
   /// ab, statt bis zum Ende zu laufen – der Worker ist ein anderer Prozess
   /// als die Next.js-App, deshalb geht der Wunsch nur ueber die Datenbank.
   cancelRequested  Boolean   @default(false)
+  /// Wann der Stopp-Knopf gedrueckt wurde. Gebraucht fuer das Aufraeumen:
+  /// Reagiert der Lauf nicht selbst (weil sein Worker inzwischen gestorben
+  /// ist), schliesst ihn `reconcileCancelledRuns` (worker/reconcile.ts) nach
+  /// einer kurzen Schonfrist ab – gemessen ab diesem Zeitpunkt, nicht ab
+  /// `startedAt`, sonst traefe die Schonfrist einen gerade erst gestoppten
+  /// Lauf sofort, obwohl sein Worker ihn Sekunden spaeter selbst beendet.
+  cancelRequestedAt DateTime?
   /// true nur fuer die Begleit-Laeufe von `runTrackedTool` (worker/agentRun.ts)
   /// – ein `run_command`/`run_integration_check` bekommt einen eigenen
   /// `AgentRun`, rein damit das Buero waehrend der Laufzeit "arbeitet" statt

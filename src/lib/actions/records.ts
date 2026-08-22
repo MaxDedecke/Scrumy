@@ -26,7 +26,11 @@ export async function stopAgentRun(formData: FormData): Promise<ActionResult> {
   // Leere laufen statt einen längst abgeschlossenen Beleg zu verfälschen.
   const { count } = await prisma.agentRun.updateMany({
     where: { id: runId, status: "RUNNING" },
-    data: { cancelRequested: true },
+    // `cancelRequestedAt` ist nicht nur Protokoll: Reagiert der Lauf nicht
+    // selbst (weil sein Worker zwischendurch stirbt), schliesst ihn
+    // `reconcileCancelledRuns` (worker/reconcile.ts) nach kurzer Schonfrist ab –
+    // gemessen ab diesem Zeitpunkt.
+    data: { cancelRequested: true, cancelRequestedAt: new Date() },
   });
   if (count === 0) return note("Der Lauf ist inzwischen fertig – da gibt es nichts mehr zu stoppen.");
 

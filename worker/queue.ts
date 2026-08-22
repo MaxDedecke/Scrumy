@@ -130,6 +130,58 @@ export async function cancelAgentJobs(agentIds: string[]): Promise<number> {
   return removed.length;
 }
 
+/// Jobs, die endgueltig gescheitert sind: Ihr Anlauf-Budget ist verbraucht
+/// (`attempts >= max_attempts`) und sie sind nicht mehr gesperrt. Die von
+/// graphile-worker generierte Spalte `is_available` steht damit dauerhaft auf
+/// `false` – solche Zeilen laufen nie wieder an, sie sind tot, nicht wartend.
+///
+/// Genau das macht sie gefaehrlich: Wer in die Queue schaut, haelt sie leicht
+/// fuer ausstehende Arbeit. Deshalb holt `reconcileDeadJobs`
+/// (worker/reconcile.ts) sie hervor, macht sie im Projekt sichtbar und raeumt
+/// sie weg.
+///
+/// Wie ein Job hier landet, ist NICHT auf zweimal fachlich gescheitert
+/// beschraenkt: graphile-worker zaehlt `attempts` schon beim Abholen hoch, ein
+/// zweimal mitten im Job beendeter Worker (Rebuild, Neustart) reicht also
+/// ebenso – solche Zeilen haben dann nicht einmal ein `last_error`.
+///
+/// Gelesen wird ausnahmsweise aus der internen Tabelle statt aus der
+/// oeffentlichen `jobs`-Sicht: Nur dort steht der Payload, und den brauchen wir
+/// – graphile-worker setzt `key` beim endgueltigen Scheitern auf NULL (damit
+/// derselbe `jobKey` wieder vergeben werden kann), der Weg ueber den Job-Key
+/// zum Ticket ist bei genau diesen Zeilen also verbaut.
+export interface DeadJob {
+  id: string;
+  taskIdentifier: string;
+  payload: { projectId?: string; ticketId?: string; agentId?: string };
+  lastError: string | null;
+  createdAt: Date;
+}
+
+export async function deadJobs(): Promise<DeadJob[]> {
+  return await prisma.$queryRaw<DeadJob[]>`
+    select j.id::text as "id",
+           t.identifier as "taskIdentifier",
+           j.payload as "payload",
+           nullif(j.last_error, '') as "lastError",
+           j.created_at as "createdAt"
+    from graphile_worker._private_jobs j
+    join graphile_worker._private_tasks t on t.id = j.task_id
+    where j.locked_at is null and j.attempts >= j.max_attempts
+    order by j.created_at asc
+  `;
+}
+
+/// Nimmt Jobs aus der Queue. `completeJobs` ist der Weg von graphile-worker,
+/// eine Zeile ohne Ausfuehrung loszuwerden – ein direktes DELETE wuerde an der
+/// Buchfuehrung der Queue vorbeigehen.
+export async function removeJobs(jobIds: string[]): Promise<number> {
+  if (jobIds.length === 0) return 0;
+  const utils = await getWorkerUtils();
+  const removed = await utils.completeJobs(jobIds);
+  return removed.length;
+}
+
 /// Gibt Jobs frei, die ein gestorbener Worker gesperrt hat.
 ///
 /// Eine Sperre gehoert einem Worker-Pool, und stirbt der Container hart, bleibt

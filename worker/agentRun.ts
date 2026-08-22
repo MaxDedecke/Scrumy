@@ -365,19 +365,31 @@ export async function runTrackedTool<T extends { content: string; isError: boole
   }
 }
 
-async function failRun(runId: string, agentId: string, message: string, durationMs?: number, cancelled = false) {
+/// Schliesst einen Lauf als gescheitert ab: Beleg, Agentenstatus und – bei
+/// einem Abbruch von Hand – die Klaerung, die den Product Owner zur
+/// Entscheidung ruft. Exportiert, weil nicht nur der ausfuehrende Worker hier
+/// landet: Stirbt der Prozess mitten im Lauf, raeumt `reconcileCancelledRuns`
+/// (worker/reconcile.ts) denselben Zustand spaeter mit derselben Logik auf.
+export async function failRun(runId: string, agentId: string, message: string, durationMs?: number, cancelled = false) {
   const run = await prisma.agentRun.update({
     where: { id: runId },
     data: { status: "FAILED", error: message, finishedAt: new Date(), durationMs },
   });
-  await prisma.agent.update({
-    where: { id: agentId },
-    // Von Hand abgebrochen ist kein Haengenbleiben, das einen Menschen
-    // braucht (BLOCKED, wie bei jedem anderen Fehlschlag) – der Kollege ist
-    // sofort wieder frei, und der Product Owner bekommt unten die Chance, den
-    // Auftrag selbst neu anzustossen.
-    data: { status: cancelled ? "IDLE" : "BLOCKED" },
-  });
+  // Nur umschalten, wenn dieser Lauf wirklich der letzte des Agenten war.
+  // Beim Aufraeumen einer Run-Leiche (siehe oben) kann der Kollege laengst an
+  // etwas anderem sitzen – ihn dann auf IDLE/BLOCKED zu setzen, waere im Buero
+  // dieselbe Luege, gegen die das Aufraeumen antritt.
+  const stillRunning = await prisma.agentRun.count({ where: { agentId, status: "RUNNING" } });
+  if (stillRunning === 0) {
+    await prisma.agent.update({
+      where: { id: agentId },
+      // Von Hand abgebrochen ist kein Haengenbleiben, das einen Menschen
+      // braucht (BLOCKED, wie bei jedem anderen Fehlschlag) – der Kollege ist
+      // sofort wieder frei, und der Product Owner bekommt unten die Chance, den
+      // Auftrag selbst neu anzustossen.
+      data: { status: cancelled ? "IDLE" : "BLOCKED" },
+    });
+  }
 
   if (!cancelled) return;
 

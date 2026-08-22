@@ -21,8 +21,8 @@ der Code, nicht die Absicht: `worker/agentTools.ts`, `worker/agentToolLoop.ts`,
 | 9 | Regressions-Absicherung über den Sprint hinweg | offen |
 | 10 | Tote Rollen REVIEWER/DEVOPS | offen |
 | 11 | Fehlende Rolle SECURITY | offen |
-| 12 | Gestoppter Lauf bleibt bis zu 2,5 h „arbeitet gerade" | offen (Befund 22.08.) |
-| 13 | Endgültig gescheiterte Jobs bleiben unsichtbar liegen | offen (Befund 22.08.) |
+| 12 | Gestoppter Lauf bleibt bis zu 2,5 h „arbeitet gerade" | erledigt – `HEAD` |
+| 13 | Endgültig gescheiterte Jobs bleiben unsichtbar liegen | erledigt – `HEAD` |
 
 Offene Folgearbeit zu bereits Erledigtem steht jeweils beim Punkt selbst
 (Screenshots und Nutzung durch QA/Design in Punkt 1).
@@ -153,9 +153,10 @@ hat, was Sprint 2 gebaut hat, außer die Testsuite ist zufällig gut.
 
 ## Betriebsbefunde vom 22.08.2026
 
-Aus der Durchsicht der Job-Queue des Timeless-Projekts. Kein Code geändert.
+Aus der Durchsicht der Job-Queue des Timeless-Projekts – erst nur Befund,
+inzwischen beide behoben.
 
-### 12. Von Hand gestoppter Lauf bleibt bis zu 2,5 Stunden „arbeitet gerade"
+### 12. Von Hand gestoppter Lauf bleibt bis zu 2,5 Stunden „arbeitet gerade" – ERLEDIGT
 
 `reconcileStaleRuns` (worker/reconcile.ts) räumt `AgentRun`-Leichen auf, aber
 erst ab 90 Minuten Alter und nur im Stundentakt (`RECONCILE_INTERVAL_MS` in
@@ -167,16 +168,24 @@ Beobachtet an `cmt4lf0xu002g10qtcjvbedcu` (Quinn Adler, „Setzt das Ticket um")
 seit 16:28:55 `RUNNING`, ohne `finishedAt`, dabei `cancelRequested = true`.
 Genau dieselbe Symptomatik wurde beim letzten Mal von Hand per SQL korrigiert.
 
-Der Punkt ist nicht die Schwelle an sich – für einen abgestürzten Worker sind
+Der Punkt war nicht die Schwelle an sich – für einen abgestürzten Worker sind
 90 Minuten vernünftig, weil ein echter Lauf lange dauern darf. Der Punkt ist,
 dass bei `cancelRequested = true` gar nicht geraten werden muss: Es ist bekannt,
-dass jemand diesen Lauf absichtlich gestoppt hat. Solche Läufe könnten nach
-Sekunden statt nach 90 Minuten abgeschlossen werden, ohne die allgemeine
-Schwelle anzufassen.
+dass jemand diesen Lauf absichtlich gestoppt hat.
 
-### 13. Endgültig gescheiterte Jobs bleiben unsichtbar liegen
+Umgesetzt: neue Spalte `AgentRun.cancelRequestedAt` (gesetzt vom Stopp-Knopf),
+neues `reconcileCancelledRuns()` mit eigener Schonfrist von 2 Minuten ab
+Stopp-Zeitpunkt, und ein zweiter, minütlicher Takt im Worker
+(`QUICK_RECONCILE_INTERVAL_MS`) nur für die Fälle, in denen nichts geschätzt
+werden muss. Die allgemeine 90-Minuten-Schwelle bleibt unangetastet. Der
+Abschluss läuft durch dasselbe `failRun` wie im lebenden Worker, damit
+Agentenstatus und Klärung identisch entstehen – `failRun` schaltet den Agenten
+dabei nur noch um, wenn er wirklich keinen anderen laufenden Schritt mehr hat
+(beim Aufräumen einer Leiche sitzt der Kollege sonst längst an etwas anderem).
 
-Vier `ticketWork`-Jobs stehen mit `attempts = max_attempts = 2` in
+### 13. Endgültig gescheiterte Jobs bleiben unsichtbar liegen – ERLEDIGT
+
+Vier `ticketWork`-Jobs standen mit `attempts = max_attempts = 2` in
 `graphile_worker._private_jobs`, der älteste vom 21.08. Die generierte Spalte
 `is_available` (`locked_at IS NULL AND attempts < max_attempts`) ist damit
 `false`: Sie laufen nie wieder an, sie sind tot, nicht wartend.
@@ -187,10 +196,28 @@ Wichtig für die Bewertung: Es ist NICHT die gesperrte Queue aus
 beiden nicht fertigen Tickets hat das Anlauf-Budget sauber eskaliert (Ticket
 „rooms.test.ts…", 6/6 Anläufe, Klärung um 17:46 eröffnet).
 
-Offen bleibt nur die Sichtbarkeit: Weder die Oberfläche noch ein Aufräumlauf
-kennt diese Zeilen. Wer in die Queue schaut, hält sie leicht für ausstehende
-Arbeit – so ist es hier passiert. Ein „endgültig gescheitert"-Zustand am Ticket
-oder ein Aufräumschritt wäre die Antwort.
+Offen war nur die Sichtbarkeit: Weder die Oberfläche noch ein Aufräumlauf
+kannte diese Zeilen. Wer in die Queue schaut, hält sie leicht für ausstehende
+Arbeit – so ist es hier passiert.
+
+Umgesetzt: `deadJobs()` (worker/queue.ts) und `reconcileDeadJobs()`
+(worker/reconcile.ts), im selben minütlichen Takt wie Punkt 12 und zusätzlich
+bei jedem „Macht weiter"/„PO anstupsen". Was zu einem noch offenen Ticket eines
+aktiven Projekts gehört, wird zum Protokolleintrag (`job_dead`) und – falls zu
+dem Ticket nicht ohnehin schon etwas offen ist – zu einer Klärung; alles andere
+wird still entfernt. Als „alles andere" zählt ausdrücklich auch ein Ticket, für
+das inzwischen wieder ein lebender Job in der Queue steht: Nach einem Rebuild
+reiht der Sprint dasselbe Ticket einfach neu ein, die tote Zeile ist dann kein
+Grund, jemanden zu rufen (an den echten Daten geprüft: von den vier Leichen
+wurde genau eine zur Klärung, drei waren Müll).
+
+Zwei Beobachtungen aus den Daten, die vorher nicht in dieser Liste standen:
+`attempts` zählt graphile-worker schon beim Abholen hoch, nicht erst beim
+Scheitern – zweimal mitten im Job neu gebaut reicht also, um einen Job
+endgültig zu töten, und drei der vier Leichen hatten deshalb gar kein
+`last_error`. Und: Beim endgültigen Scheitern setzt graphile-worker `key` auf
+NULL, der Weg vom Job zum Ticket führt bei genau diesen Zeilen also nur noch
+über den Payload.
 
 ## Rollen
 

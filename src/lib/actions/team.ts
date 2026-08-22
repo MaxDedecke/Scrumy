@@ -322,10 +322,13 @@ export async function nudgeTeam(formData: FormData): Promise<ActionResult> {
 
   const message = await scheduleNextStep(projectId);
   revalidateProject(projectId);
-  const cleanupNote =
-    cleaned.unlockedPools > 0 || cleaned.abandonedRuns > 0
-      ? ` (davor eine hängende Job-Sperre eines abgestürzten Workers gelöst)`
-      : "";
+  const cleanupParts = [
+    cleaned.unlockedPools > 0 ? "eine hängende Job-Sperre eines abgestürzten Workers gelöst" : null,
+    cleaned.abandonedRuns > 0 ? "liegengebliebene Agentenläufe abgeschlossen" : null,
+    cleaned.cancelledRuns > 0 ? "einen von Hand gestoppten Lauf nachgetragen" : null,
+    cleaned.deadJobs > 0 ? "endgültig gescheiterte Jobs aus der Warteschlange genommen" : null,
+  ].filter((part): part is string => part !== null);
+  const cleanupNote = cleanupParts.length > 0 ? ` (davor ${cleanupParts.join(", ")})` : "";
   return ok(`${message}${cleanupNote}`);
 }
 
