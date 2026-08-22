@@ -297,7 +297,9 @@ export async function runImplementationLoop({
               headline:
                 call.name === "run_command"
                   ? `Führt Befehl aus: ${String(call.input.command ?? "").slice(0, 80)}`
-                  : "Prüft die laufende Anwendung",
+                  : call.name === "query_database"
+                    ? "Sieht in der Datenbank nach"
+                    : "Prüft die laufende Anwendung",
               prompt: `→ ${call.name}(${JSON.stringify(call.input)})`,
             },
             // Das Signal an ctx haengen statt ein neues ctx-Objekt zu

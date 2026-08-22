@@ -9,7 +9,7 @@ import path from "node:path";
 import type { ToolDef } from "@/lib/llm";
 import { gitHistory, gitShow, gitWorkingDiff, isFrozenDocPath, listTrackedFiles, readRepoFile, safeRepoPath, searchRepo, writeFiles, WorkspaceError } from "@/lib/workspace";
 import { runInSandbox } from "@/lib/testRun";
-import { runAgentIntegrationCheck, type HttpProbeRequest } from "@/lib/liveStack";
+import { runAgentDatabaseQuery, runAgentIntegrationCheck, type HttpProbeRequest } from "@/lib/liveStack";
 import { browserCheckFailed, formatBrowserProbe, runAgentBrowserCheck, type BrowserStep } from "@/lib/browserCheck";
 
 export interface ToolContext {
@@ -46,7 +46,7 @@ export interface ToolResult {
 /// synchron und schnell sind. Der Tool-Loop (worker/agentToolLoop.ts)
 /// begleitet nur diese mit einem eigenen "laeuft"-Beleg, weil ein einzelner
 /// Aufruf hier Minuten dauern kann (docker compose up --build, Testlauf).
-export const LONG_RUNNING_TOOLS = new Set(["run_command", "run_integration_check", "check_in_browser"]);
+export const LONG_RUNNING_TOOLS = new Set(["run_command", "run_integration_check", "check_in_browser", "query_database"]);
 
 function ok(content: string): ToolResult {
   return { content, isError: false };
@@ -215,6 +215,27 @@ export const IMPLEMENTATION_TOOLS: ToolDef[] = [
             },
             required: ["action"],
           },
+        },
+      },
+    },
+  },
+  {
+    name: "query_database",
+    description:
+      `Führt SQL gegen die Datenbank der LAUFENDEN Anwendung aus – lesend und schreibend. ` +
+      `Startet dafür denselben Docker-Compose-Stack wie run_integration_check/check_in_browser (dauert bis zu einigen Minuten). ` +
+      `Ohne „sql" bekommst du erst einmal alle Tabellen und Spalten aufgelistet – fang damit an, statt Namen zu raten. ` +
+      `Das ist die Stufe zwischen HTTP-Antwort und Oberfläche, die dir sonst fehlt: Bei „gespeichert, aber die Liste bleibt leer" sagt dir ein SELECT in einem Schritt, ob der Schreibweg oder der Leseweg kaputt ist – ohne diesen Blick änderst du auf Verdacht mal die eine, mal die andere Seite. ` +
+      `Schreiben (INSERT/UPDATE/DELETE) ist ausdrücklich erlaubt, um Testdaten herzustellen, an die man über die Oberfläche nicht herankommt: eine leere Liste, 500 Einträge, ein absichtlich kaputter Datensatz. Die Datenbank ist eine Wegwerf-Umgebung, du kannst dort nichts Echtes zerstören. ` +
+      `ABER: Ein fehlgeschlagener Nachweis wird NICHT dadurch bestanden, dass du die fehlende Zeile von Hand einfügst. Wenn dein Code die Zeile schreiben soll und sie fehlt, ist der Code kaputt, nicht die Datenbank – repariere den Code. Was du hier von Hand eingefügt hast, ist beim nächsten Start des Stacks weg, und die QA prüft gegen einen frisch hochgefahrenen Stack. ` +
+      `Große Ergebnisse werden gekürzt – frag mit WHERE/LIMIT gezielt ab.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        sql: {
+          type: "string",
+          description:
+            "Eine oder mehrere SQL-Anweisungen, z.B. \"select id, name, created_at from documents order by created_at desc limit 20\". Weglassen, um Tabellen und Spalten aufgelistet zu bekommen.",
         },
       },
     },
@@ -513,6 +534,29 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       const body =
         `${formatBrowserProbe(result.probe)}\n\nService-Logs (letzte Zeilen):\n${result.logs}`;
       return browserCheckFailed(result.probe) ? err(body) : ok(body);
+    }
+
+    case "query_database": {
+      if (ctx.bashTimeUsedMs >= ctx.bashTimeBudgetMs) {
+        return err("Bash-/Sandbox-Zeitbudget für dieses Ticket ist aufgebraucht – keine weiteren Prüfungen in diesem Anlauf.");
+      }
+      // Dasselbe Zeitbudget wie die anderen Stack-Prüfungen: Der teure Teil
+      // ist nicht die Abfrage, sondern der Compose-Start davor.
+      const remainingBudget = ctx.bashTimeBudgetMs - ctx.bashTimeUsedMs;
+      const timeoutMs = Math.max(30_000, Math.min(5 * 60_000, remainingBudget));
+      const startedAt = Date.now();
+      const result = await runAgentDatabaseQuery(ctx.projectId, str(input, "sql") || null, { timeoutMs });
+      ctx.bashTimeUsedMs += Date.now() - startedAt;
+
+      if (!result.reachable) {
+        return err(
+          `Datenbank nicht erreichbar: ${result.blockedReason ?? "unbekannter Grund"}` +
+            `${result.logs ? `\n\nLog:\n${result.logs}` : ""}`,
+        );
+      }
+
+      const header = result.service ? `Datenbank-Dienst „${result.service}":\n\n` : "";
+      return result.failed ? err(`${header}${result.output}`) : ok(`${header}${result.output}`);
     }
 
     default:

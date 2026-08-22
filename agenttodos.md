@@ -12,7 +12,7 @@ der Code, nicht die Absicht: `worker/agentTools.ts`, `worker/agentToolLoop.ts`,
 | 1 | Browser-Prüfung (`check_in_browser`) | erledigt – `f7432ea` |
 | 2a | Eigener Arbeitsstand + Historie (`show_diff`, `show_history`) | erledigt – `b7db8fd` |
 | 2b | Sandbox kennt nur JavaScript | offen |
-| 3 | Zugriff auf die laufende Datenbank | offen |
+| 3 | Zugriff auf die laufende Datenbank | erledigt – `HEAD` |
 | 4 | Web-/Doku-Zugriff | offen |
 | 5 | Frage an einen Kollegen im laufenden Anlauf | offen |
 | 6 | Gedächtnis über Tickets hinweg | offen |
@@ -30,10 +30,12 @@ Offene Folgearbeit zu bereits Erledigtem steht jeweils beim Punkt selbst
 ## Ist-Stand
 
 Werkzeuge des Umsetzer-Agenten (`IMPLEMENTATION_TOOLS`): `read_file`,
-`list_files`, `search_files`, `write_file`, `edit_file`, `run_command`
-(Docker-Sandbox), `run_integration_check` (echter Compose-Stack + HTTP-Probe),
-`finish`. Git-Commit/Push macht der Worker außerhalb der Sandbox, nicht der
-Agent selbst.
+`list_files`, `search_files`, `show_diff`, `show_history`, `write_file`,
+`edit_file`, `run_command` (Docker-Sandbox), `run_integration_check` (echter
+Compose-Stack + HTTP-Probe), `check_in_browser` (echter Chromium gegen den
+Stack), `query_database` (SQL gegen die Datenbank des Stacks), `finish`.
+Git-Commit/Push macht der Worker außerhalb der Sandbox, nicht der Agent
+selbst.
 
 ## Werkzeuge
 
@@ -94,43 +96,54 @@ per Definition mit der überein, in der der Code später läuft. Zu klären: Wah
 des Dienstes, Build-Caching, und wie der Volume-Subpath-Mount dabei erhalten
 bleibt.
 
-### 3. Kein Zugriff auf die laufende Datenbank
+### 3. Zugriff auf die laufende Datenbank – ERLEDIGT
 
-Bei „Upload gespeichert, aber Liste leer" kann der Agent nicht nachsehen, ob die
-Zeile in Postgres steht. Er sieht seit Punkt 1 die gerenderte Oberfläche und
+Bei „Upload gespeichert, aber Liste leer" konnte der Agent nicht nachsehen, ob
+die Zeile in Postgres steht. Er sieht seit Punkt 1 die gerenderte Oberfläche und
 seit jeher die HTTP-Antwort – aber nicht die Stufe dazwischen, an der sich
 entscheidet, ob der Schreibweg oder der Leseweg kaputt ist. Ohne diesen Blick
 rät er: ändert den Lesecode, obwohl der Schreibcode falsch ist, dreht zurück,
 und landet in einer „keine Änderung"-Klärung.
 
-Zu bauen: ein SQL-Kanal in den DB-Container des Live-Stacks, entweder als
-`sql`-Feld an `run_integration_check` (der fährt den Stack ohnehin hoch) oder
-als eigenes Werkzeug.
+Umgesetzt als eigenes Werkzeug `query_database` (nicht als Feld an
+`run_integration_check`): Der typische Ablauf ist Request → nachsehen → Request,
+und ein DB-Blick soll keinen HTTP-Aufruf mitschleppen müssen. Den heiklen
+Lebenszyklus teilt es sich über `withRunningStack` mit den anderen beiden
+Stack-Prüfungen. Ohne `sql`-Argument liefert es Tabellen und Spalten, damit das
+Modell keine Namen rät.
 
 **Schreibend, nicht nur lesend** (Entscheidung des Auftraggebers vom
 22.08.2026). Die erste Fassung dieser Notiz forderte „nur lesend"; das ist hier
 die falsche Vorsicht. Der Live-Stack ist eine Wegwerf-Umgebung – Terminate
-löscht Container, Netz und DB-Volumes vollständig, und eine produktive
-Kundeninstanz anzufassen ist ausdrücklich nie vorgesehen. Ein Agent, der
-Testdaten anlegen kann, kann Randfälle prüfen, die sich über die Oberfläche gar
-nicht herstellen lassen (leere Liste, 500 Einträge, kaputter Datensatz).
+löscht Container, Netz und Volumes vollständig, und der Kunde entwickelt immer
+in unserer Umgebung und deployt sein Ergebnis anderswo. Erst mit Schreibrecht
+kann ein Agent Randfälle herstellen, die sich über die Oberfläche gar nicht
+erzeugen lassen (leere Liste, 500 Einträge, kaputter Datensatz).
 
 Das echte Risiko ist damit nicht Datenverlust, sondern **Beweisfälschung**: Ein
 Agent, dessen Prüfung scheitert, weil die Zeile fehlt, kann die Zeile von Hand
-einfügen und die Prüfung für bestanden erklären, ohne eine Zeile Code repariert
-zu haben. Dagegen hilft kein Rechteentzug, sondern eine Regel plus ein Gate:
-Ein Nachweis zählt nur, wenn er nach einem Neustart des Stacks mit leerer
-Datenbank reproduzierbar ist (siehe QA-Gate, Punkt 9).
+einfügen und die Prüfung für bestanden erklären. Dagegen hilft kein
+Rechteentzug, sondern die Regel in der Werkzeugbeschreibung („Wenn dein Code
+die Zeile schreiben soll und sie fehlt, ist der Code kaputt, nicht die
+Datenbank") plus der Umstand, dass Handeinträge beim nächsten Stack-Start weg
+sind und die QA gegen einen frisch hochgefahrenen Stack prüft (Punkt 9).
 
-Weiter zu klären:
-- Ergebnisgröße begrenzen – ein `select *` über einer großen Tabelle kippt sonst
-  das Kontextfenster.
-- Schema mitliefern (`\d`-Äquivalent), sonst rät das Modell Tabellen- und
-  Spaltennamen.
-- Läuft kein Stack, sauber melden statt einen nur zum Nachsehen hochzufahren.
-- Welcher Dienst die Datenbank ist, steht nicht fest – der Kunden-Compose-Stack
-  bringt seine eigenen Servicenamen mit (siehe `resolveServices` in
-  src/lib/liveStack.ts).
+Wie der Datenbank-Dienst gefunden wird: über das **Image**, nicht über den
+Servicenamen. Timeless nennt ihn `postgres`, die Teamregeln schreiben keinen
+Namen vor, und das Image muss ohnehin stimmen, damit der Stack läuft
+(`pickDatabaseService`, Regressionstest `tests/liveStackDatabaseService.test.ts`
+– er hält auch ein `postgres-client`-Image nicht für die Datenbank). Benutzer
+und Datenbankname kommen aus `POSTGRES_USER`/`POSTGRES_DB`, mit den Vorgaben des
+offiziellen Images als Rückfall. Ausgabe wird bei 12 000 Zeichen gekürzt, jede
+Anweisung läuft mit `statement_timeout = 30s`.
+
+Dabei aufgefallen, noch offen: Jede der drei Stack-Prüfungen
+(`run_integration_check`, `check_in_browser`, `query_database`) fährt den Stack
+über `withRunningStack` selbst hoch und danach wieder herunter, wenn sie ihn
+gestartet hat. Eine Kette „Request → in die DB schauen → Request" zahlt den
+Compose-Start damit dreimal, aus einem Ticket-Budget von 35 Minuten. Den Stack
+für die Dauer eines Anlaufs stehen zu lassen, wäre der offensichtliche Hebel –
+gehört aber sauber durchdacht (wer räumt auf, wenn der Anlauf abstürzt?).
 
 ### 4. Kein Web-/Doku-Zugriff
 

@@ -566,6 +566,10 @@ interface ComposePublisher {
 interface ComposePsEntry {
   Service: string;
   State: string;
+  /// Der echte Containername ("<projekt>-<dienst>-1") – gebraucht, um mit
+  /// `docker exec` direkt in einen einzelnen Dienst zu gehen (siehe
+  /// runAgentDatabaseQuery).
+  Name?: string;
   /// "" ohne Healthcheck, sonst "starting"/"healthy"/"unhealthy" – siehe
   /// Status-Bestimmung unten. Kein TCP-Probe wie preview.ts: der Live-Stack
   /// bringt sein eigenes, von den Agenten frei angelegtes Compose-Netz mit,
@@ -1099,6 +1103,224 @@ export async function runAgentIntegrationCheck(
   }
 
   return { reachable: true, unavailable: false, blockedReason: null, port: outcome.port, probe: outcome.value, logs: outcome.logs };
+}
+
+// --- Datenbank des laufenden Stacks ------------------------------------------
+
+/// Images, hinter denen eine Postgres-Datenbank steckt. Bewusst am Image
+/// festgemacht und nicht am Servicenamen: Die Agenten schreiben die
+/// docker-compose.yml selbst, und ob der Dienst "db", "database" oder
+/// "postgres" heisst, ist ihnen ueberlassen – das Image ist die Angabe, die
+/// sowieso stimmen muss, damit der Stack ueberhaupt laeuft.
+/// Absichtlich streng: Der erkannte Name muss der ganze Image-Name sein
+/// (optional mit Registry/Namespace davor), nicht bloss darin vorkommen –
+/// sonst haelt ein "myrepo/postgres-client" im Backend-Dienst sich fuer die
+/// Datenbank.
+const POSTGRES_IMAGE_PATTERN = /(^|\/)(postgres|postgis|timescaledb)(:|$)/i;
+
+export interface DatabaseServiceChoice {
+  service: string;
+  user: string;
+  database: string;
+}
+
+/// Waehlt den Datenbank-Dienst aus einer aufgeloesten Compose-Konfiguration.
+/// Herausgezogen und exportiert, weil das der einzige Teil mit echter Logik
+/// ist – der Rest von `resolveDatabaseService` ist Docker-Klempnerei (siehe
+/// tests/liveStackDatabaseService.test.ts).
+export function pickDatabaseService(
+  services: Record<string, { image?: string; environment?: Record<string, string | null> }>,
+): DatabaseServiceChoice | null {
+  const match = Object.entries(services).find(([, service]) => POSTGRES_IMAGE_PATTERN.test(service.image ?? ""));
+  if (!match) return null;
+
+  const [service, definition] = match;
+  const env = definition.environment ?? {};
+  // Genau die Variablen, mit denen das offizielle Image seine Datenbank
+  // anlegt; fehlen sie, gelten dessen eigene Vorgaben.
+  const user = env.POSTGRES_USER || "postgres";
+  const database = env.POSTGRES_DB || user;
+  return { service, user, database };
+}
+
+interface DatabaseService {
+  service: string;
+  container: string;
+  user: string;
+  database: string;
+}
+
+/// Findet den Datenbank-Dienst des laufenden Stacks und die Zugangsdaten, mit
+/// denen `psql` im Container ohne Passwort hineinkommt (POSTGRES_USER/
+/// POSTGRES_DB sind genau die Variablen, mit denen das offizielle Image seine
+/// Datenbank anlegt – lokale Verbindungen sind darin per "trust" erlaubt).
+async function resolveDatabaseService(
+  workspacePath: string,
+  projectName: string,
+): Promise<DatabaseService | { error: string }> {
+  const composeFile = await findComposeFile(workspacePath);
+  if (!composeFile) return { error: "Kein docker-compose.yml im Repository gefunden." };
+
+  let resolved: {
+    services?: Record<string, { image?: string; environment?: Record<string, string | null> }>;
+  };
+  try {
+    resolved = JSON.parse(await dockerCompose(["-f", composeFile, "-p", projectName, "config", "--format", "json"]));
+  } catch (error) {
+    return { error: `docker-compose.yml konnte nicht ausgewertet werden: ${error instanceof Error ? error.message : String(error)}` };
+  }
+
+  const services = resolved.services ?? {};
+  const choice = pickDatabaseService(services);
+  if (!choice) {
+    const known = Object.entries(services)
+      .map(([name, service]) => `${name} (${service.image ?? "eigenes Build"})`)
+      .join(", ");
+    return {
+      error:
+        `Kein Postgres-Dienst in der docker-compose.yml gefunden${known ? ` – vorhanden sind: ${known}` : ""}. ` +
+        `Dieses Werkzeug spricht nur Postgres an (der Standard laut Teamregeln).`,
+    };
+  }
+  const { service, user, database } = choice;
+
+  const psRaw = await dockerCompose(["-f", composeFile, "-p", projectName, "ps", "--format", "json"]).catch(() => "");
+  const entry = parseComposePs(psRaw).find((candidate) => candidate.Service === service);
+  if (!entry?.Name) {
+    return { error: `Der Datenbank-Dienst „${service}" laeuft gerade nicht – im Log oben steht, woran sein Start gescheitert ist.` };
+  }
+
+  return { service, container: entry.Name, user, database };
+}
+
+export interface AgentDatabaseQueryResult {
+  reachable: boolean;
+  /// true = Infrastruktur (anderes Projekt live, kein Compose-File), kein
+  /// Befund ueber den Code des Tickets. Gleiche Bedeutung wie bei
+  /// AgentIntegrationCheckResult.
+  unavailable: boolean;
+  blockedReason: string | null;
+  service: string | null;
+  /// Ausgabe von psql (Tabelle oder Fehlermeldung).
+  output: string;
+  failed: boolean;
+  logs: string;
+}
+
+/// Wie viel psql-Ausgabe zurueckgeht. Ein unbedachtes "select *" ueber einer
+/// vollen Tabelle wuerde sonst das Kontextfenster des Agenten fuellen.
+const SQL_OUTPUT_LIMIT = 12_000;
+/// Reisst eine Abfrage das, ist sie kaputt (fehlender Index, Kreuzprodukt) –
+/// besser eine klare Fehlermeldung als ein blockierter Werkzeugaufruf.
+const SQL_STATEMENT_TIMEOUT = "30s";
+
+/// Fuer worker/agentTools.ts ("query_database"): laesst den Umsetzer-Agenten
+/// in die Datenbank des laufenden Stacks schauen UND schreiben.
+///
+/// Schreibend ist Absicht (Entscheidung vom 22.08.2026): Der Live-Stack ist
+/// eine Wegwerf-Umgebung – "Anwendung beenden" loescht Container, Netz und
+/// Volumes vollstaendig, und eine produktive Kundeninstanz wird hier
+/// grundsaetzlich nicht betrieben (der Kunde deployt sein Ergebnis
+/// anderswo). Erst mit Schreibrecht kann ein Agent Randfaelle herstellen, die
+/// sich ueber die Oberflaeche gar nicht erzeugen lassen: leere Liste, 500
+/// Eintraege, ein absichtlich kaputter Datensatz.
+///
+/// Das verbleibende Risiko ist deshalb kein Datenverlust, sondern
+/// Beweisfaelschung – wer die fehlende Zeile von Hand einfuegen kann, kann
+/// eine Pruefung bestehen lassen, ohne Code repariert zu haben. Dagegen hilft
+/// kein Rechteentzug, sondern die Regel in der Werkzeugbeschreibung (siehe
+/// worker/agentTools.ts) und das QA-Gate, das gegen einen frisch
+/// hochgefahrenen Stack prueft.
+export async function runAgentDatabaseQuery(
+  projectId: string,
+  sql: string | null,
+  { pollIntervalMs = 4000, timeoutMs = 5 * 60 * 1000, queryTimeoutMs = 60_000 } = {},
+): Promise<AgentDatabaseQueryResult> {
+  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { workspacePath: true } });
+  const workspacePath = project?.workspacePath;
+  if (!workspacePath) {
+    return { reachable: false, unavailable: true, blockedReason: "Kein Arbeitsverzeichnis.", service: null, output: "", failed: true, logs: "" };
+  }
+  const projectName = liveProjectName(projectId);
+
+  const outcome = await withRunningStack(projectId, { pollIntervalMs, timeoutMs }, async () => {
+    const db = await resolveDatabaseService(workspacePath, projectName);
+    if ("error" in db) return { service: null, output: db.error, failed: true };
+
+    // Ohne `sql` eine Schemauebersicht: Ein Modell, das Tabellen- und
+    // Spaltennamen raten muss, schreibt Abfragen gegen Spalten, die es nicht
+    // gibt – und verbraucht dafuer Schritte.
+    const statement =
+      sql ??
+      `select table_name, column_name, data_type, is_nullable
+         from information_schema.columns
+        where table_schema not in ('pg_catalog', 'information_schema')
+        order by table_name, ordinal_position`;
+
+    try {
+      const stdout = await docker(
+        [
+          "exec",
+          "-i",
+          db.container,
+          "psql",
+          "-U",
+          db.user,
+          "-d",
+          db.database,
+          // -X: keine ~/.psqlrc des Images; ON_ERROR_STOP: ein Fehler in der
+          // ersten Anweisung soll die folgenden nicht stillschweigend
+          // ueberspringen lassen.
+          "-X",
+          "-v",
+          "ON_ERROR_STOP=1",
+          "-P",
+          "pager=off",
+          "-c",
+          `set statement_timeout = '${SQL_STATEMENT_TIMEOUT}'`,
+          "-c",
+          statement,
+        ],
+        queryTimeoutMs,
+      );
+      const output = stdout.trim() || "(keine Ausgabe – die Anweisung lief durch, hat aber nichts zurueckgegeben)";
+      return { service: db.service, output: clip(output), failed: false };
+    } catch (error) {
+      // psql meldet SQL-Fehler auf stderr und mit Exit-Code != 0; execFile
+      // wirft dann. Das ist ein normales Ergebnis fuer den Agenten (falsche
+      // Spalte, Syntaxfehler), kein Infrastrukturproblem.
+      const stderr = (error as { stderr?: string }).stderr;
+      return { service: db.service, output: clip((stderr || (error instanceof Error ? error.message : String(error))).trim()), failed: true };
+    }
+  });
+
+  if (!outcome.ok) {
+    return {
+      reachable: false,
+      unavailable: outcome.unavailable,
+      blockedReason: outcome.reason,
+      service: null,
+      output: "",
+      failed: true,
+      logs: outcome.logs,
+    };
+  }
+
+  return {
+    reachable: true,
+    unavailable: false,
+    blockedReason: null,
+    service: outcome.value.service,
+    output: outcome.value.output,
+    failed: outcome.value.failed,
+    logs: outcome.logs,
+  };
+}
+
+function clip(text: string): string {
+  return text.length > SQL_OUTPUT_LIMIT
+    ? `${text.slice(0, SQL_OUTPUT_LIMIT)}\n\n[gekuerzt – ${text.length - SQL_OUTPUT_LIMIT} weitere Zeichen. Mit LIMIT/WHERE gezielter abfragen.]`
+    : text;
 }
 
 // --- Sprint-Review-Integrationspruefung --------------------------------------
