@@ -172,6 +172,10 @@ services:
       # ("docker run" ohne "-d") und muss von niemandem erreicht werden.
       TEST_RUNNER_IMAGE: scrumy-preview-runner
       TEST_RUNNER_WORKSPACE_VOLUME: scrumy_scrumy_workspaces
+      # Browser-Pruefung des Umsetzer-Agenten (src/lib/browserCheck.ts): echter
+      # Chromium gegen den laufenden Compose-Stack. Eigenes Image, weil der
+      # Runner oben bewusst nur node+npm enthaelt.
+      BROWSER_RUNNER_IMAGE: scrumy-browser-runner
     volumes:
       # Schreibend: hier committen die Agenten.
       - scrumy_workspaces:/workspaces
@@ -190,6 +194,17 @@ services:
       context: .
       dockerfile: docker/preview-runner.Dockerfile
     image: scrumy-preview-runner
+    profiles: ["build-only"]
+
+  # Ebenfalls kein laufender Dienst, nur ein Image: der Chromium fuer das
+  # "check_in_browser"-Werkzeug (siehe docker/browser-runner.Dockerfile). Der
+  # Worker startet daraus pro Pruefung einen eigenen Container:
+  #   docker compose build browser-runner
+  browser-runner:
+    build:
+      context: .
+      dockerfile: docker/browser-runner.Dockerfile
+    image: scrumy-browser-runner
     profiles: ["build-only"]
 
 volumes:

@@ -621,12 +621,22 @@ const ticketWork: Task<"ticketWork"> = async (payload: TicketWorkPayload, helper
   // wurde.
   const bugRepro =
     ticket.type === "BUG"
-      ? '\n\nFalls der Fehler nur im laufenden System auftritt (z.B. aus einer Bug-Meldung zur Vorschau/Live-Anwendung): Vermute nicht bloß eine Ursache – nutze `run_integration_check`, um den echten Docker-Compose-Stack zu starten und den Fehler (z.B. per HTTP-Request/Datei-Upload) selbst nachzustellen, bevor du einen Fix schreibst oder das Ticket als „vermutlich Docker-Problem" abschließt.'
+      ? '\n\nFalls der Fehler nur im laufenden System auftritt (z.B. aus einer Bug-Meldung zur Vorschau/Live-Anwendung): Vermute nicht bloß eine Ursache – nutze `run_integration_check` (HTTP-Request/Datei-Upload) bzw. `check_in_browser` (alles, was der Nutzer im Browser sieht), um den echten Docker-Compose-Stack zu starten und den Fehler selbst nachzustellen, bevor du einen Fix schreibst oder das Ticket als „vermutlich Docker-Problem" abschließt.'
+      : "";
+
+  // Nudge fuer alles, was ein Mensch am Ende im Browser sieht: Ein Frontend
+  // kann serverseitig einwandfrei ausgeliefert werden und im Browser trotzdem
+  // komplett kaputt sein (JavaScript-Fehler, fetch auf einen internen
+  // Compose-Servicenamen). Ohne diesen Hinweis schliesst der Agent das Ticket
+  // nach einem gruenen Unit-Test ab, ohne die Ansicht je gesehen zu haben.
+  const browserCheck =
+    implementer.role === "FRONTEND" || implementer.role === "DESIGN"
+      ? '\n\nBevor du dieses Ticket abschließt: Sieh dir die betroffene Ansicht mit `check_in_browser` in einem echten Browser an. Ein grüner Unit-Test sagt nichts darüber, ob die Seite im Browser überhaupt aufgeht, ob sie Inhalt zeigt und ob ihre Requests durchkommen. Achte im Ergebnis besonders auf unbehandelte JavaScript-Fehler und fehlgeschlagene Requests.'
       : "";
 
   const ticketHead =
     `## Ticket\n${ticket.title}\nTyp: ${TICKET_TYPE_LABEL[ticket.type]} · Priorität: ${PRIORITY_LABEL[ticket.priority]}` +
-    `${ticket.isCritical ? " · kritisch (braucht menschliche Freigabe)" : ""}\n\n${clipForPrompt(ticket.description ?? "", 6000)}${bugRepro}`;
+    `${ticket.isCritical ? " · kritisch (braucht menschliche Freigabe)" : ""}\n\n${clipForPrompt(ticket.description ?? "", 6000)}${bugRepro}${browserCheck}`;
 
   // Der Zaehler steigt hier, nicht erst am Ende: Auch ein Anlauf, der gleich
   // abstuerzt, hat einen Versuch verbraucht – sonst zaehlt ausgerechnet die

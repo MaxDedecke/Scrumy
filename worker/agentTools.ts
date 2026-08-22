@@ -10,6 +10,7 @@ import type { ToolDef } from "@/lib/llm";
 import { isFrozenDocPath, listTrackedFiles, readRepoFile, safeRepoPath, searchRepo, writeFiles, WorkspaceError } from "@/lib/workspace";
 import { runInSandbox } from "@/lib/testRun";
 import { runAgentIntegrationCheck, type HttpProbeRequest } from "@/lib/liveStack";
+import { browserCheckFailed, formatBrowserProbe, runAgentBrowserCheck, type BrowserStep } from "@/lib/browserCheck";
 
 export interface ToolContext {
   dir: string;
@@ -45,7 +46,7 @@ export interface ToolResult {
 /// synchron und schnell sind. Der Tool-Loop (worker/agentToolLoop.ts)
 /// begleitet nur diese mit einem eigenen "laeuft"-Beleg, weil ein einzelner
 /// Aufruf hier Minuten dauern kann (docker compose up --build, Testlauf).
-export const LONG_RUNNING_TOOLS = new Set(["run_command", "run_integration_check"]);
+export const LONG_RUNNING_TOOLS = new Set(["run_command", "run_integration_check", "check_in_browser"]);
 
 function ok(content: string): ToolResult {
   return { content, isError: false };
@@ -151,6 +152,41 @@ export const IMPLEMENTATION_TOOLS: ToolDef[] = [
             extraFields: { type: "object", description: "Weitere Formularfelder neben der Datei" },
           },
           required: ["fieldName"],
+        },
+      },
+    },
+  },
+  {
+    name: "check_in_browser",
+    description:
+      `Öffnet eine Seite der LAUFENDEN Anwendung in einem echten Browser (Chromium) und meldet zurück, was dabei bricht: unbehandelte JavaScript-Fehler, im Browser fehlgeschlagene Requests, Konsolenfehler und den sichtbaren Seitentext. ` +
+      `Startet dafür denselben Docker-Compose-Stack wie „Anwendung starten"/run_integration_check (dauert bis zu einigen Minuten). ` +
+      `Nutze das bei ALLEM, was der Nutzer im Browser sieht: nach Frontend-Änderungen, bei Bug-Meldungen aus der Live-Anwendung („Knopf tut nichts", „Liste bleibt leer", „Upload schlägt fehl") und bevor du ein Frontend-Ticket abschließt. ` +
+      `Es ist die einzige Prüfung, die den Unterschied zwischen „Server liefert die Seite aus" und „die Seite funktioniert im Browser" sieht – ein Frontend, das eine interne Adresse wie „http://backend:3000" im Browser-Code anspricht, liefert serverseitig HTTP 200 und scheitert trotzdem bei jedem Nutzer mit ERR_NAME_NOT_RESOLVED. run_integration_check würde das für in Ordnung halten. ` +
+      `Mit „steps" kannst du die Seite auch bedienen (klicken, Felder ausfüllen), um eine Ansicht hinter einem Login oder einem Formular zu erreichen. ` +
+      `Kann fehlschlagen, weil gerade ein anderes Projekt live ist – das ist kein Befund über deinen Code, sondern ein Grund, es später erneut zu versuchen.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Pfad (+Query) der zu prüfenden Seite, z.B. \"/dokumente\". Standard \"/\"." },
+        waitForSelector: {
+          type: "string",
+          description: "Optional: CSS-Selektor, der sichtbar werden muss, bevor die Seite als geladen gilt (z.B. \"table tbody tr\").",
+        },
+        viewport: { type: "string", description: "\"desktop\" (Standard) oder \"mobile\" für die schmale Breite." },
+        steps: {
+          type: "array",
+          description: "Optional: Bedienschritte nach dem Laden, in dieser Reihenfolge.",
+          items: {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "click | fill | press | wait" },
+              selector: { type: "string", description: "CSS-Selektor oder Textselektor, z.B. \"text=Anmelden\"" },
+              value: { type: "string", description: "Bei fill der Wert, bei press die Taste (Standard Enter)" },
+              ms: { type: "number", description: "Nur bei wait: Wartezeit in Millisekunden" },
+            },
+            required: ["action"],
+          },
         },
       },
     },
@@ -352,6 +388,60 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
         : "";
       const body = `Stack erreichbar (Port ${result.port}).${probeText}\n\nService-Logs (letzte Zeilen):\n${result.logs}`;
       return result.probe && !result.probe.ok ? err(body) : ok(body);
+    }
+
+    case "check_in_browser": {
+      if (ctx.bashTimeUsedMs >= ctx.bashTimeBudgetMs) {
+        return err("Bash-/Sandbox-Zeitbudget für dieses Ticket ist aufgebraucht – keine weiteren Prüfungen in diesem Anlauf.");
+      }
+      const stepsInput = Array.isArray(input.steps) ? input.steps : [];
+      const steps: BrowserStep[] = [];
+      for (const entry of stepsInput) {
+        if (!entry || typeof entry !== "object") continue;
+        const step = entry as Record<string, unknown>;
+        const action = str(step, "action").toLowerCase();
+        if (action !== "click" && action !== "fill" && action !== "press" && action !== "wait") {
+          return err(`Unbekannte Aktion „${action}" in „steps" – erlaubt sind click, fill, press, wait.`);
+        }
+        if (action !== "wait" && !str(step, "selector")) {
+          return err(`„selector" fehlt bei einem „${action}"-Schritt.`);
+        }
+        steps.push({
+          action,
+          selector: str(step, "selector") || undefined,
+          value: str(step, "value") || undefined,
+          ms: typeof step.ms === "number" ? step.ms : undefined,
+        });
+      }
+
+      const viewportInput = str(input, "viewport").toLowerCase();
+      // Ein Browser-Start samt Compose-Build braucht dieselbe Groessenordnung
+      // wie run_integration_check und zahlt auf dasselbe Zeitbudget ein.
+      const remainingBudget = ctx.bashTimeBudgetMs - ctx.bashTimeUsedMs;
+      const timeoutMs = Math.max(30_000, Math.min(5 * 60_000, remainingBudget));
+      const startedAt = Date.now();
+      const result = await runAgentBrowserCheck(
+        ctx.projectId,
+        {
+          path: str(input, "path") || undefined,
+          waitForSelector: str(input, "waitForSelector") || undefined,
+          viewport: viewportInput === "mobile" ? "mobile" : "desktop",
+          steps,
+        },
+        { timeoutMs },
+      );
+      ctx.bashTimeUsedMs += Date.now() - startedAt;
+
+      if (!result.reachable || !result.probe) {
+        return err(
+          `Anwendung nicht im Browser prüfbar: ${result.blockedReason ?? "unbekannter Grund"}` +
+            `${result.logs ? `\n\nLog:\n${result.logs}` : ""}`,
+        );
+      }
+
+      const body =
+        `${formatBrowserProbe(result.probe)}\n\nService-Logs (letzte Zeilen):\n${result.logs}`;
+      return browserCheckFailed(result.probe) ? err(body) : ok(body);
     }
 
     default:

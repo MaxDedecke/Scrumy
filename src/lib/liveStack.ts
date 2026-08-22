@@ -998,47 +998,41 @@ async function waitForStackRunning(projectId: string, deadline: number, pollInte
   return info;
 }
 
-/// Fuer worker/agentTools.ts ("run_integration_check"): laesst den Umsetzer-
-/// Agenten einen im laufenden System gemeldeten Fehler (typischerweise ein
-/// BUG-Ticket aus src/lib/actions/bugReport.ts) selbst nachstellen, statt aus
-/// dem Diff zu raten – die eigentliche Antwort auf "Docker ist in der Sandbox
-/// nicht verfuegbar" (siehe runInSandbox in testRun.ts, das NUR einen
-/// einzelnen Node-Container ohne Compose/Netz/DB kennt).
+export type RunningStackOutcome<T> =
+  | { ok: true; port: number; logs: string; value: T }
+  | { ok: false; unavailable: boolean; reason: string; logs: string };
+
+/// Gemeinsame Klammer fuer jede Pruefung, die die Anwendung eines Projekts
+/// WIRKLICH laufen sehen muss: Sperre pruefen, Stack starten (oder den schon
+/// laufenden weiterbenutzen), warten bis er stabil erreichbar ist, `run`
+/// ausfuehren, Logs einsammeln und – nur wenn diese Pruefung den Stack selbst
+/// gestartet hat – wieder aufraeumen. Laeuft er schon (z.B. weil ein Mensch
+/// gerade selbst testet), bleibt er stehen.
 ///
-/// Nutzt dieselbe "nur ein Projekt gleichzeitig live"-Sperre und dasselbe
-/// Start/Stop-Muster wie runSprintIntegrationCheck: laeuft der Stack bereits
-/// (z.B. weil ein Mensch gerade selbst testet), wird er wiederverwendet und
-/// NICHT am Ende beendet.
-export async function runAgentIntegrationCheck(
+/// Herausgezogen, damit die HTTP-Probe (runAgentIntegrationCheck unten) und
+/// die Browser-Pruefung (runAgentBrowserCheck in src/lib/browserCheck.ts) sich
+/// dieses heikle Lebenszyklus-Verhalten teilen, statt es zu verdoppeln.
+export async function withRunningStack<T>(
   projectId: string,
-  request: HttpProbeRequest | null,
-  { pollIntervalMs = 4000, timeoutMs = 5 * 60 * 1000, probeTimeoutMs = 15_000 } = {},
-): Promise<AgentIntegrationCheckResult> {
+  { pollIntervalMs = 4000, timeoutMs = 5 * 60 * 1000 } = {},
+  run: (port: number) => Promise<T>,
+): Promise<RunningStackOutcome<T>> {
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { workspacePath: true } });
   if (!project?.workspacePath) {
-    return { reachable: false, unavailable: true, blockedReason: "Kein Arbeitsverzeichnis.", port: null, probe: null, logs: "" };
+    return { ok: false, unavailable: true, reason: "Kein Arbeitsverzeichnis.", logs: "" };
   }
 
   const composeFile = await findComposeFile(project.workspacePath);
   if (!composeFile) {
-    return {
-      reachable: false,
-      unavailable: true,
-      blockedReason: "Kein docker-compose.yml im Repository gefunden.",
-      port: null,
-      probe: null,
-      logs: "",
-    };
+    return { ok: false, unavailable: true, reason: "Kein docker-compose.yml im Repository gefunden.", logs: "" };
   }
 
   const blocker = await getOtherLiveProject(projectId);
   if (blocker) {
     return {
-      reachable: false,
+      ok: false,
       unavailable: true,
-      blockedReason: `„${blocker.name}" ist gerade live – aktuell kann nur ein Projekt gleichzeitig live sein, jetzt nicht prüfbar. Später erneut versuchen.`,
-      port: null,
-      probe: null,
+      reason: `„${blocker.name}" ist gerade live – aktuell kann nur ein Projekt gleichzeitig live sein, jetzt nicht prüfbar. Später erneut versuchen.`,
       logs: "",
     };
   }
@@ -1048,7 +1042,7 @@ export async function runAgentIntegrationCheck(
     // Kommt aus startLiveStack nur bei einem Fehler, den Docker/Compose selbst
     // NICHT ausloest (z.B. Sandbox-Prozess liess sich nicht spawnen) – eine
     // Infrastrukturluecke, kein Befund ueber den Code.
-    return { reachable: false, unavailable: true, blockedReason: started.message, port: null, probe: null, logs: "" };
+    return { ok: false, unavailable: true, reason: started.message, logs: "" };
   }
   const ownsLifecycle = started.status === "success";
 
@@ -1064,18 +1058,47 @@ export async function runAgentIntegrationCheck(
         info.status === "STARTING"
           ? "Zeitlimit erreicht, bevor der Stack erreichbar war."
           : (info.error ?? "Unbekannter Fehler beim Start.");
-      return { reachable: false, unavailable: false, blockedReason: reason, port: null, probe: null, logs: info.log };
+      return { ok: false, unavailable: false, reason, logs: info.log };
     }
 
-    const probe = request ? await runHttpProbe(info.port, request, probeTimeoutMs) : null;
+    const value = await run(info.port);
 
     const name = liveProjectName(projectId);
     const logs = await dockerCompose(["-p", name, "logs", "--tail", String(LOG_LINES)]).catch(() => "");
 
-    return { reachable: true, unavailable: false, blockedReason: null, port: info.port, probe, logs };
+    return { ok: true, port: info.port, logs, value };
   } finally {
     if (ownsLifecycle) await stopLiveStack(projectId);
   }
+}
+
+/// Fuer worker/agentTools.ts ("run_integration_check"): laesst den Umsetzer-
+/// Agenten einen im laufenden System gemeldeten Fehler (typischerweise ein
+/// BUG-Ticket aus src/lib/actions/bugReport.ts) selbst nachstellen, statt aus
+/// dem Diff zu raten – die eigentliche Antwort auf "Docker ist in der Sandbox
+/// nicht verfuegbar" (siehe runInSandbox in testRun.ts, das NUR einen
+/// einzelnen Node-Container ohne Compose/Netz/DB kennt).
+export async function runAgentIntegrationCheck(
+  projectId: string,
+  request: HttpProbeRequest | null,
+  { pollIntervalMs = 4000, timeoutMs = 5 * 60 * 1000, probeTimeoutMs = 15_000 } = {},
+): Promise<AgentIntegrationCheckResult> {
+  const outcome = await withRunningStack(projectId, { pollIntervalMs, timeoutMs }, (port) =>
+    request ? runHttpProbe(port, request, probeTimeoutMs) : Promise.resolve(null),
+  );
+
+  if (!outcome.ok) {
+    return {
+      reachable: false,
+      unavailable: outcome.unavailable,
+      blockedReason: outcome.reason,
+      port: null,
+      probe: null,
+      logs: outcome.logs,
+    };
+  }
+
+  return { reachable: true, unavailable: false, blockedReason: null, port: outcome.port, probe: outcome.value, logs: outcome.logs };
 }
 
 // --- Sprint-Review-Integrationspruefung --------------------------------------
