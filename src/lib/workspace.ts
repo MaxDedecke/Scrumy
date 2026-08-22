@@ -642,6 +642,96 @@ export async function gitShow(dir: string, sha: string): Promise<string> {
   return git(dir, ["show", "--stat", "--patch", "--format=fuller", sha]);
 }
 
+/// Der eigene, noch nicht committete Arbeitsstand – die Antwort auf "was habe
+/// ich in diesem Anlauf eigentlich alles angefasst?".
+///
+/// Untracked-Dateien stehen bewusst mit ihrem VOLLEN Inhalt drin und nicht nur
+/// als Namensliste: Eine per `write_file` neu angelegte Datei taucht in
+/// `git diff` gar nicht auf, ist aber oft der Kern der Aenderung. Ohne sie
+/// waere die Ansicht genau dort blind, wo am meisten passiert ist.
+export interface WorkingDiff {
+  /// Diff der versionierten Dateien plus die neuen Dateien als Textblock.
+  patch: string;
+  /// Kurzuebersicht (`git diff --stat`) der versionierten Aenderungen.
+  stat: string;
+  untracked: string[];
+  /// true, wenn weder Aenderungen noch neue Dateien vorliegen.
+  empty: boolean;
+}
+
+export async function gitWorkingDiff(
+  dir: string,
+  relativePath?: string,
+  { maxChars = 20000, maxUntrackedChars = 4000, maxUntrackedFiles = 20 } = {},
+): Promise<WorkingDiff> {
+  const pathspec: string[] = [];
+  if (relativePath) {
+    // Dieselbe Pfadpruefung wie bei den Datei-Werkzeugen: der Pfad kommt aus
+    // einer Modellantwort und darf nicht aus dem Repo herauszeigen.
+    safeRepoPath(dir, relativePath);
+    pathspec.push("--", relativePath);
+  }
+
+  let stat = "";
+  let patch = "";
+  let untracked: string[] = [];
+  try {
+    stat = (await git(dir, ["diff", "--stat", ...pathspec])).trim();
+    patch = (await git(dir, ["diff", ...pathspec])).trim();
+    untracked = (await git(dir, ["ls-files", "--others", "--exclude-standard", ...pathspec]))
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    // Frisches Repo ohne ersten Commit: `git diff` scheitert, alles ist neu.
+    untracked = (await git(dir, ["ls-files", "--others", "--exclude-standard", ...pathspec]).catch(() => ""))
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  if (patch.length > maxChars) {
+    patch = `${patch.slice(0, maxChars)}\n… (Diff gekürzt – für einzelne Dateien mit "path" gezielt nachsehen)`;
+  }
+
+  const newFileBlocks: string[] = [];
+  for (const file of untracked.slice(0, maxUntrackedFiles)) {
+    const content = await readRepoFile(dir, file);
+    if (content === null) continue;
+    const clipped =
+      content.length > maxUntrackedChars
+        ? `${content.slice(0, maxUntrackedChars)}\n… (gekürzt, ${content.length - maxUntrackedChars} Zeichen mehr)`
+        : content;
+    newFileBlocks.push(`### Neue Datei: ${file} (${content.split("\n").length} Zeilen)\n${clipped}`);
+  }
+  if (untracked.length > maxUntrackedFiles) {
+    newFileBlocks.push(`… und ${untracked.length - maxUntrackedFiles} weitere neue Dateien (siehe Liste oben).`);
+  }
+
+  const parts = [patch, newFileBlocks.join("\n\n")].filter((part) => part.trim().length > 0);
+  return { patch: parts.join("\n\n"), stat, untracked, empty: parts.length === 0 };
+}
+
+/// Kompakte Commit-Historie fuers Modell – "was haben fruehere Tickets hier
+/// schon gemacht?". Bewusst einzeilig je Commit statt `gitLog`s vollem
+/// Datensatz: Das hier landet in einem Prompt, nicht in der Nachweis-Ansicht.
+export async function gitHistory(dir: string, relativePath?: string, limit = 15): Promise<string> {
+  const pathspec: string[] = [];
+  if (relativePath) {
+    safeRepoPath(dir, relativePath);
+    pathspec.push("--", relativePath);
+  }
+  const safeLimit = Math.max(1, Math.min(Math.trunc(limit) || 15, 50));
+  try {
+    return (
+      await git(dir, ["log", `-${safeLimit}`, "--date=short", "--pretty=format:%h %ad %an: %s", ...pathspec])
+    ).trim();
+  } catch {
+    // Frisches Repo ohne Commits – kein Fehler, nur nichts zu zeigen.
+    return "";
+  }
+}
+
 /// Alle versionierten Dateien – als Kontext fuer die Agenten ("was gibt es
 /// schon?") und fuer die Repo-Ansicht.
 export async function listTrackedFiles(dir: string): Promise<string[]> {

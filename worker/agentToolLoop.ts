@@ -240,7 +240,7 @@ export async function runImplementationLoop({
         // Nur Text, kein Aufruf – auch keinen "finish". Statt die Schleife
         // wortlos zu beenden, erinnert eine Nutzernachricht an den Auftrag; das
         // Modell bekommt im selben Anlauf die Chance, es richtig zu machen.
-        const reminder = "Kein Werkzeugaufruf erkannt. Nutze read_file/list_files/search_files für Kontext, edit_file/write_file für Änderungen, run_command für Tests/Builds – oder finish, wenn alles erledigt ist.";
+        const reminder = "Kein Werkzeugaufruf erkannt. Nutze read_file/list_files/search_files für Kontext, edit_file/write_file für Änderungen, run_command für Tests/Builds, show_diff für deinen eigenen Arbeitsstand – oder finish, wenn alles erledigt ist.";
         messages.push({ role: "user", content: [{ type: "text", text: reminder }] });
         loggedPrompt = `(Erinnerung: ${reminder})`;
         continue;

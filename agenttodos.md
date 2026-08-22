@@ -39,17 +39,38 @@ Phase 2 (offen):
 - `findInternalHostnameLeaks` zurückbauen, sobald der Browser-Check die
   Fehlerklasse zuverlässig fängt.
 
-### 2. Sandbox kann fast nichts
+### 2a. Eigener Arbeitsstand und Historie – ERLEDIGT
 
-`docker/preview-runner.Dockerfile` ist `node:22-alpine` – **kein git, kein
-python, kein psql, kein go/java**. Folgen:
-- Nicht-JS-Projekte kann der Agent nicht testen.
-- Der Agent kann seinen eigenen kumulierten Diff nicht ansehen, bevor er
-  `finish` ruft. `gitLog`/`gitShow` gibt es in `src/lib/workspace.ts`, aber nur
-  für die UI, nicht als Werkzeug.
+Der Agent konnte seinen eigenen kumulierten Diff nicht ansehen, bevor er
+`finish` ruft: `gitLog`/`gitShow` in `src/lib/workspace.ts` gab es nur für die
+UI. Er rief „fertig", ohne je gesehen zu haben, was er insgesamt geändert hat.
 
-Zu tun: git ins Runner-Image, Werkzeug `show_diff` (eigener Arbeitsstand) und
-`show_history` (was frühere Tickets an dieser Datei gemacht haben).
+Umgesetzt: Werkzeuge `show_diff` (unkommittierter Arbeitsstand inkl. Inhalt neu
+angelegter Dateien – die tauchen in `git diff` nicht auf) und `show_history`
+(letzte Commits, wahlweise je Datei, mit vollem Diff eines Commits). Prompt
+verlangt einen `show_diff`-Blick vor `finish`.
+
+Bewusst NICHT git in die Sandbox gelegt: Beide Werkzeuge laufen worker-seitig
+und nur lesend. Ein `git` im `run_command`-Container hieße, dass ein Modell
+`git checkout .` oder `git reset --hard` ausführen kann – genau der
+Verlust-Fall, gegen den `discardUncommittedChanges` schon einmal nachgebessert
+werden musste. Der Agent hat keinen Grund, Git-Zustand zu ändern; committen tut
+der Worker.
+
+### 2b. Sandbox kennt nur JavaScript
+
+`docker/preview-runner.Dockerfile` ist `node:22-alpine` – kein python, kein
+psql, kein go/java/php. Ein Projekt in einer anderen Sprache kann der Agent
+nicht testen; `run_command` kann dort nur Dateien anfassen.
+
+Einzelne Pakete nachzuinstallieren löst das nicht (mit `python3` läuft pytest,
+aber ein Paket mit C-Erweiterung braucht schon gcc, und Go fehlt weiter). Der
+richtige Weg nutzt, was die Grundregeln ohnehin verlangen: Jeder Dienst hat ein
+eigenes Dockerfile. `run_command` sollte Befehle im Image des betroffenen
+Dienstes ausführen statt im generischen Node-Runner – dann stimmt die Laufzeit
+per Definition mit der überein, in der der Code später läuft. Zu klären: Wahl
+des Dienstes, Build-Caching, und wie der Volume-Subpath-Mount dabei erhalten
+bleibt.
 
 ### 3. Kein Zugriff auf die laufende Datenbank
 

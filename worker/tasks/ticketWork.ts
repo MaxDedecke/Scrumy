@@ -736,7 +736,9 @@ ${await repoOverview(dir, 160, focus)}
 
 Die Auftragsunterlagen (docs/konzept.md, docs/anforderungen.md, docs/verstaendnis.md und docs/sprints/…) sind der eingefrorene Auftrag – write_file/edit_file lehnen Änderungen daran ohnehin ab. Lege dabei auch keine eigene Markdown-Dokumentation an (z.B. unter docs/technik/) – das kostet in jedem folgenden Ticket erneut Kontext-Budget, ohne dass der Auftraggeber danach gefragt hat. Dokumentation ist nur dann Teil dieses Tickets, wenn genau das der Auftrag ist.
 
-Setze ausschließlich dieses kleine Ticket um. Nutze read_file/list_files/search_files, um dir den nötigen Kontext selbst zu holen, statt zu raten.
+Setze ausschließlich dieses kleine Ticket um. Nutze read_file/list_files/search_files, um dir den nötigen Kontext selbst zu holen, statt zu raten. Baust du bestehenden Code um oder suchst du einen Fehler, der vorher nicht auftrat, zeigt dir show_history, was frühere Tickets an dieser Stelle gemacht haben.
+
+Sieh dir deinen Arbeitsstand mit show_diff an, BEVOR du finish aufrufst. Du siehst darin zum ersten Mal alles am Stück, was du geändert und neu angelegt hast – und damit auch das, was du im Verlauf der Bearbeitung übersehen hast: doppelte Änderungen, Debug-Reste, angefasste Dateien, die nicht zum Ticket gehören, oder ein Akzeptanzkriterium, das noch offen ist. Was dir dabei auffällt, korrigierst du in diesem Anlauf, statt es in der "summary" anzukündigen.
 
 Verlangt das Ticket nur eine Prüfung eines bereits bestehenden Stands (z.B. "testen, ob X funktioniert"): Führe die Prüfung mit run_command wirklich aus und fasse das Ergebnis in "summary" zusammen, statt eine Klärung zu eröffnen. Nur wenn wirklich gar nichts zu tun ist, ruf finish ohne Dateiänderungen auf.
 

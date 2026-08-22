@@ -7,7 +7,7 @@
 // richtig zu machen (siehe worker/agentToolLoop.ts).
 import path from "node:path";
 import type { ToolDef } from "@/lib/llm";
-import { isFrozenDocPath, listTrackedFiles, readRepoFile, safeRepoPath, searchRepo, writeFiles, WorkspaceError } from "@/lib/workspace";
+import { gitHistory, gitShow, gitWorkingDiff, isFrozenDocPath, listTrackedFiles, readRepoFile, safeRepoPath, searchRepo, writeFiles, WorkspaceError } from "@/lib/workspace";
 import { runInSandbox } from "@/lib/testRun";
 import { runAgentIntegrationCheck, type HttpProbeRequest } from "@/lib/liveStack";
 import { browserCheckFailed, formatBrowserProbe, runAgentBrowserCheck, type BrowserStep } from "@/lib/browserCheck";
@@ -82,6 +82,34 @@ export const IMPLEMENTATION_TOOLS: ToolDef[] = [
       type: "object",
       properties: { query: { type: "string", description: "Suchtext, z.B. ein Funktions- oder Feldname" } },
       required: ["query"],
+    },
+  },
+  {
+    name: "show_diff",
+    description:
+      `Zeigt deinen EIGENEN, noch nicht committeten Arbeitsstand: alle Änderungen an bestehenden Dateien plus den Inhalt der Dateien, die du in diesem Anlauf neu angelegt hast. ` +
+      `Ruf das auf, bevor du "finish" aufrufst – es ist die einzige Möglichkeit, dein Gesamtergebnis am Stück zu sehen statt nur die einzelnen Bearbeitungsschritte, die du dir gemerkt zu haben glaubst. ` +
+      `Typische Funde: eine Änderung, die versehentlich zweimal drin steht, ein vergessener Debug-Ausgabe- oder Platzhalter-Rest, eine Datei, die du gar nicht anfassen wolltest, oder ein Teil des Tickets, den du schlicht noch nicht gemacht hast.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Optional: nur diese Datei/dieses Verzeichnis, statt des gesamten Arbeitsstands." },
+      },
+    },
+  },
+  {
+    name: "show_history",
+    description:
+      `Zeigt, was frühere Tickets in diesem Repository schon gemacht haben – die letzten Commits, wahlweise nur die zu einer bestimmten Datei. ` +
+      `Mit "commit" bekommst du den vollständigen Diff eines einzelnen Commits. ` +
+      `Nützlich, bevor du bestehenden Code umbaust ("warum steht das so da?"), bei einem Bug, der vorher nicht auftrat ("was hat sich zuletzt an dieser Datei geändert?"), und um zu sehen, ob dein Ticket vielleicht schon von einem anderen Ticket miterledigt wurde.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Optional: nur Commits, die diese Datei betreffen." },
+        limit: { type: "number", description: "Wie viele Commits, Standard 15, höchstens 50." },
+        commit: { type: "string", description: "Optional: Hash aus der Liste – zeigt den vollständigen Diff dieses Commits." },
+      },
     },
   },
   {
@@ -249,6 +277,49 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       const query = str(input, "query");
       if (!query) return err(`Parameter „query" fehlt.`);
       return ok(await searchRepo(ctx.dir, query));
+    }
+
+    case "show_diff": {
+      const relPath = str(input, "path") || undefined;
+      try {
+        const diff = await gitWorkingDiff(ctx.dir, relPath);
+        if (diff.empty) {
+          return ok(
+            relPath
+              ? `Keine unkommittierten Änderungen an „${relPath}".`
+              : "Keine unkommittierten Änderungen – in diesem Anlauf wurde bisher nichts geändert oder angelegt.",
+          );
+        }
+        const head = diff.stat ? `Übersicht:\n${diff.stat}\n\n` : "";
+        const newFiles = diff.untracked.length > 0 ? `Neu angelegt: ${diff.untracked.join(", ")}\n\n` : "";
+        return ok(`${head}${newFiles}${diff.patch}`);
+      } catch (error) {
+        return err(messageOf(error));
+      }
+    }
+
+    case "show_history": {
+      const relPath = str(input, "path") || undefined;
+      const commit = str(input, "commit");
+      try {
+        if (commit) {
+          const patch = await gitShow(ctx.dir, commit);
+          const maxChars = 20000;
+          return ok(patch.length > maxChars ? `${patch.slice(0, maxChars)}\n… (gekürzt)` : patch);
+        }
+        const limit = typeof input.limit === "number" ? input.limit : 15;
+        const history = await gitHistory(ctx.dir, relPath, limit);
+        if (!history) {
+          return ok(
+            relPath
+              ? `Keine Commits, die „${relPath}" betreffen – die Datei ist neu oder wurde noch nie geändert.`
+              : "Noch keine Commits im Repository.",
+          );
+        }
+        return ok(history);
+      } catch (error) {
+        return err(messageOf(error));
+      }
     }
 
     case "write_file": {
