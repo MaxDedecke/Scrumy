@@ -12,7 +12,7 @@ der Code, nicht die Absicht: `worker/agentTools.ts`, `worker/agentToolLoop.ts`,
 | 1 | Browser-Prüfung (`check_in_browser`) | erledigt – `f7432ea` |
 | 2a | Eigener Arbeitsstand + Historie (`show_diff`, `show_history`) | erledigt – `b7db8fd` |
 | 2b | Sandbox kennt nur JavaScript | offen |
-| 3 | Zugriff auf die laufende Datenbank | erledigt – `HEAD` |
+| 3 | Zugriff auf die laufende Datenbank | erledigt – `68a4058` |
 | 4 | Web-/Doku-Zugriff | offen |
 | 5 | Frage an einen Kollegen im laufenden Anlauf | offen |
 | 6 | Gedächtnis über Tickets hinweg | offen |
